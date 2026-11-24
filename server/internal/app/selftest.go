@@ -195,13 +195,16 @@ func (s *Server) selftestProvider(w http.ResponseWriter, r *http.Request) error 
 			passed++
 		}
 	}
-	allOK := usable > 0 && passed == usable
-	summary := fmt.Sprintf("自检完成：%d/%d 项通过（模型 %s）", passed, usable, model)
 	// D-117（16 文档第 7.2 节）：按供应商 + 模型覆盖保存工具调用与看图能力。
-	toolsOK, visionOK := false, false
+	// OPT-A01：桌面端三槽位只认 chat/tools/vision 三项核心能力，单独回传，避免
+	// 出图、搜索等非核心探针失败时把可用写作模型误标为不可用。
+	chatOK, toolsOK, visionOK := false, false, false
 	capDetail := map[string]string{}
 	for _, p := range results {
 		switch p.Key {
+		case "chat":
+			chatOK = p.OK
+			capDetail["chat"] = truncate(p.Detail, 300)
 		case "tools":
 			toolsOK = p.OK
 			capDetail["tools"] = truncate(p.Detail, 300)
@@ -209,6 +212,17 @@ func (s *Server) selftestProvider(w http.ResponseWriter, r *http.Request) error 
 			visionOK = p.OK
 			capDetail["vision"] = truncate(p.Detail, 300)
 		}
+	}
+	coreOK := chatOK && toolsOK && visionOK
+	// 写作/智能体/识图只依赖 chat+tools+vision；文生图、原生搜索等可选探针
+	// 失败或跳过时，不得把可用模型误标为“供应商测试未通过”。
+	allOK := coreOK
+	summary := fmt.Sprintf("自检完成：%d/%d 项通过（模型 %s）", passed, usable, model)
+	// 核心三项通过、但可选探针（文生图/原生搜索等）失败时，摘要必须如实写
+	// “核心可用”，而不是只报含可选探针的总数。旧写法 `!allOK && coreOK`
+	// 因 allOK 恒等于 coreOK 而永假，导致这条分支从未生效。
+	if coreOK && passed < usable {
+		summary = fmt.Sprintf("核心 3 项通过（对话/工具/看图）；可选探针 %d/%d（模型 %s）", passed, usable, model)
 	}
 	detailJSON, _ := json.Marshal(capDetail)
 	var paused []agentRoutineModelPause
@@ -231,7 +245,10 @@ func (s *Server) selftestProvider(w http.ResponseWriter, r *http.Request) error 
 		return err
 	}
 	s.notifyAgentRoutineModelPauses(ctx, ws, paused)
-	return ok(w, map[string]any{"model": model, "summary": summary, "ok": allOK, "results": results})
+	return ok(w, map[string]any{
+		"model": model, "summary": summary, "ok": allOK, "results": results,
+		"chat_ok": chatOK, "tools_ok": toolsOK, "vision_ok": visionOK, "core_ok": coreOK,
+	})
 }
 
 // probeRedPNG is a built-in 64×64 pure red PNG used by the vision probe (16 文档第 7.2 节).

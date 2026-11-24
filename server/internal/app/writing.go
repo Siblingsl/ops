@@ -254,7 +254,9 @@ func (s *Server) workBriefForSection(ctx context.Context, m *workMeta, sectionID
 		return "", err
 	}
 	var b strings.Builder
-	b.WriteString("## 作品\n")
+	b.WriteString("## 作品核心\n")
+	// OPT-A03：核心观点先于标题/角度/钩子，确保模型先抓住“这篇要说什么”。
+	fmt.Fprintf(&b, "核心观点：%s\n", m.Viewpoint)
 	titleLabel := "标题"
 	if m.Account.Platform == "toutiao" && m.ContentFormat == "micro_post" {
 		titleLabel = "系统内部名称（不用于发布）"
@@ -269,7 +271,6 @@ func (s *Server) workBriefForSection(ctx context.Context, m *workMeta, sectionID
 	if hook != "" {
 		fmt.Fprintf(&b, "钩子：%s\n", hook)
 	}
-	fmt.Fprintf(&b, "核心观点：%s\n", m.Viewpoint)
 	prefix := b.String()
 	if m.OutlineConfirmedAt != nil && len(outline) > 0 {
 		b.WriteString("\n## 已确认的大纲\n" + outlineText(outline))

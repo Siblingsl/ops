@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"reflect"
 	"strings"
@@ -245,6 +246,34 @@ func retryable(err error) bool {
 func authFailure(err error) bool {
 	var ue *ai.UpstreamError
 	return errors.As(err, &ue) && (ue.Status == 401 || ue.Status == 403)
+}
+
+func rateLimited(err error) bool {
+	var ue *ai.UpstreamError
+	return errors.As(err, &ue) && ue.Status == http.StatusTooManyRequests
+}
+
+func modelTimeout(err error) bool {
+	if errors.Is(err, errFirstToken) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// upstreamFailureAPIError 把上游失败翻译成桌面端可读、可行动的错误码（OPT-A01）。
+// 403/401 → 密钥或权限；429 → 限流/额度；超时 → 换更快模型或缩短输入。
+func upstreamFailureAPIError(err error, providerName string) *APIError {
+	switch {
+	case authFailure(err):
+		return apiErr(502, "ai_key_invalid", "模型密钥失效或没有权限（"+providerName+"），请到「设置 → 模型配置」更新密钥或切换到备用模型。你的内容没有被改动。")
+	case rateLimited(err):
+		return apiErr(http.StatusTooManyRequests, "ai_rate_limited", "模型服务触发限流或额度已用尽（"+providerName+"），请稍后重试或切换到备用模型。你的内容没有被改动。")
+	case modelTimeout(err):
+		return apiErr(http.StatusGatewayTimeout, "ai_timeout", "模型服务响应超时（"+providerName+"），请换一个更快的模型或缩短素材/上下文后重试。你的内容没有被改动。")
+	default:
+		return apiErr(502, "ai_upstream_error", "模型服务调用失败："+truncate(err.Error(), 300)+"。你的内容没有被改动，可以重试或在模型配置中设置备用模型。")
+	}
 }
 
 func modelContextLimitError(err error) bool {
@@ -530,7 +559,7 @@ func (s *Server) runAI(ctx context.Context, t aiTask, onDelta func(string)) (*ai
 		if errors.As(callErr, &unavailable) && unavailable.Code == "ai_provider_unavailable" {
 			return nil, unavailable.With(failDetail)
 		}
-		return nil, apiErr(502, "ai_upstream_error", "模型服务调用失败："+truncate(callErr.Error(), 300)+"。你的内容没有被改动，可以重试或在模型配置中设置备用模型。").With(failDetail)
+		return nil, upstreamFailureAPIError(callErr, cur.ProviderName).With(failDetail)
 	}
 	return nil, apiErr(502, "ai_upstream_error", "模型服务调用失败").With(failDetail)
 }

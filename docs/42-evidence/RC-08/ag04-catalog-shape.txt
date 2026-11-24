@@ -1,0 +1,10 @@
+2026/11/24 15:25:54 INFO 数据库连接池已配置 max_conns=20 max_conn_idle_time=5m0s max_conn_lifetime=1h0m0s statement_timeout=30s idle_in_transaction_session_timeout=60s timezone=Asia/Shanghai
+2026/11/24 15:25:54 INFO 已添加本地模拟模型（仅开发模式） workspace_id=562aec84-bf17-4054-aaa7-c4240d87f46e
+2026/11/24 15:25:54 INFO HTTP 请求 request_id=ASUS/7KpL6dTj2C-000001 method=POST route=/api/v1/auth/setup status=200 duration_ms=108.1519 workspace_id=""
+2026/11/24 15:25:54 INFO 已添加本地模拟模型（仅开发模式） workspace_id=bc0c3f2b-752a-4f74-86e0-9e5aa514b23f
+2026/11/24 15:25:54 INFO 已创建永久超级管理员账号 username=skyeder
+2026/11/24 15:25:54 INFO HTTP 请求 request_id=ASUS/7KpL6dTj2C-000002 method=GET route=/api/v1/auth/me status=200 duration_ms=7.3176 workspace_id=562aec84-bf17-4054-aaa7-c4240d87f46e
+=== RUN   TestAG04CatalogShape
+--- PASS: TestAG04CatalogShape (0.00s)
+PASS
+ok  	ops/internal/app	6.847s

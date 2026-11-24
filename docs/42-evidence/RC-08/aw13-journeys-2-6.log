@@ -1,0 +1,95 @@
+2026/11/24 16:03:54 INFO 数据库连接池已配置 max_conns=20 max_conn_idle_time=5m0s max_conn_lifetime=1h0m0s statement_timeout=30s idle_in_transaction_session_timeout=60s timezone=Asia/Shanghai
+2026/11/24 16:03:54 INFO 已添加本地模拟模型（仅开发模式） workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:03:54 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000001 method=POST route=/api/v1/auth/setup status=200 duration_ms=127.0527 workspace_id=""
+2026/11/24 16:03:54 INFO 已添加本地模拟模型（仅开发模式） workspace_id=5bdc3128-714e-456c-ad18-3f377b608574
+2026/11/24 16:03:54 INFO 已创建永久超级管理员账号 username=skyeder
+2026/11/24 16:03:54 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000002 method=GET route=/api/v1/auth/me status=200 duration_ms=9.8475 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+=== RUN   TestAW13Journey2SkillMaterialCardConfirmReal
+2026/11/24 16:03:54 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000003 method=POST route=/api/v1/auth/login status=200 duration_ms=62.9824 workspace_id=""
+2026/11/24 16:03:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000004 method=GET route=/api/v1/auth/me status=200 duration_ms=7.7594 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:03:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000005 method=GET route=/api/v1/auth/me status=200 duration_ms=4.7799 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:03:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000006 method=POST route=/api/v1/accounts status=200 duration_ms=30.5024 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:03:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000007 method=POST route=/api/v1/accounts status=200 duration_ms=23.1252 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:03:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000008 method=POST route=/api/v1/auth/reauth status=200 duration_ms=65.6984 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:03:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000009 method=PUT route=/api/v1/accounts/{accountId}/wechat-credential status=200 duration_ms=17.8734 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:03:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000010 method=POST route=/api/v1/accounts/{accountId}/wechat-credential/test status=200 duration_ms=46.743 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:03:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000011 method=POST route=/api/v1/agent/conversations status=200 duration_ms=45.5565 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:03:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000012 method=POST route=/api/v1/agent/attachments status=200 duration_ms=28.9995 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:03:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000013 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=262.8161 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:04:18 INFO context pack assemble task_type=material_extract workspace_id=547473de-4421-446e-b39d-ed3124d67608 account_id=8c695a2a-fcaf-40a9-9efc-aafa47ba3fd4 duration_ms=1084.1189 prefetch_ms=1069.1259 cache_hit=false cache_hits=0 cache_misses=1 cache_size=1 bare=false
+2026/11/24 16:04:18 WARN HTTP 请求 request_id=3051f92d-d750-43a3-a289-c637069615cb method=POST route=/api/v1/materials/extract status=200 duration_ms=1130.1319 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+    aw13_journeys_real_test.go:247: run 105162ff-523c-494d-b394-c33174f57802 终态 status=awaiting_input stage=awaiting_input reason= error=/
+2026/11/24 16:04:26 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000014 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=72.2254 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:04:26 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000015 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=36.4904 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+    aw13_journeys_real_test.go:239: J2 第 1 次检查未过：run_completed
+--- FAIL: TestAW13Journey2SkillMaterialCardConfirmReal (32.00s)
+=== RUN   TestAW13Journey3ScopedFollowupQueuedReal
+2026/11/24 16:04:27 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000016 method=POST route=/api/v1/auth/login status=200 duration_ms=95.0206 workspace_id=""
+2026/11/24 16:04:27 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000017 method=GET route=/api/v1/auth/me status=200 duration_ms=6.3273 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:04:27 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000018 method=GET route=/api/v1/auth/me status=200 duration_ms=4.1853 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:04:27 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000019 method=POST route=/api/v1/agent/conversations status=200 duration_ms=40.9194 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:04:27 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000020 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=221.2723 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:04:36 INFO HTTP 请求 request_id=4f59a0c5-65d4-41ff-9ad9-624c754eff5a method=GET route=/api/v1/accounts/{accountId}/dashboard status=200 duration_ms=38.1506 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:04:40 INFO HTTP 请求 request_id=8fea3bb6-14b1-4ab4-bf5f-d7bc71d8356c method=GET route=/api/v1/accounts/{accountId}/top-works status=200 duration_ms=19.2538 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:04:44 INFO HTTP 请求 request_id=8a7beb63-1ead-4d69-8eb2-003c17fa0f8d method=GET route=/api/v1/accounts/{accountId}/top-works status=200 duration_ms=15.8001 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:05:01 INFO HTTP 请求 request_id=eb4eab9c-e718-4a21-9d8d-131a7fe3d1cd method=GET route=/api/v1/accounts/{accountId}/digests status=200 duration_ms=4.5281 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:05:01 INFO HTTP 请求 request_id=39c25b7e-4fcb-4ec0-ad14-ffff7fa0ea44 method=GET route=/api/v1/accounts/{accountId}/reviews status=200 duration_ms=4.9428 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:05:01 INFO HTTP 请求 request_id=62e5d289-b2ec-4a8a-8a7c-402d1edc57af method=GET route=/api/v1/accounts/{accountId}/followers status=200 duration_ms=4.9873 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:05:01 INFO HTTP 请求 request_id=5276fc0a-4b19-4189-993f-d8fc684765fe method=GET route=/api/v1/accounts/{accountId}/metrics/unmatched status=200 duration_ms=5.4491 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:05:06 INFO HTTP 请求 request_id=c21c77c5-2c18-401f-a3e6-3136705462a2 method=GET route=/api/v1/accounts/{accountId}/digests status=200 duration_ms=2.3291 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:05:06 INFO HTTP 请求 request_id=d3760ece-99ad-477e-a52d-a8e15a827e8d method=GET route=/api/v1/accounts/{accountId}/reviews status=200 duration_ms=2.6267 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:05:06 INFO HTTP 请求 request_id=218e87e0-cee5-4faf-ad0f-08ef49c1c7b9 method=GET route=/api/v1/accounts/{accountId}/followers status=200 duration_ms=3.1076 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:05:10 INFO HTTP 请求 request_id=9579a6fd-6b75-4b90-95d5-8448123c893c method=GET route=/api/v1/accounts/{accountId}/works status=200 duration_ms=9.3534 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:05:10 INFO HTTP 请求 request_id=62564667-0ca2-4159-a3d6-330fa16cda45 method=GET route=/api/v1/accounts/{accountId}/works status=200 duration_ms=4.3689 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+    aw13_journeys_real_test.go:264: run cc8c5312-f771-4574-b257-c4632d332f3b 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:05:24 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000021 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=43.6885 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:05:24 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000022 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=44.5359 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:05:24 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000023 method=POST route=/api/v1/agent/conversations/{id}/messages status=409 duration_ms=13.7094 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:05:31 INFO HTTP 请求 request_id=5425efa4-67b5-4e58-a8bd-8367bfef46f7 method=GET route=/api/v1/accounts/{accountId}/dashboard status=200 duration_ms=11.425 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:05:43 INFO HTTP 请求 request_id=4900660c-4b20-456c-bfab-0451e7e13828 method=GET route=/api/v1/accounts/{accountId}/metrics/unmatched status=200 duration_ms=2.2838 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:06:00 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000024 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=29.8468 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+    aw13_journeys_real_test.go:262: J3 第 1 次检查未过：report_has_time_or_source
+--- FAIL: TestAW13Journey3ScopedFollowupQueuedReal (93.67s)
+=== RUN   TestAW13Journey4ResumeAndStopReal
+2026/11/24 16:06:00 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000025 method=POST route=/api/v1/auth/login status=200 duration_ms=33.8125 workspace_id=""
+2026/11/24 16:06:00 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000026 method=GET route=/api/v1/auth/me status=200 duration_ms=4.0308 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:00 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000027 method=GET route=/api/v1/auth/me status=200 duration_ms=3.364 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:00 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000028 method=POST route=/api/v1/agent/conversations status=200 duration_ms=8.07 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:00 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000029 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=32.5572 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:00 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000030 method=POST route=/api/v1/* status=404 duration_ms=0 workspace_id=""
+    env_test.go:249: POST /api/v1/agent/conversations/db96cc57-506b-4819-a916-f481a94e49e8/runs/3cd55c44-7534-4e66-bf28-104f7e3f6b1b/stop => 404 (want 200) 404 page not found
+        
+--- FAIL: TestAW13Journey4ResumeAndStopReal (0.33s)
+=== RUN   TestAW13Journey5ForkKeepsAttachmentReal
+2026/11/24 16:06:00 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000031 method=POST route=/api/v1/auth/login status=200 duration_ms=48.0841 workspace_id=""
+2026/11/24 16:06:00 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000032 method=GET route=/api/v1/auth/me status=200 duration_ms=4.458 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:00 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000033 method=GET route=/api/v1/auth/me status=200 duration_ms=3.686 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:01 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000034 method=POST route=/api/v1/agent/conversations status=200 duration_ms=10.6118 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:01 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000035 method=POST route=/api/v1/agent/attachments status=200 duration_ms=11.1278 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:01 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000036 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=58.2377 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:06 ERROR 智能体运行终态或事件保存失败 run_id=3cd55c44-7534-4e66-bf28-104f7e3f6b1b err="no rows in result set"
+2026/11/24 16:06:14 INFO HTTP 请求 request_id=c77785b0-d7c3-41a0-a1c8-cf51edaaa975 method=GET route=/api/v1/search status=200 duration_ms=13.6155 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:06:14 INFO HTTP 请求 request_id=bd61c37b-dc69-4a1f-8d7a-3079e299ee21 method=GET route=/api/v1/search status=200 duration_ms=4.7616 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:06:21 INFO HTTP 请求 request_id=0ac956fe-935e-431d-bfcd-445dbf3492e0 method=GET route=/api/v1/search status=200 duration_ms=12.8944 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:06:26 INFO HTTP 请求 request_id=0204b849-06b2-4443-ad9a-041424d92497 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=6.693 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:06:26 INFO HTTP 请求 request_id=7e34b376-31f1-4c00-869c-bbb7c9bad450 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=4.4962 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+    aw13_journeys_real_test.go:367: run 03c165a9-019f-4af3-878c-6b23333df7f1 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:06:34 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000037 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=36.6147 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:34 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000038 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=32.838 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:34 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000039 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=51.0504 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:34 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000040 method=POST route=/api/v1/agent/conversations/{id}/fork status=200 duration_ms=132.9602 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:34 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000041 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=132.561 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:41 INFO HTTP 请求 request_id=8bcba70d-6ef2-40fc-a4a8-75bef39c23be method=GET route=/api/v1/search status=200 duration_ms=8.541 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+2026/11/24 16:06:41 INFO HTTP 请求 request_id=4a911617-7e04-40f2-a6ed-2d0ee1b28a2a method=GET route=/api/v1/search status=200 duration_ms=7.3733 workspace_id=547473de-4421-446e-b39d-ed3124d67608 via=agent
+    aw13_journeys_real_test.go:411: run 2da9da0d-b934-45bc-8193-c6ff86d6cee9 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:06:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000042 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=98.7983 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000043 method=DELETE route=/api/v1/agent/conversations/{id} status=422 duration_ms=12.1741 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+    env_test.go:249: DELETE /api/v1/agent/conversations/5cf0ffcd-20ab-44c1-91b9-e5c2a8ea777c => 422 (want 200) {"error":{"code":"validation_failed","message":"删除对话需要确认","request_id":"ASUS/aEykpxSmQN-000043"}}
+        
+--- FAIL: TestAW13Journey5ForkKeepsAttachmentReal (54.87s)
+=== RUN   TestAW13Journey6RoutineReadOnlyReal
+2026/11/24 16:06:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000044 method=POST route=/api/v1/auth/login status=200 duration_ms=118.7236 workspace_id=""
+2026/11/24 16:06:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000045 method=GET route=/api/v1/auth/me status=200 duration_ms=9.9651 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:55 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000046 method=GET route=/api/v1/auth/me status=200 duration_ms=7.8038 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:56 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000047 method=POST route=/api/v1/agent/conversations status=200 duration_ms=49.0118 workspace_id=547473de-4421-446e-b39d-ed3124d67608
+2026/11/24 16:06:56 INFO HTTP 请求 request_id=ASUS/aEykpxSmQN-000048 method=POST route=/api/v1/agent/routines status=200 duration_ms=110.5763 workspace_id=547473de-4421-446e-b39d-ed3124d67608

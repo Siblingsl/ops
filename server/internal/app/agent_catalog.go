@@ -64,8 +64,9 @@ var agentMetaTools = []AgentTool{
 		Description: "加载一个领域，返回该领域的工具名与一句话说明",
 		Params: []ToolParam{
 			pBodyF("domain", enumOf(agentDomainNames()...), true),
+			pBodyF("include_all", schemaBool, false),
 		},
-		Notes: "本地元工具，由运行循环（DEV-AG05）实现",
+		Notes: "本地元工具，由运行循环（DEV-AG05）实现；默认只返回核心工具，include_all 仅本次运行展开该领域",
 	},
 	{
 		Name: "global_search", Kind: toolR, MinRole: roleViewer, Method: "GET", Path: "/search",

@@ -1,0 +1,61 @@
+2026/11/24 15:11:35 INFO 数据库连接池已配置 max_conns=20 max_conn_idle_time=5m0s max_conn_lifetime=1h0m0s statement_timeout=30s idle_in_transaction_session_timeout=60s timezone=Asia/Shanghai
+2026/11/24 15:11:35 INFO 已添加本地模拟模型（仅开发模式） workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:35 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000001 method=POST route=/api/v1/auth/setup status=200 duration_ms=91.6365 workspace_id=""
+2026/11/24 15:11:36 INFO 已添加本地模拟模型（仅开发模式） workspace_id=d00696d9-9bc2-44cf-92a1-44ce8a3724e6
+2026/11/24 15:11:36 INFO 已创建永久超级管理员账号 username=skyeder
+2026/11/24 15:11:36 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000002 method=GET route=/api/v1/auth/me status=200 duration_ms=7.6234 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+=== RUN   TestOPTA02CoreToolsWithinBudget
+--- PASS: TestOPTA02CoreToolsWithinBudget (0.85s)
+=== RUN   TestOPTA02FrozenDomainRejected
+--- PASS: TestOPTA02FrozenDomainRejected (0.53s)
+=== RUN   TestOPTA02WideDomainExpandsOnlyThatDomain
+--- PASS: TestOPTA02WideDomainExpandsOnlyThatDomain (0.57s)
+=== RUN   TestOPTA02LoadDomainEnumExcludesFrozen
+--- PASS: TestOPTA02LoadDomainEnumExcludesFrozen (0.16s)
+=== RUN   TestOPTA01UpstreamFailureMapping
+=== RUN   TestOPTA01UpstreamFailureMapping/403
+=== RUN   TestOPTA01UpstreamFailureMapping/401
+=== RUN   TestOPTA01UpstreamFailureMapping/429
+=== RUN   TestOPTA01UpstreamFailureMapping/first-token
+=== RUN   TestOPTA01UpstreamFailureMapping/deadline
+=== RUN   TestOPTA01UpstreamFailureMapping/other
+=== RUN   TestOPTA01UpstreamFailureMapping/500
+--- PASS: TestOPTA01UpstreamFailureMapping (0.00s)
+    --- PASS: TestOPTA01UpstreamFailureMapping/403 (0.00s)
+    --- PASS: TestOPTA01UpstreamFailureMapping/401 (0.00s)
+    --- PASS: TestOPTA01UpstreamFailureMapping/429 (0.00s)
+    --- PASS: TestOPTA01UpstreamFailureMapping/first-token (0.00s)
+    --- PASS: TestOPTA01UpstreamFailureMapping/deadline (0.00s)
+    --- PASS: TestOPTA01UpstreamFailureMapping/other (0.00s)
+    --- PASS: TestOPTA01UpstreamFailureMapping/500 (0.00s)
+=== RUN   TestOPTA01SelftestCoreFlags
+2026/11/24 15:11:38 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000003 method=POST route=/api/v1/auth/reauth status=200 duration_ms=26.0141 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:38 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000004 method=POST route=/api/v1/model-providers status=200 duration_ms=10.493 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:38 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000005 method=POST route=/api/v1/model-providers/{id}/selftest status=200 duration_ms=20.7361 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:38 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000006 method=DELETE route=/api/v1/model-providers/{id} status=200 duration_ms=18.0604 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+--- PASS: TestOPTA01SelftestCoreFlags (0.08s)
+=== RUN   TestOPTA03ContextPriorityOrder
+2026/11/24 15:11:38 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000007 method=POST route=/api/v1/accounts status=200 duration_ms=14.5132 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:38 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000008 method=POST route=/api/v1/accounts status=200 duration_ms=9.365 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:38 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000009 method=POST route=/api/v1/auth/reauth status=200 duration_ms=24.3726 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:38 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000010 method=PUT route=/api/v1/accounts/{accountId}/wechat-credential status=200 duration_ms=10.6526 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:38 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000011 method=POST route=/api/v1/accounts/{accountId}/wechat-credential/test status=200 duration_ms=15.744 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:38 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000012 method=PUT route=/api/v1/accounts/{accountId}/profile status=200 duration_ms=5.0899 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:38 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000013 method=POST route=/api/v1/accounts/{accountId}/style-samples status=200 duration_ms=5.9263 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:38 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000014 method=POST route=/api/v1/materials status=200 duration_ms=15.2853 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:38 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000015 method=POST route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=16.8724 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:38 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000016 method=PATCH route=/api/v1/topics/{id} status=200 duration_ms=10.8241 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:39 WARN HTTP 请求 request_id=ASUS/CCUKytOMcI-000017 method=POST route=/api/v1/topics/{id}/works status=200 duration_ms=1079.1127 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:39 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000018 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=25.9683 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:40 INFO context pack assemble task_type=outline workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba account_id=28b7ec97-f41b-4a5d-8b3b-033cef5208f9 duration_ms=1040.77 prefetch_ms=1026.8452 cache_hit=false cache_hits=0 cache_misses=1 cache_size=1 bare=false
+2026/11/24 15:11:40 WARN HTTP 请求 request_id=ASUS/CCUKytOMcI-000019 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=1078.7661 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:40 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000020 method=GET route=/api/v1/auth/me status=200 duration_ms=5.4423 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:40 INFO context pack assemble task_type=outline workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba account_id=28b7ec97-f41b-4a5d-8b3b-033cef5208f9 duration_ms=20.7326 prefetch_ms=7.7707 cache_hit=false cache_hits=0 cache_misses=2 cache_size=1 bare=false
+--- PASS: TestOPTA03ContextPriorityOrder (2.35s)
+=== RUN   TestOPTA03WorkBriefViewpointFirst
+2026/11/24 15:11:40 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000021 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=31.8411 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:40 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000022 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=20.9177 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+2026/11/24 15:11:40 INFO HTTP 请求 request_id=ASUS/CCUKytOMcI-000023 method=GET route=/api/v1/auth/me status=200 duration_ms=3.849 workspace_id=3295339c-09d7-4417-9293-6e17c1eca5ba
+--- PASS: TestOPTA03WorkBriefViewpointFirst (0.06s)
+PASS
+ok  	ops/internal/app	13.912s

@@ -1,0 +1,125 @@
+{
+  "generated_at": "2026-11-24T17:50:00+08:00",
+  "source": "dev PostgreSQL ops.ai_call，按 7 个真实作品 work_id（3 公众号 + 4 小红书）聚合；RC-08 质量集取 3 公众号 + xhs-02/03/04",
+  "currency": "CNY",
+  "pricing": {
+    "provider": "本地网关 3425 · WorkBuddy Hy4 / OpenCode DeepSeek",
+    "input_price_micros_per_1k": 0,
+    "output_price_micros_per_1k": 0,
+    "price_updated_at": null,
+    "note": "两个真实供应商均登记为免费模型，价格 0；cost_micros 按 0 计价，不代表网关侧真实计费。"
+  },
+  "totals": {
+    "calls": 41,
+    "prompt_tokens": 23501,
+    "completion_tokens": 53047,
+    "total_tokens": 76548,
+    "cost_micros": 0,
+    "cost_formula": "23501/1000*0 + 53047/1000*0 = 0",
+    "ok_calls": 31,
+    "failed_calls": 10,
+    "calls_with_tokens": 31,
+    "zero_token_calls": 10,
+    "avg_latency_ms": 12371
+  },
+  "works": [
+    {
+      "label": "wc-01",
+      "work_id": "8327d05e-7e29-4ddb-aa45-0fc6b8227071",
+      "title": "把读书会从“打卡”变回“聊天”：我们试了三个月",
+      "calls": 15,
+      "ok_calls": 5,
+      "failed_calls": 10,
+      "prompt_tokens": 4182,
+      "completion_tokens": 11735,
+      "total_tokens": 15917,
+      "avg_latency_ms": 11201,
+      "cost_micros": 0
+    },
+    {
+      "label": "wc-02",
+      "work_id": "eae1c52b-68a5-44a3-802d-2ff742212844",
+      "title": "一周只读二十页，为什么反而记得住",
+      "calls": 5,
+      "ok_calls": 5,
+      "failed_calls": 0,
+      "prompt_tokens": 4295,
+      "completion_tokens": 11250,
+      "total_tokens": 15545,
+      "avg_latency_ms": 18241,
+      "cost_micros": 0
+    },
+    {
+      "label": "wc-03",
+      "work_id": "272667cd-1a67-413b-ba8f-bad365cc25ee",
+      "title": "在青岛办一场海边读书会，需要准备什么",
+      "calls": 5,
+      "ok_calls": 5,
+      "failed_calls": 0,
+      "prompt_tokens": 4481,
+      "completion_tokens": 11354,
+      "total_tokens": 15835,
+      "avg_latency_ms": 17993,
+      "cost_micros": 0
+    },
+    {
+      "label": "xhs-01",
+      "work_id": "bac3ed83-2738-4e11-a0d5-3b50ba01ca3d",
+      "title": "青岛周末一个人也能去的3个读书角落",
+      "calls": 4,
+      "ok_calls": 4,
+      "failed_calls": 0,
+      "prompt_tokens": 2707,
+      "completion_tokens": 5094,
+      "total_tokens": 7801,
+      "avg_latency_ms": 9996,
+      "cost_micros": 0
+    },
+    {
+      "label": "xhs-02",
+      "work_id": "d0be8ed3-a397-4715-b25f-920024dd2b91",
+      "title": "打工人重启阅读：每天10页的笨办法",
+      "calls": 4,
+      "ok_calls": 4,
+      "failed_calls": 0,
+      "prompt_tokens": 2616,
+      "completion_tokens": 4378,
+      "total_tokens": 6994,
+      "avg_latency_ms": 9638,
+      "cost_micros": 0
+    },
+    {
+      "label": "xhs-03",
+      "work_id": "95fee639-947a-4e2b-9c03-23cb0737d290",
+      "title": "海边读书会清单｜不晒不累，坐一下午",
+      "calls": 4,
+      "ok_calls": 4,
+      "failed_calls": 0,
+      "prompt_tokens": 2630,
+      "completion_tokens": 4769,
+      "total_tokens": 7399,
+      "avg_latency_ms": 9755,
+      "cost_micros": 0
+    },
+    {
+      "label": "xhs-04",
+      "work_id": "ccc9ba68-e7a8-408c-830d-d6e196cc7fd5",
+      "title": "在青岛找读书角落，我只看这三件事",
+      "calls": 4,
+      "ok_calls": 4,
+      "failed_calls": 0,
+      "prompt_tokens": 2590,
+      "completion_tokens": 4467,
+      "total_tokens": 7057,
+      "avg_latency_ms": 10121,
+      "cost_micros": 0
+    }
+  ],
+  "notes": [
+    "31 次 ok 调用均有 token；10 次 failed 调用 token 为 0（早期 OpenCode 429 / WorkBuddy 首 token 超时），不计入 token 汇总。",
+    "wc-01 的 15 次调用包含 429 与超时重试，最终 4 段正文由 WorkBuddy 产出。",
+    "xhs-04 为补充的干净小红书稿，与 xhs-02/03 组成质量验收 3 篇；xhs-01 保留为占位符清理样本，不计入“修改率≤20%”样本。",
+    "ai_call 原表无 cost 字段；两个供应商价格均为 0，成本按 0 记，不代表网关侧账单。",
+    "token 统计包含所有 ok 调用（含 outline/draft），不按“仅最终正文”切分。"
+  ]
+}

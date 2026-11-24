@@ -1,0 +1,30 @@
+{
+  "generated_at": "2026-11-24T07:10:43.129Z",
+  "note": "在真实 Electron 桌面页注入后端实际返回的 403/429/超时错误体，验证可读提示；恢复用本地模拟模型，不是商业模型真稿。",
+  "toasts": [
+    {
+      "code": "ai_key_invalid",
+      "file": "failure-ui-403.png",
+      "toast_tail": "原稿或替你发布。\n\n刷新历史\n公众号预览 HTML\n离线稳定版 HTML\n390px 真实长图（仅桌面）\nPPTX 演示文稿\nDOCX 文档\n\n长图在本机隔离 Electron 窗口生成，并按固定像素和内存预算分段；下载仍受服务端隐私策略门禁控制。\n\nPPTX/DOCX 模板版本：office-render-v1\n\n确定性导出：固定模板、固定时间戳与固定 ZIP 顺序；同一作品版本和参数生成相同 SHA256。\n\n生成校验报告\n重新生成\n素材\n副驾驶\n待核实\n通读\n体检\n批注\n动态\n\n点一下任意段落，这里会推荐与这一段相关的素材，以及你以前写过的类似段落。\n\n0 字 · 1 个段落\n自动保存已开启\n作品工具\ninspect-1792313152138 的工作区\n·\n周末读书会（测试）\n已连接\n第 1 段起草失败\n模型密钥失效或没有权限（RC08 失败注入桩（测试用户，非真实通道）），请到「设置 → 模型配置」更新密钥 · 你的内容没有被改动（请求 ID：ASUS/rc08）\n打开模型配置"
+    },
+    {
+      "code": "ai_rate_limited",
+      "file": "failure-ui-429.png",
+      "toast_tail": "改原稿或替你发布。\n\n刷新历史\n公众号预览 HTML\n离线稳定版 HTML\n390px 真实长图（仅桌面）\nPPTX 演示文稿\nDOCX 文档\n\n长图在本机隔离 Electron 窗口生成，并按固定像素和内存预算分段；下载仍受服务端隐私策略门禁控制。\n\nPPTX/DOCX 模板版本：office-render-v1\n\n确定性导出：固定模板、固定时间戳与固定 ZIP 顺序；同一作品版本和参数生成相同 SHA256。\n\n生成校验报告\n重新生成\n素材\n副驾驶\n待核实\n通读\n体检\n批注\n动态\n\n点一下任意段落，这里会推荐与这一段相关的素材，以及你以前写过的类似段落。\n\n0 字 · 1 个段落\n自动保存已开启\n作品工具\ninspect-1792313152138 的工作区\n·\n周末读书会（测试）\n已连接\n第 1 段起草失败\n模型服务触发限流或额度已用尽（RC08 失败注入桩（测试用户，非真实通道）），请稍后重试或切换到备用模型 · 你的内容没有被改动（请求 ID：ASUS/rc08）\n打开模型配置"
+    },
+    {
+      "action": "打开模型配置",
+      "url": "http://localhost:5174/settings/models"
+    },
+    {
+      "code": "ai_timeout",
+      "file": "failure-ui-timeout.png",
+      "toast_tail": "稿或替你发布。\n\n刷新历史\n公众号预览 HTML\n离线稳定版 HTML\n390px 真实长图（仅桌面）\nPPTX 演示文稿\nDOCX 文档\n\n长图在本机隔离 Electron 窗口生成，并按固定像素和内存预算分段；下载仍受服务端隐私策略门禁控制。\n\nPPTX/DOCX 模板版本：office-render-v1\n\n确定性导出：固定模板、固定时间戳与固定 ZIP 顺序；同一作品版本和参数生成相同 SHA256。\n\n生成校验报告\n重新生成\n素材\n副驾驶\n待核实\n通读\n体检\n批注\n动态\n\n点一下任意段落，这里会推荐与这一段相关的素材，以及你以前写过的类似段落。\n\n0 字 · 1 个段落\n自动保存已开启\n作品工具\ninspect-1792313152138 的工作区\n·\n周末读书会（测试）\n已连接\n第 1 段起草失败\n模型服务响应超时（RC08 失败注入桩（测试用户，非真实通道）），请换一个更快的模型或缩短素材/上下文后重试 · 你的内容没有被改动（请求 ID：ASUS/rc08）\n打开模型配置"
+    }
+  ],
+  "recovery": {
+    "url": "http://localhost:5174/works/2b734ace-1819-4ac3-8fef-2a8e9a4cab2e",
+    "draft_clicked": true,
+    "content_visible": true
+  }
+}

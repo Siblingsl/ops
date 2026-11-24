@@ -1,0 +1,272 @@
+{
+  "generated_at": "2026-11-24T07:07:48.644Z",
+  "note": "失败用本机 8097 桩注入真实 HTTP 403/429/超时（经产品流式起稿接口）；恢复用 8091 模拟模型，仅验证错误映射与切模型机制，不是商业模型真稿。",
+  "cases": [
+    {
+      "model": "fail-403",
+      "http_status": 200,
+      "total_ms": 78,
+      "sse_event_names": [
+        "job",
+        "stage",
+        "error"
+      ],
+      "error": {
+        "code": "ai_key_invalid",
+        "message": "模型密钥失效或没有权限（RC08 失败注入桩（测试用户，非真实通道）），请到「设置 → 模型配置」更新密钥。原有内容没有被改动。",
+        "detail": {
+          "fallback_available": false
+        }
+      }
+    },
+    {
+      "model": "fail-429",
+      "http_status": 200,
+      "total_ms": 59,
+      "sse_event_names": [
+        "job",
+        "stage",
+        "error"
+      ],
+      "error": {
+        "code": "ai_rate_limited",
+        "message": "模型服务触发限流或额度已用尽（RC08 失败注入桩（测试用户，非真实通道）），请稍后重试或切换到备用模型。你的内容没有被改动。",
+        "detail": {
+          "fallback_available": false
+        }
+      }
+    },
+    {
+      "model": "fail-timeout",
+      "http_status": 200,
+      "total_ms": 15052,
+      "sse_event_names": [
+        "job",
+        "stage",
+        "error"
+      ],
+      "error": {
+        "code": "ai_timeout",
+        "message": "模型服务响应超时（RC08 失败注入桩（测试用户，非真实通道）），请换一个更快的模型或缩短素材/上下文后重试。你的内容没有被改动。",
+        "detail": {
+          "fallback_available": false
+        }
+      }
+    }
+  ],
+  "recovery": {
+    "http_status": 200,
+    "total_ms": 519,
+    "sse_event_names": [
+      "job",
+      "stage",
+      "stage",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "delta",
+      "done"
+    ],
+    "done": {
+      "ai_call_id": "d278bcc5-7c10-443a-9c02-2220917223af",
+      "cx_basis": {
+        "schema_version": 1,
+        "account_id": "49573681-ac78-42af-8a55-7235a4dad80b",
+        "work_revision": 3,
+        "profile_hash": "fc4347c826b91a406cd34374e4c1df660e45ed2b3269d910256139de7b1da3a9",
+        "strategy_ref": null,
+        "standard_ref": null,
+        "dna_ref": null,
+        "sources": [
+          {
+            "ref": "profile:49573681-ac78-42af-8a55-7235a4dad80b",
+            "kind": "profile",
+            "id": "49573681-ac78-42af-8a55-7235a4dad80b",
+            "revision": null,
+            "as_of_at": "2026-11-24T15:07:32.713028+08:00",
+            "state": "unconfirmed",
+            "purpose": "创作定位"
+          },
+          {
+            "ref": "work_section:dbba6555-61a3-4709-b0cc-01a71793eacb",
+            "kind": "work_section",
+            "id": "dbba6555-61a3-4709-b0cc-01a71793eacb",
+            "revision": 1,
+            "as_of_at": "2026-11-24T15:07:32.805896+08:00",
+            "state": "unconfirmed",
+            "purpose": "当前段落提纲"
+          }
+        ],
+        "omitted": [
+          {
+            "ref": "material",
+            "reason": "本次没有选入可用素材；具体事实需由作者补充或核实"
+          }
+        ],
+        "coverage": "partial",
+        "assembled_at": "2026-11-24T07:07:48.1634379Z",
+        "input_hash": "e4e8ee6079747ba70218d881b888756006ea4e5c9698e459b1d0267ce7d26f42"
+      },
+      "fallback_used": false,
+      "job_id": "17ad1505-7187-4cc3-982b-328dbccafd79",
+      "refs": {
+        "cx_basis": {
+          "schema_version": 1,
+          "account_id": "49573681-ac78-42af-8a55-7235a4dad80b",
+          "work_revision": 3,
+          "profile_hash": "fc4347c826b91a406cd34374e4c1df660e45ed2b3269d910256139de7b1da3a9",
+          "strategy_ref": null,
+          "standard_ref": null,
+          "dna_ref": null,
+          "sources": [
+            {
+              "ref": "profile:49573681-ac78-42af-8a55-7235a4dad80b",
+              "kind": "profile",
+              "id": "49573681-ac78-42af-8a55-7235a4dad80b",
+              "revision": null,
+              "as_of_at": "2026-11-24T15:07:32.713028+08:00",
+              "state": "unconfirmed",
+              "purpose": "创作定位"
+            },
+            {
+              "ref": "work_section:dbba6555-61a3-4709-b0cc-01a71793eacb",
+              "kind": "work_section",
+              "id": "dbba6555-61a3-4709-b0cc-01a71793eacb",
+              "revision": 1,
+              "as_of_at": "2026-11-24T15:07:32.805896+08:00",
+              "state": "unconfirmed",
+              "purpose": "当前段落提纲"
+            }
+          ],
+          "omitted": [
+            {
+              "ref": "material",
+              "reason": "本次没有选入可用素材；具体事实需由作者补充或核实"
+            }
+          ],
+          "coverage": "partial",
+          "assembled_at": "2026-11-24T07:07:48.1634379Z",
+          "input_hash": "e4e8ee6079747ba70218d881b888756006ea4e5c9698e459b1d0267ce7d26f42"
+        },
+        "latency_ms": 443,
+        "memories": 0,
+        "model": "RC08 恢复用本地模型（模拟，非商业） / mock-writer",
+        "profile": true,
+        "prompt_version": 1,
+        "section_id": "dbba6555-61a3-4709-b0cc-01a71793eacb",
+        "skills": {
+          "allowed_set_version": "sk-c0.18-c1.7-v1",
+          "assembled_chars": null,
+          "budget": 3600,
+          "context": {
+            "account_id": "49573681-ac78-42af-8a55-7235a4dad80b",
+            "actor_kind": "user",
+            "surface": "task",
+            "target_format": "long_article",
+            "task_type": "section_draft",
+            "work_id": "47720d10-a7bc-4b39-9f1d-7b3298e120ac"
+          },
+          "items": [],
+          "personal_used_count": 0
+        },
+        "slots": [
+          {
+            "name": "rules",
+            "label": "系统规则",
+            "chars": 297,
+            "budget": 0,
+            "truncated": false,
+            "items": []
+          },
+          {
+            "name": "profile",
+            "label": "定位档案",
+            "chars": 34,
+            "budget": 800,
+            "truncated": false,
+            "items": [
+              {
+                "id": "49573681-ac78-42af-8a55-7235a4dad80b",
+                "label": "定位与表达档案",
+                "chars": 34,
+                "used": true,
+                "content_hash": "fc4347c826b91a406cd34374e4c1df660e45ed2b3269d910256139de7b1da3a9",
+                "source_kind": "profile",
+                "as_of_at": "2026-11-24T15:07:32.713028+08:00",
+                "state": "unconfirmed",
+                "purpose": "创作定位"
+              }
+            ]
+          },
+          {
+            "name": "style",
+            "label": "风格参考",
+            "chars": 0,
+            "budget": 4000,
+            "truncated": false,
+            "items": []
+          },
+          {
+            "name": "work",
+            "label": "作品内容",
+            "chars": 127,
+            "budget": 3000,
+            "truncated": false,
+            "items": [
+              {
+                "label": "观点与大纲",
+                "chars": 103,
+                "used": true
+              },
+              {
+                "label": "相邻段落",
+                "chars": 24,
+                "used": true
+              }
+            ]
+          }
+        ],
+        "status": "ok",
+        "style_samples": 0,
+        "style_summary": false,
+        "task_type": "section_draft",
+        "tokens": 480
+      },
+      "result": {
+        "section": {
+          "id": "dbba6555-61a3-4709-b0cc-01a71793eacb",
+          "position": 0,
+          "heading": "失败与恢复",
+          "key_point": "403、429、超时都要有可读提示",
+          "content_md": "关于「失败与恢复」，我想先把话说清楚：403、429、超时都要有可读提示。\n\n这不是空谈。回头看自己走过的路，真正起作用的往往是那些不起眼的小习惯。把它们一条条写下来，你会发现事情没有想象中复杂。",
+          "origin": "ai",
+          "source_section_ids": [],
+          "material_ids": [],
+          "revision": 2,
+          "updated_at": "2026-11-24T15:07:48.695619+08:00",
+          "ai_call_id": "d278bcc5-7c10-443a-9c02-2220917223af",
+          "source_revisions": {}
+        }
+      },
+      "text": "关于「失败与恢复」，我想先把话说清楚：403、429、超时都要有可读提示。\n\n这不是空谈。回头看自己走过的路，真正起作用的往往是那些不起眼的小习惯。把它们一条条写下来，你会发现事情没有想象中复杂。",
+      "usage": {
+        "prompt_tokens": 415,
+        "completion_tokens": 65
+      }
+    },
+    "text_has_result": true
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "chat_ok": true,
+  "core_ok": true,
+  "model": "workbuddy-ai/hy4flash-free",
+  "ok": false,
+  "results": [
+    {
+      "key": "chat",
+      "label": "对话连通",
+      "ok": true,
+      "skipped": false,
+      "latency_ms": 3556,
+      "detail": "回复：连接正常"
+    },
+    {
+      "key": "json",
+      "label": "JSON 模式",
+      "ok": true,
+      "skipped": false,
+      "latency_ms": 3819,
+      "detail": "JSON 输出可解析"
+    },
+    {
+      "key": "stream",
+      "label": "流式输出",
+      "ok": true,
+      "skipped": false,
+      "latency_ms": 5597,
+      "detail": "收到 16 个流式分块"
+    },
+    {
+      "key": "image",
+      "label": "文生图",
+      "ok": false,
+      "skipped": false,
+      "latency_ms": 400,
+      "detail": "模型服务返回 HTTP 400：{\"error\":{\"code\":null,\"message\":\"workbuddy-ai: 400 Bad Request: Create image failed with error: model [hy4flash-free] is not supported on image endpoint (14401)\",\"param\":null,\"type\":\"invalid_request_error\"}}"
+    },
+    {
+      "key": "search",
+      "label": "原生联网搜索",
+      "ok": false,
+      "skipped": true,
+      "latency_ms": 0,
+      "detail": "该接口地址没有已核验的原生联网搜索契约（目前支持百炼 DashScope 与火山方舟），已跳过"
+    },
+    {
+      "key": "tools",
+      "label": "工具调用",
+      "ok": true,
+      "skipped": false,
+      "latency_ms": 5417,
+      "detail": "工具调用与结果回传正常"
+    },
+    {
+      "key": "vision",
+      "label": "看图",
+      "ok": true,
+      "skipped": false,
+      "latency_ms": 3099,
+      "detail": "识别到红色"
+    }
+  ],
+  "summary": "自检完成：5/6 项通过（模型 workbuddy-ai/hy4flash-free）",
+  "tools_ok": true,
+  "vision_ok": true
+}

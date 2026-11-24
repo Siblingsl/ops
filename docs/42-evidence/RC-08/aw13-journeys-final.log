@@ -1,0 +1,151 @@
+2026/11/24 16:43:54 INFO 数据库连接池已配置 max_conns=20 max_conn_idle_time=5m0s max_conn_lifetime=1h0m0s statement_timeout=30s idle_in_transaction_session_timeout=60s timezone=Asia/Shanghai
+2026/11/24 16:43:54 INFO 已添加本地模拟模型（仅开发模式） workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:43:54 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000001 method=POST route=/api/v1/auth/setup status=200 duration_ms=70.2563 workspace_id=""
+2026/11/24 16:43:54 INFO 已添加本地模拟模型（仅开发模式） workspace_id=d2b30b79-1c6e-4d06-8cfa-9324352ccb21
+2026/11/24 16:43:54 INFO 已创建永久超级管理员账号 username=skyeder
+2026/11/24 16:43:54 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000002 method=GET route=/api/v1/auth/me status=200 duration_ms=8.0291 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+=== RUN   TestAW13Journey2SkillMaterialCardConfirmReal
+2026/11/24 16:43:54 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000003 method=POST route=/api/v1/auth/login status=200 duration_ms=31.0323 workspace_id=""
+2026/11/24 16:43:54 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000004 method=GET route=/api/v1/auth/me status=200 duration_ms=3.4971 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:43:54 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000005 method=GET route=/api/v1/auth/me status=200 duration_ms=2.7369 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:43:55 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000006 method=POST route=/api/v1/accounts status=200 duration_ms=21.6349 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:43:55 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000007 method=POST route=/api/v1/accounts status=200 duration_ms=8.048 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:43:55 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000008 method=POST route=/api/v1/auth/reauth status=200 duration_ms=25.3891 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:43:55 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000009 method=PUT route=/api/v1/accounts/{accountId}/wechat-credential status=200 duration_ms=9.1305 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:43:55 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000010 method=POST route=/api/v1/accounts/{accountId}/wechat-credential/test status=200 duration_ms=14.3659 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:43:55 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000011 method=POST route=/api/v1/agent/conversations status=200 duration_ms=30.7998 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:43:55 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000012 method=POST route=/api/v1/agent/attachments status=200 duration_ms=11.8679 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:43:55 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000013 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=87.1324 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+    aw13_journeys_real_test.go:248: run 6e73a52e-f884-4b86-9783-b590cee38c04 终态 status=awaiting_confirmation stage=awaiting_confirmation reason= error=/
+2026/11/24 16:44:41 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000014 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=41.2704 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:44:41 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000015 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=19.5812 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+    aw13_journeys_real_test.go:240: J2 第 1 次检查未过：run_completed
+--- FAIL: TestAW13Journey2SkillMaterialCardConfirmReal (46.44s)
+=== RUN   TestAW13Journey3ScopedFollowupQueuedReal
+2026/11/24 16:44:41 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000016 method=POST route=/api/v1/auth/login status=200 duration_ms=41.4459 workspace_id=""
+2026/11/24 16:44:41 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000017 method=GET route=/api/v1/auth/me status=200 duration_ms=6.6575 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:44:41 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000018 method=GET route=/api/v1/auth/me status=200 duration_ms=2.3247 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:44:41 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000019 method=POST route=/api/v1/agent/conversations status=200 duration_ms=14.519 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:44:41 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000020 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=52.165 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:44:52 INFO HTTP 请求 request_id=a2bd8dd5-664b-4892-b7f3-44ccf203c3da method=GET route=/api/v1/accounts/{accountId}/dashboard status=200 duration_ms=14.8635 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:44:52 INFO HTTP 请求 request_id=65a8a559-7e89-45a3-b20a-af5e1cfeaf23 method=GET route=/api/v1/accounts/{accountId}/dashboard status=200 duration_ms=5.9052 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:44:52 INFO HTTP 请求 request_id=95aa6eb1-c471-4e5e-b4a6-e4902ca8ce89 method=GET route=/api/v1/accounts/{accountId}/works status=200 duration_ms=9.8184 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:44:52 INFO HTTP 请求 request_id=555d946a-fba8-4a09-9e96-082e3bbd756b method=GET route=/api/v1/accounts/{accountId}/works status=200 duration_ms=3.8684 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:44:58 INFO HTTP 请求 request_id=3026dd43-ad13-4a45-ba74-a5cfb7af6e6b method=GET route=/api/v1/accounts/{accountId}/top-works status=200 duration_ms=10.8353 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:44:58 INFO HTTP 请求 request_id=a297f163-816d-49ca-b710-82d7406b9495 method=GET route=/api/v1/accounts/{accountId}/top-works status=200 duration_ms=5.7482 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+    aw13_journeys_real_test.go:265: run fecbae9a-0fc0-4250-abf4-346d1811d907 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:45:11 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000021 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=28.3135 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:45:11 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000022 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=29.4309 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:45:35 INFO HTTP 请求 request_id=9abeba1d-9715-493a-b08c-3913b2bd985c method=GET route=/api/v1/accounts/{accountId}/dashboard status=200 duration_ms=10.478 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:45:35 INFO HTTP 请求 request_id=1c2fc6a3-834b-4338-9039-2a38010aee39 method=GET route=/api/v1/accounts/{accountId}/works status=200 duration_ms=3.9839 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:45:39 INFO HTTP 请求 request_id=487eeeec-8eae-4734-8790-d65cb1d5bf88 method=GET route=/api/v1/accounts/{accountId}/top-works status=200 duration_ms=2.9358 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:46:17 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000023 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=24.8385 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+    aw13_journeys_real_test.go:263: J3 第 1 次完成：5 项检查全过
+2026/11/24 16:46:17 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000024 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=34.321 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:46:26 INFO HTTP 请求 request_id=0cdd8fc0-df27-4189-86fd-d4df886c4a5b method=GET route=/api/v1/accounts/{accountId}/dashboard status=200 duration_ms=4.8447 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:46:26 INFO HTTP 请求 request_id=887ef010-4581-4f3c-ac5f-ffa3f93f3424 method=GET route=/api/v1/accounts/{accountId}/dashboard status=200 duration_ms=4.8503 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:46:26 INFO HTTP 请求 request_id=45800bfd-5c7c-479b-8cff-248f71f92b96 method=GET route=/api/v1/accounts/{accountId}/works status=200 duration_ms=3.5415 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:46:27 INFO HTTP 请求 request_id=38fc8982-04cc-40e0-a377-08f90ebeb392 method=GET route=/api/v1/accounts/{accountId}/works status=200 duration_ms=2.6599 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:46:27 INFO HTTP 请求 request_id=ab93d2ac-9374-4d57-8935-c7df2b00ddd8 method=GET route=/api/v1/accounts/{accountId}/top-works status=200 duration_ms=5.814 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:46:27 INFO HTTP 请求 request_id=9097a61b-9383-4b90-8285-389e793767eb method=GET route=/api/v1/accounts/{accountId}/top-works status=200 duration_ms=2.9394 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+    aw13_journeys_real_test.go:265: run cbc1df7c-f390-4a0d-ae90-34a52b9d67d5 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:46:35 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000025 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=31.7706 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:46:35 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000026 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=41.3227 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:46:43 INFO HTTP 请求 request_id=4ca2d517-3d28-4f6d-918f-5cd870754a02 method=GET route=/api/v1/accounts/{accountId}/dashboard status=200 duration_ms=12.2723 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:46:43 INFO HTTP 请求 request_id=afc96c43-4e75-4ada-b653-bb321490b4fe method=GET route=/api/v1/accounts/{accountId}/works status=200 duration_ms=6.6103 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:46:43 INFO HTTP 请求 request_id=0f302830-3993-4306-9716-a768b9510cce method=GET route=/api/v1/accounts/{accountId}/top-works status=200 duration_ms=4.2931 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:46:59 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000027 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=51.8595 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+    aw13_journeys_real_test.go:263: J3 第 2 次检查未过：report_has_time_or_source
+--- FAIL: TestAW13Journey3ScopedFollowupQueuedReal (138.53s)
+=== RUN   TestAW13Journey5ForkKeepsAttachmentReal
+2026/11/24 16:47:00 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000028 method=POST route=/api/v1/auth/login status=200 duration_ms=68.0546 workspace_id=""
+2026/11/24 16:47:00 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000029 method=GET route=/api/v1/auth/me status=200 duration_ms=11.5354 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:00 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000030 method=GET route=/api/v1/auth/me status=200 duration_ms=9.5565 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:00 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000031 method=POST route=/api/v1/agent/conversations status=200 duration_ms=19.9159 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:00 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000032 method=POST route=/api/v1/agent/conversations status=200 duration_ms=14.4594 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:00 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000033 method=POST route=/api/v1/agent/attachments status=200 duration_ms=13.0466 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:00 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000034 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=58.5884 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:05 INFO HTTP 请求 request_id=392598c5-eec5-4569-8b9c-5bbb5b481ebd method=GET route=/api/v1/search status=200 duration_ms=13.935 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:47:08 INFO HTTP 请求 request_id=c45518a2-ca3a-4346-8b18-71d843b98abe method=GET route=/api/v1/search status=200 duration_ms=6.0392 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:47:15 INFO HTTP 请求 request_id=e46048fe-4e59-41e8-9c0f-dabf076680d3 method=GET route=/api/v1/search status=200 duration_ms=8.5687 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:47:15 INFO HTTP 请求 request_id=4d6d9a8a-dceb-4244-9cf9-21b0a525ed9d method=GET route=/api/v1/search status=200 duration_ms=11.0791 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+    aw13_journeys_real_test.go:364: run 21fb3908-d4f0-4590-98ed-76eea7d985a2 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:47:22 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000035 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=50.0265 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:22 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000036 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=20.7014 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:22 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000037 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=22.2164 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:22 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000038 method=POST route=/api/v1/agent/conversations/{id}/fork status=200 duration_ms=54.2845 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:22 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000039 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=63.5374 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:27 INFO HTTP 请求 request_id=7f2e574d-49e9-4de5-b5e7-045e8c8ac6d6 method=GET route=/api/v1/search status=200 duration_ms=20.9564 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:47:27 INFO HTTP 请求 request_id=dfa48d1d-7bde-4bf4-ad83-518e62148a61 method=GET route=/api/v1/search status=200 duration_ms=6.1162 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+    aw13_journeys_real_test.go:408: run 9e678ebc-8753-4822-9cb2-301262dbaba5 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:47:49 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000040 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=26.507 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:49 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000041 method=DELETE route=/api/v1/agent/conversations/{id} status=200 duration_ms=27.346 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:49 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000042 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=21.4769 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+    aw13_journeys_real_test.go:358: J5 第 1 次完成：6 项检查全过
+2026/11/24 16:47:49 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000043 method=POST route=/api/v1/agent/conversations status=200 duration_ms=12.5768 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:49 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000044 method=POST route=/api/v1/agent/attachments status=200 duration_ms=8.9714 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:49 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000045 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=44.2603 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:47:57 INFO HTTP 请求 request_id=c85abbe4-1be9-47a8-8fdf-782c30ea6db0 method=GET route=/api/v1/search status=200 duration_ms=14.3217 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:48:00 INFO HTTP 请求 request_id=f54a998c-cc1c-4d26-804c-f48ec89c4aac method=GET route=/api/v1/search status=200 duration_ms=6.2101 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:48:05 INFO HTTP 请求 request_id=7bcffff4-6ac6-430e-938d-eab601adb90a method=GET route=/api/v1/search status=200 duration_ms=6.5081 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:48:05 INFO HTTP 请求 request_id=921ec607-ac07-4e18-97c5-91667d95bc56 method=GET route=/api/v1/search status=200 duration_ms=7.8695 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:48:09 INFO HTTP 请求 request_id=83e146ba-500f-44cc-a0f4-7e62dbfeeadf method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=6.9118 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:48:14 INFO HTTP 请求 request_id=9e406442-0665-4b21-9338-58f17ae645f1 method=GET route=/api/v1/search status=200 duration_ms=6.4396 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:48:18 INFO context pack assemble task_type=topic_suggest workspace_id=c468589a-590b-4116-8c39-ce27560dd437 account_id=b994a8e9-1272-42c5-9780-856a99cbc746 duration_ms=6.3673 prefetch_ms=3.1575 cache_hit=false cache_hits=0 cache_misses=1 cache_size=1 bare=false
+2026/11/24 16:48:18 INFO HTTP 请求 request_id=4f0dfbdf-e613-4a6d-929e-0347fb498be8 method=POST route=/api/v1/accounts/{accountId}/topics/suggest status=200 duration_ms=30.4027 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+    aw13_journeys_real_test.go:364: run ddfb3551-94d4-4a90-b8b5-ac43687f016b 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:48:43 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000046 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=29.1495 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:48:43 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000047 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=20.6298 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:48:43 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000048 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=19.7193 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:48:43 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000049 method=POST route=/api/v1/agent/conversations/{id}/fork status=200 duration_ms=33.7981 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:48:43 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000050 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=34.7947 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:48:52 INFO HTTP 请求 request_id=a5c2cc68-fe20-4f1a-86b3-072b3098f392 method=GET route=/api/v1/search status=200 duration_ms=14.4424 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:48:52 INFO HTTP 请求 request_id=7ebfd9e1-8691-421a-aa2d-6d982ae2a25a method=GET route=/api/v1/search status=200 duration_ms=7.8637 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:49:04 INFO context pack assemble task_type=topic_suggest workspace_id=c468589a-590b-4116-8c39-ce27560dd437 account_id=b994a8e9-1272-42c5-9780-856a99cbc746 duration_ms=321.6875 prefetch_ms=319.7705 cache_hit=false cache_hits=0 cache_misses=2 cache_size=1 bare=false
+2026/11/24 16:49:04 INFO HTTP 请求 request_id=197bc85e-685f-47a6-bf0c-371b1506e044 method=POST route=/api/v1/accounts/{accountId}/topics/suggest status=200 duration_ms=336.1017 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+    aw13_journeys_real_test.go:408: run 23fda7bc-0a3c-4600-a2d3-7f8b226f7dc7 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:49:22 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000051 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=55.9074 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:49:22 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000052 method=DELETE route=/api/v1/agent/conversations/{id} status=200 duration_ms=28.3486 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:49:22 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000053 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=38.0417 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+    aw13_journeys_real_test.go:358: J5 第 2 次完成：6 项检查全过
+2026/11/24 16:49:22 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000054 method=POST route=/api/v1/agent/conversations status=200 duration_ms=15.7725 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:49:22 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000055 method=POST route=/api/v1/agent/attachments status=200 duration_ms=9.3876 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:49:23 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000056 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=72.1894 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:49:28 INFO HTTP 请求 request_id=ab136da6-38eb-4fcd-a028-527a39e48f09 method=GET route=/api/v1/search status=200 duration_ms=7.6609 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:49:34 INFO HTTP 请求 request_id=f08d76ca-0c28-4c7a-9625-80739afc4e20 method=GET route=/api/v1/search status=200 duration_ms=7.8104 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:49:40 INFO HTTP 请求 request_id=88219e16-ab6d-40ef-afd4-8335b7617028 method=GET route=/api/v1/search status=200 duration_ms=4.0856 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:49:40 INFO HTTP 请求 request_id=1c41539e-92dd-474e-822d-ac3a0983d6b8 method=GET route=/api/v1/search status=200 duration_ms=4.6148 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+    aw13_journeys_real_test.go:364: run 98884654-d66f-42ce-b79f-af549d50b56f 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:49:47 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000057 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=32.0481 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:49:47 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000058 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=29.2092 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:49:47 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000059 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=21.166 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:49:47 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000060 method=POST route=/api/v1/agent/conversations/{id}/fork status=200 duration_ms=29.6517 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:49:47 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000061 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=45.3034 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:49:50 INFO HTTP 请求 request_id=3fa58437-857a-4b23-9d59-c3dd6350e2b5 method=GET route=/api/v1/search status=200 duration_ms=7.4071 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:49:53 INFO HTTP 请求 request_id=60ec76ec-04ed-4eb1-9e58-00f3ba53c25b method=GET route=/api/v1/search status=200 duration_ms=6.9181 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:49:57 INFO HTTP 请求 request_id=804c79a9-3238-4716-a8e8-5359ed7dcaf8 method=GET route=/api/v1/search status=200 duration_ms=5.6284 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:49:57 INFO HTTP 请求 request_id=82b2ce7f-d26a-4986-b58c-a6746c3ec5df method=GET route=/api/v1/search status=200 duration_ms=3.6185 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:50:08 INFO HTTP 请求 request_id=59c7a669-54af-44f9-a02d-fa68c8980cf2 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=3.9837 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:50:08 INFO HTTP 请求 request_id=423a2ff3-428b-483f-9268-9e2f0d97b0e7 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=4.4576 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+    aw13_journeys_real_test.go:408: run 3f2ee0bf-eb33-467c-a942-0dc0a0aabc6d 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:50:29 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000062 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=54.8458 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:50:29 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000063 method=DELETE route=/api/v1/agent/conversations/{id} status=200 duration_ms=54.0293 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:50:29 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000064 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=37.0269 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+    aw13_journeys_real_test.go:358: J5 第 3 次完成：6 项检查全过
+--- PASS: TestAW13Journey5ForkKeepsAttachmentReal (209.58s)
+=== RUN   TestAW13Journey6RoutineReadOnlyReal
+2026/11/24 16:50:29 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000065 method=POST route=/api/v1/auth/login status=200 duration_ms=52.1774 workspace_id=""
+2026/11/24 16:50:29 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000066 method=GET route=/api/v1/auth/me status=200 duration_ms=4.6096 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:50:29 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000067 method=GET route=/api/v1/auth/me status=200 duration_ms=6.1975 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:50:29 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000068 method=POST route=/api/v1/agent/conversations status=200 duration_ms=12.952 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:50:29 INFO HTTP 请求 request_id=ASUS/lZGlLjYKav-000069 method=POST route=/api/v1/agent/routines status=200 duration_ms=31.6998 workspace_id=c468589a-590b-4116-8c39-ce27560dd437
+2026/11/24 16:50:36 INFO HTTP 请求 request_id=07cfd1d9-f98f-467a-b4da-e7e70a6a1188 method=GET route=/api/v1/accounts/{accountId}/dashboard status=200 duration_ms=12.8295 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:50:43 INFO HTTP 请求 request_id=65a02d3a-863a-437e-b82b-a3525748f14e method=GET route=/api/v1/accounts/{accountId}/metrics/unmatched status=200 duration_ms=9.9064 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:50:43 INFO HTTP 请求 request_id=83136f36-4e25-491c-b722-189cb5d0994e method=GET route=/api/v1/accounts/{accountId}/reviews status=200 duration_ms=9.3587 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:50:43 INFO HTTP 请求 request_id=5b99a8cf-4bfa-4e1c-a7f1-98f3966c358a method=GET route=/api/v1/accounts/{accountId}/digests status=200 duration_ms=16.8069 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+2026/11/24 16:50:52 INFO HTTP 请求 request_id=4c9d7ad2-2cc7-4dd6-8f31-12aa639af60a method=GET route=/api/v1/accounts/{accountId}/works status=200 duration_ms=6.669 workspace_id=c468589a-590b-4116-8c39-ce27560dd437 via=agent
+    aw13_journeys_real_test.go:428: J6 第 1 次检查未过：occurrence_started
+--- FAIL: TestAW13Journey6RoutineReadOnlyReal (601.06s)
+FAIL
+FAIL	ops/internal/app	1002.549s
+FAIL

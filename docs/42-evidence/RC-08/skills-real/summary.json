@@ -1,0 +1,30 @@
+{
+  "generated_at": "2026-11-24T17:37:30+08:00",
+  "source": "server/internal/app TestSkillRealModelAcceptance（真实 WorkBuddy 经产品链路）",
+  "baseline": "dd05298",
+  "provider_id": "9bf53a15-005e-4eef-ab9e-e6ad7e9c7f1a",
+  "model": "workbuddy-ai/hy4flash-free",
+  "cases": 36,
+  "passed": 36,
+  "failed": 0,
+  "scenes": 6,
+  "per_scene": [
+    6,
+    6,
+    6,
+    6,
+    6,
+    6
+  ],
+  "surfaces": [
+    "task",
+    "agent"
+  ],
+  "per_scene_surface": 3,
+  "latency_avg_ms": 7156.0,
+  "notes": [
+    "6 场景 × 2 形态 × 3 次重复 = 36 样本，全部通过。",
+    "scene 6 task repeat 1 出现 prompt-eval 409 / skill 409，为测试重复创建同名对象；测试按既有逻辑继续并通过，未删除/跳过断言。",
+    "真实模型仅作为被测生成器；技能选择、装配和信任区断言由产品链路判定。"
+  ]
+}

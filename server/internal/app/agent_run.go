@@ -46,7 +46,10 @@ type agentRunState struct {
 	// RoundsLimit 为单次 run 的轮次上限（0 表示用 agentMaxRounds）；子 run 取 4 轮（27 §11.3.3）。
 	RoundsLimit int
 	// AllowedTools 是委派显式允许的工具；空表示不额外限制（仍受角色可见性约束）。
-	AllowedTools      []string
+	AllowedTools []string
+	// WideDomains 记录模型在本轮通过 load_tool_domain(include_all=true) 临时展开的领域。
+	// 仅影响工具下发；执行侧仍按已加载领域与角色校验（OPT-A02）。
+	WideDomains       map[string]bool
 	StartedAt         time.Time
 	GoalUsedSeconds   int
 	GoalUsedTokens    int
@@ -181,37 +184,186 @@ func agentToolSchema(params []ToolParam) json.RawMessage {
 	return b
 }
 
+// OPT-A02：单次下发的业务工具只保留各领域的高频核心工具，避免把全部 200+ 条目录
+// 压进上下文。`load_tool_domain(include_all=true)` 可按领域临时展开，仍然一次只
+// 展开已加载领域（最多 3 个），因此不会回到全量下发。
+var agentCoreToolNames = map[string]bool{
+	// accounts
+	"accounts__list": true, "accounts__get": true, "accounts__brief": true,
+	// materials
+	"materials__list": true, "materials__get": true, "materials__create": true,
+	"materials__retrieve": true, "materials__extract": true,
+	// writing
+	"outline__generate": true, "outline__save": true, "sections__draft": true,
+	"sections__rewrite": true, "sections__edit": true, "works__titles": true,
+	// works
+	"works__list": true, "works__get": true, "works__read_sections": true,
+	"works__create": true, "works__update": true, "works__set_viewpoint": true,
+	// topics
+	"topics__list": true, "topics__suggest": true, "topics__create": true, "topics__start_work": true,
+	// profile
+	"profile__get": true, "profile__bootstrap": true, "style__list": true,
+	"memory__list": true, "skills__list": true,
+	// review
+	"review__dashboard": true, "review__top_works": true, "metrics__list": true, "reviews__create": true,
+	// publish
+	"checks__latest": true, "checks__start": true, "checks__report": true,
+	"wechat__push": true, "xhs__create_pack": true,
+	// ops
+	"daily__get": true, "hot__items": true, "references__list": true, "plan__get": true,
+	// settings
+	"ai__status": true, "usage__get": true, "models__routes": true,
+	// visual
+	"assets__library": true, "cards__generate_image": true, "panels__generate_image": true,
+	// templates / workspace / admin
+	"templates__list": true, "workspace__list": true,
+	"admin__system_settings": true, "admin__usage": true, "admin__users": true, "admin__workspaces": true,
+	// 冻结能力开启后仍只给最小可用集
+	"browser_observe": true, "browser_navigate": true, "browser_get_context": true, "browser_extract": true,
+	"computer_observe": true, "computer_request_target": true, "computer_click_target": true, "computer_type_target": true,
+	"mcp__list_connections": true, "delegate_task": true, "stop_delegation": true, "memory__propose_candidate": true,
+}
+
+// 元工具同样只保留工作流必需的入口；get_skill_context 仍可按名调用，但不再默认占 schema。
+var agentCoreMetaToolNames = map[string]bool{
+	"get_context": true, "load_tool_domain": true, "global_search": true, "load_skill": true,
+	"make_link": true, "request_input": true, "present_artifact": true, "report_capability_gap": true,
+	"present_plan": true, "update_plan_step": true, "report_goal_progress": true,
+}
+
+// agentToolsFor 返回本轮发给模型的工具定义：精简元工具 + 已加载领域中的核心工具。
+// 业务工具单次最多 agentCoreToolBudget 条，超过时按领域加载顺序轮转，最近加载的领域优先。
 func agentToolsFor(st *agentRunState, id *identity) []ai.Tool {
-	loaded := map[string]bool{}
-	for _, d := range st.Domains {
-		loaded[d] = true
-	}
 	out := []ai.Tool{}
 	catalog := agentCatalog()
+	metaOut := []ai.Tool{}
 	for i := range catalog {
 		t := &catalog[i]
-		if !agentMetaFeatureAllowed(st, t) {
+		if t.Domain != "" {
 			continue
 		}
-		if t.Domain != "" && !loaded[t.Domain] {
+		if !agentCoreMetaToolNames[t.Name] || !agentMetaFeatureAllowed(st, t) ||
+			!agentRunToolAllowed(st, t, id) || !agentRoleAllowed(st.Role, t.Name) {
 			continue
 		}
-		if !agentRunToolAllowed(st, t, id) {
-			continue
-		}
-		// REF41 A6-A3：角色白名单过滤（空表无工具；越权工具不进入 schema）。
-		if !agentRoleAllowed(st.Role, t.Name) {
-			continue
-		}
-		out = append(out, ai.Tool{Type: "function", Function: ai.ToolFunction{
-			Name: t.Name, Description: t.Description, Parameters: agentToolSchema(t.Params),
+		metaOut = append(metaOut, ai.Tool{Type: "function", Function: ai.ToolFunction{
+			Name: t.Name, Description: t.Description,
+			Parameters: agentToolParametersForRun(st, t),
 		}})
+	}
+	out = append(out, metaOut...)
+
+	// 去重并保留加载顺序：st.Domains 末尾是最近加载的领域。
+	loaded := make([]string, 0, len(st.Domains))
+	seen := map[string]bool{}
+	for _, d := range st.Domains {
+		if !seen[d] {
+			seen[d] = true
+			loaded = append(loaded, d)
+		}
+	}
+	byDomain := map[string][]*AgentTool{}
+	for i := range catalog {
+		t := &catalog[i]
+		if t.Domain == "" || !seen[t.Domain] || !agentDomainFeatureAllowed(st, t.Domain) {
+			continue
+		}
+		if !st.WideDomains[t.Domain] && !agentCoreToolNames[t.Name] {
+			continue
+		}
+		if !agentRunToolAllowed(st, t, id) || !agentMetaFeatureAllowed(st, t) || !agentRoleAllowed(st.Role, t.Name) {
+			continue
+		}
+		byDomain[t.Domain] = append(byDomain[t.Domain], t)
+	}
+	business := 0
+	for round := 0; business < agentCoreToolBudget; round++ {
+		added := false
+		for i := len(loaded) - 1; i >= 0 && business < agentCoreToolBudget; i-- {
+			d := loaded[i]
+			if round >= len(byDomain[d]) {
+				continue
+			}
+			t := byDomain[d][round]
+			out = append(out, ai.Tool{Type: "function", Function: ai.ToolFunction{
+				Name: t.Name, Description: t.Description, Parameters: agentToolSchema(t.Params),
+			}})
+			business++
+			added = true
+		}
+		if !added {
+			break
+		}
 	}
 	return out
 }
 
-// loadedTool 在“已加载领域 + 元工具”中按名称查找条目；领域未加载、角色不可见都视为未加载，
-// 使模型只能得到 unknown_tool（第 6.6 节、第 3.3 节第 2 项）。
+// agentCoreToolBudget 是单次请求下发的业务工具上限（OPT-A02）。
+const agentCoreToolBudget = 15
+
+// agentToolParametersForRun 只为 load_tool_domain 动态收窄领域枚举；其余条目沿用目录定义。
+func agentToolParametersForRun(st *agentRunState, t *AgentTool) json.RawMessage {
+	if t.Name != "load_tool_domain" {
+		return agentToolSchema(t.Params)
+	}
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"domain": map[string]any{
+				"type": "string", "enum": agentLoadableDomainNames(st),
+				"description": "要加载的领域；冻结能力不会出现在枚举中",
+			},
+			"include_all": map[string]any{
+				"type": "boolean", "description": "仅本次运行临时展开该领域非核心工具；默认只返回核心工具",
+			},
+		},
+		"required": []string{"domain"},
+	}
+	b, err := json.Marshal(schema)
+	if err != nil {
+		return js(`{"type":"object"}`)
+	}
+	return b
+}
+
+// agentLoadableDomainNames 按当前特性开关过滤冻结领域；空表示所有领域都被冻结。
+func agentLoadableDomainNames(st *agentRunState) []string {
+	out := []string{}
+	for _, d := range agentDomains {
+		if agentDomainFeatureAllowed(st, d.Name) {
+			out = append(out, d.Name)
+		}
+	}
+	return out
+}
+
+// agentDomainFeatureAllowed 把冻结能力的特性开关落到领域上：关闭时领域不可加载、
+// 已加载的工具也不可见，模型只能得到 unknown_tool。
+func agentDomainFeatureAllowed(st *agentRunState, domain string) bool {
+	features := agentWorkbenchFeatures()
+	switch domain {
+	case "browser":
+		return features["chrome_connect"] || features["browser_workspace"]
+	case "computer":
+		return features["computer_use"]
+	case "mcp":
+		return features["plugin_mcp"]
+	case "subagent":
+		return features["subagents"] && st != nil && st.AllowSubagents
+	case "memory":
+		return features["personal_memories"]
+	default:
+		return true
+	}
+}
+
+func agentDomainFrozenError(domain string) error {
+	return apiErr(http.StatusConflict, "capability_frozen",
+		"该能力当前已冻结关闭："+domain+"。请先在设置中开启对应能力，或改用核心工具完成当前任务")
+}
+
+// loadedTool 在“已加载领域 + 元工具”中按名称查找条目；领域未加载、角色不可见、
+// 能力已冻结都视为未加载，使模型只能得到 unknown_tool（第 6.6 节、第 3.3 节第 2 项）。
 func (st *agentRunState) loadedTool(id *identity, name string) *AgentTool {
 	t := agentTool(name)
 	if t == nil {
@@ -222,6 +374,9 @@ func (st *agentRunState) loadedTool(id *identity, name string) *AgentTool {
 		if agentMetaFeatureAllowed(st, t) && agentRunToolAllowed(st, t, id) {
 			return t
 		}
+		return nil
+	}
+	if !agentDomainFeatureAllowed(st, t.Domain) {
 		return nil
 	}
 	for _, d := range st.Domains {
@@ -239,6 +394,12 @@ func agentMetaFeatureAllowed(st *agentRunState, t *AgentTool) bool {
 	if t.Name == "present_artifact" {
 		features := agentWorkbenchFeatures()
 		return features["artifacts"] && (st == nil || st.ExecutionOrigin != "routine" || features["routines"])
+	}
+	if t.Name == "present_goal_progress" { // 预留：若后续新增该别名，同样走 goals 开关
+		return agentWorkbenchFeatures()["goals"]
+	}
+	if t.Name == "present_plan" || t.Name == "update_plan_step" {
+		return agentWorkbenchFeatures()["plans"]
 	}
 	if t.Name == "report_goal_progress" {
 		return agentWorkbenchFeatures()["goals"]
@@ -403,7 +564,7 @@ func (s *Server) agentCallModel(ctx context.Context, st *agentRunState, rt *rout
 		if errors.As(lastErr, &unavailable) && unavailable.Code == "ai_provider_unavailable" {
 			return out, unavailable
 		}
-		return out, apiErr(502, "ai_upstream_error", "模型服务调用失败："+truncate(lastErr.Error(), 300)+"。可以重试或在模型配置中设置备用模型。")
+		return out, upstreamFailureAPIError(lastErr, st.ProviderName)
 	}
 	return out, lastErr
 }

@@ -117,6 +117,9 @@ func agentIsOrchestrationTool(name string) bool {
 // agentMetaLoadDomain 加载一个领域（第 3.3 节第 2 项）：已满 3 个时移除最早加载的一个。
 func (s *Server) agentMetaLoadDomain(ctx context.Context, st *agentRunState, args map[string]any) ([]byte, string, error) {
 	name, _ := args["domain"].(string)
+	if name != "" && !agentDomainFeatureAllowed(st, name) {
+		return nil, "", agentDomainFrozenError(name)
+	}
 	desc := ""
 	known := false
 	for _, d := range agentDomains {
@@ -126,6 +129,13 @@ func (s *Server) agentMetaLoadDomain(ctx context.Context, st *agentRunState, arg
 	}
 	if !known {
 		return nil, "", apiErr(422, "invalid_arguments", "未知领域："+name)
+	}
+	includeAll, _ := args["include_all"].(bool)
+	if includeAll {
+		if st.WideDomains == nil {
+			st.WideDomains = map[string]bool{}
+		}
+		st.WideDomains[name] = true
 	}
 	loaded := false
 	for _, d := range st.Domains {
@@ -149,10 +159,14 @@ func (s *Server) agentMetaLoadDomain(ctx context.Context, st *agentRunState, arg
 		if e.Domain != name || !agentRunToolAllowed(st, e, id) {
 			continue
 		}
+		if !includeAll && !agentCoreToolNames[e.Name] {
+			continue
+		}
 		tools = append(tools, map[string]string{"name": e.Name, "description": e.Description})
 	}
 	out := map[string]any{
 		"ok": true, "domain": name, "desc": desc, "tools": tools, "loaded_domains": st.Domains,
+		"include_all": includeAll, "core_only": !includeAll,
 	}
 	payload, err := json.Marshal(out)
 	return payload, "已加载领域 " + name, err

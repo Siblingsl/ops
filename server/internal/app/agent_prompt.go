@@ -186,7 +186,13 @@ func (s *Server) agentEnvPayload(ctx context.Context, st *agentRunState) (agentE
 	}
 
 	for _, d := range agentDomains {
+		if !agentDomainFeatureAllowed(st, d.Name) {
+			continue
+		}
 		p.AllDomains = append(p.AllDomains, map[string]any{"name": d.Name, "desc": d.Desc})
+	}
+	if len(p.AllDomains) < len(agentDomains) {
+		p.Note += "本机浏览器、电脑控制、MCP、子智能体与个人记忆等能力已冻结，不在工具目录中；不要尝试调用。"
 	}
 
 	if st.ExecutionOrigin != "routine" {
@@ -213,7 +219,7 @@ func (s *Server) agentEnvPayload(ctx context.Context, st *agentRunState) (agentE
 	}
 
 	if id.Role == "viewer" {
-		p.Note = "当前身份是观察者，只有只读工具；不要提出写入卡片。"
+		p.Note += "当前身份是观察者，只有只读工具；不要提出写入卡片。"
 	}
 
 	// DEV-SK3 / 8.1 节：有当前账号时发现技能目录（运行内冻结，ref 永不重指）；

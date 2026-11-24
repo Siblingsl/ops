@@ -1,0 +1,655 @@
+2026/11/24 17:58:21 INFO 数据库连接池已配置 max_conns=20 max_conn_idle_time=5m0s max_conn_lifetime=1h0m0s statement_timeout=30s idle_in_transaction_session_timeout=60s timezone=Asia/Shanghai
+2026/11/24 17:58:21 INFO 已添加本地模拟模型（仅开发模式） workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:21 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000001 method=POST route=/api/v1/auth/setup status=200 duration_ms=75.7895 workspace_id=""
+2026/11/24 17:58:21 INFO 已添加本地模拟模型（仅开发模式） workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:21 INFO 已创建永久超级管理员账号 username=skyeder
+2026/11/24 17:58:21 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000002 method=GET route=/api/v1/auth/me status=200 duration_ms=6.5891 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+=== RUN   TestHC28_AgentToolCatalog
+--- PASS: TestHC28_AgentToolCatalog (0.00s)
+=== RUN   TestHC28_SystemFieldsNotInToolDefs
+--- PASS: TestHC28_SystemFieldsNotInToolDefs (0.00s)
+=== RUN   TestHC28_NoPublishBatchOrBlacklistedPaths
+--- PASS: TestHC28_NoPublishBatchOrBlacklistedPaths (0.00s)
+=== RUN   TestHC28_RouteClassificationComplete
+    agent_catalog_test.go:84: 以下路由未在附录 A、附录 B 或元工具中归类（16 文档第 3.7 节第 8 条）：
+          GET /api/v1/accounts/{accountId}/wechat/drafts
+          GET /api/v1/accounts/{accountId}/wechat/drafts/count
+          DELETE /api/v1/accounts/{accountId}/wechat/drafts/{mediaId}
+--- FAIL: TestHC28_RouteClassificationComplete (0.00s)
+=== RUN   TestHC31ComputerViewerToolDefinitionsAreReadOnly
+--- PASS: TestHC31ComputerViewerToolDefinitionsAreReadOnly (0.11s)
+=== RUN   TestHC31ViewerToolDefinitionsAreReadOnly
+--- PASS: TestHC31ViewerToolDefinitionsAreReadOnly (2.55s)
+=== RUN   TestHC31OwnerCannotAccessMemberAgentRecords
+2026/11/24 17:58:24 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000003 method=GET route=/api/v1/auth/me status=200 duration_ms=3.2321 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:24 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000004 method=POST route=/api/v1/workspaces/current/invites status=200 duration_ms=7.0403 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:24 INFO 已添加本地模拟模型（仅开发模式） workspace_id=8b70fa8a-c366-4909-bd0b-839796797686
+2026/11/24 17:58:24 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000005 method=POST route=/api/v1/auth/register status=200 duration_ms=44.4434 workspace_id=""
+2026/11/24 17:58:24 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000006 method=GET route=/api/v1/auth/me status=200 duration_ms=3.3016 workspace_id=8b70fa8a-c366-4909-bd0b-839796797686
+2026/11/24 17:58:24 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000007 method=POST route=/api/v1/workspaces/join status=200 duration_ms=18.4332 workspace_id=8b70fa8a-c366-4909-bd0b-839796797686
+2026/11/24 17:58:24 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000008 method=GET route=/api/v1/auth/me status=200 duration_ms=3.0276 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:24 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000009 method=POST route=/api/v1/agent/conversations status=200 duration_ms=14.2891 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:25 WARN HTTP 请求 request_id=ASUS/DXma8IvFOZ-000010 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=1076.7975 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:25 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000011 method=GET route=/api/v1/agent/conversations/{id} status=404 duration_ms=2.6484 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:25 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000012 method=POST route=/api/v1/agent/conversations/{id}/messages/{messageId}/edit status=404 duration_ms=2.1433 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:25 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000013 method=POST route=/api/v1/agent/actions/{id}/reject status=404 duration_ms=3.1729 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:25 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000014 method=POST route=/api/v1/agent/actions/{id}/execute status=404 duration_ms=2.1255 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC31OwnerCannotAccessMemberAgentRecords (1.23s)
+=== RUN   TestHC26_WriteToolsProposeCardsOnly
+2026/11/24 17:58:25 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000015 method=GET route=/api/v1/model-providers status=200 duration_ms=5.4553 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:25 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000016 method=POST route=/api/v1/model-providers/{id}/selftest status=200 duration_ms=13.8396 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:25 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000017 method=POST route=/api/v1/accounts status=200 duration_ms=10.3747 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:25 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000018 method=POST route=/api/v1/accounts status=200 duration_ms=7.9192 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:25 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000019 method=POST route=/api/v1/auth/reauth status=200 duration_ms=23.6701 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:25 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000020 method=PUT route=/api/v1/accounts/{accountId}/wechat-credential status=200 duration_ms=17.8883 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:25 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000021 method=POST route=/api/v1/accounts/{accountId}/wechat-credential/test status=200 duration_ms=11.2294 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:25 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000022 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=23.2011 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:25 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000023 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=15.9267 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:26 INFO context pack assemble task_type=outline workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=1053.4075 prefetch_ms=1041.9403 cache_hit=false cache_hits=0 cache_misses=1 cache_size=1 bare=false
+2026/11/24 17:58:26 WARN HTTP 请求 request_id=ASUS/DXma8IvFOZ-000024 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=1085.4625 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:26 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000025 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=36.2979 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:26 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=22.1223 prefetch_ms=5.6483 cache_hit=false cache_hits=0 cache_misses=2 cache_size=1 bare=false
+2026/11/24 17:58:26 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000026 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=125.337 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:26 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=25.0074 prefetch_ms=7.1921 cache_hit=false cache_hits=0 cache_misses=3 cache_size=1 bare=false
+2026/11/24 17:58:26 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000027 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=115.2729 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000028 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=72.7141 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000029 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=25.6992 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000030 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=68.6618 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=5.8702 prefetch_ms=3.6587 cache_hit=false cache_hits=0 cache_misses=4 cache_size=1 bare=false
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000031 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=8.6902 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000032 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=11.9727 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000033 method=GET route=/api/v1/works/{id} status=200 duration_ms=6.9236 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000034 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=17.3127 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000035 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=39.7631 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=2.0947 prefetch_ms=0.5239 cache_hit=false cache_hits=0 cache_misses=5 cache_size=1 bare=false
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000036 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=8.1588 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000037 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=11.643 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000038 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=20.2609 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000039 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=16.9576 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000040 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=13.4407 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000041 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=12.1321 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000042 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=18.4513 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000043 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.3504 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000044 method=POST route=/api/v1/agent/conversations status=200 duration_ms=17.3595 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:27 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000045 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.3426 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:28 WARN HTTP 请求 request_id=ASUS/DXma8IvFOZ-000046 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1396.5669 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:30 WARN HTTP 请求 request_id=ASUS/DXma8IvFOZ-000047 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1513.8934 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:31 WARN HTTP 请求 request_id=ASUS/DXma8IvFOZ-000048 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1257.091 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:33 WARN HTTP 请求 request_id=ASUS/DXma8IvFOZ-000049 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1556.0711 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:34 WARN HTTP 请求 request_id=ASUS/DXma8IvFOZ-000050 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1276.3333 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:35 WARN HTTP 请求 request_id=ASUS/DXma8IvFOZ-000051 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1153.8918 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:37 WARN HTTP 请求 request_id=ASUS/DXma8IvFOZ-000052 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=2037.245 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:37 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000053 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=34.7068 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:37 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000054 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=31.0947 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:37 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000055 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=29.9487 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:37 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000056 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=29.8526 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:37 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000057 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=34.5259 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:37 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000058 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=40.0323 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:37 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000059 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=29.5432 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:37 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000060 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=30.5897 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:37 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000061 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=29.8721 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:37 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000062 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=32.0409 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000063 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=29.4033 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000064 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=29.9295 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000065 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=33.7702 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000066 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=30.2231 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000067 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=30.6092 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000068 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=30.396 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000069 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=31.7797 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000070 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=31.2028 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000071 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=38.9688 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000072 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=30.134 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000073 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=30.5794 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000074 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=32.356 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC26_WriteToolsProposeCardsOnly (13.01s)
+=== RUN   TestHC27_ExecuteGuardsAndRoutes
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000075 method=GET route=/api/v1/model-providers status=200 duration_ms=4.2428 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000076 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=11.4565 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000077 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=12.7031 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO context pack assemble task_type=outline workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=16.8517 prefetch_ms=4.8718 cache_hit=false cache_hits=0 cache_misses=6 cache_size=1 bare=false
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000078 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=42.0459 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000079 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=39.067 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=6.2482 prefetch_ms=1.8001 cache_hit=false cache_hits=0 cache_misses=7 cache_size=1 bare=false
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000080 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=73.2921 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=5.6587 prefetch_ms=2.459 cache_hit=false cache_hits=0 cache_misses=8 cache_size=1 bare=false
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000081 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=70.3457 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000082 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=72.5304 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000083 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=20.6085 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000084 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=41.365 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=2.6625 prefetch_ms=1.0614 cache_hit=false cache_hits=0 cache_misses=9 cache_size=1 bare=false
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000085 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.9448 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000086 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.0499 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000087 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.1492 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000088 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=16.2583 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000089 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=26.8914 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:38 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=3.0496 prefetch_ms=2.0158 cache_hit=false cache_hits=0 cache_misses=10 cache_size=1 bare=false
+2026/11/24 17:58:38 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000090 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=4.9235 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:39 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000091 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=10.452 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:39 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000092 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=16.9903 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:39 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000093 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=15.9195 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:39 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000094 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=13.2831 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:39 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000095 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=12.877 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:39 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000096 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=18.9293 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:39 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000097 method=GET route=/api/v1/works/{id} status=200 duration_ms=5.1494 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:39 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000098 method=POST route=/api/v1/agent/conversations status=200 duration_ms=21.9892 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:39 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000099 method=POST route=/api/v1/agent/actions/{id}/execute status=400 duration_ms=1.9209 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:39 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000100 method=POST route=/api/v1/agent/actions/{id}/execute status=400 duration_ms=2.208 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:39 INFO HTTP 请求 request_id=35c943dd-e9c6-4df6-bb5b-e128d180883b method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.464 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f via=agent
+2026/11/24 17:58:39 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000101 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=743.0503 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:39 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000102 method=POST route=/api/v1/agent/actions/{id}/execute status=409 duration_ms=9.2231 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:40 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000103 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=786.5155 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:40 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000104 method=POST route=/api/v1/agent/actions/{id}/execute status=409 duration_ms=6.9957 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:40 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000105 method=POST route=/api/v1/agent/actions/{id}/execute status=409 duration_ms=7.9561 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:41 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000106 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=949.3395 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:41 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000107 method=POST route=/api/v1/agent/actions/{id}/execute status=409 duration_ms=7.0042 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC27_ExecuteGuardsAndRoutes (3.26s)
+=== RUN   TestHC29_Provenance
+2026/11/24 17:58:41 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000108 method=GET route=/api/v1/model-providers status=200 duration_ms=4.1708 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:41 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000109 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=10.7094 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:41 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000110 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=11.6877 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:41 INFO context pack assemble task_type=outline workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=4.3627 prefetch_ms=1.4487 cache_hit=false cache_hits=0 cache_misses=11 cache_size=1 bare=false
+2026/11/24 17:58:41 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000111 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=22.2457 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:41 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000112 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=18.1177 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:41 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=5.6301 prefetch_ms=1.494 cache_hit=false cache_hits=0 cache_misses=12 cache_size=1 bare=false
+2026/11/24 17:58:41 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000113 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=54.6991 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:41 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=5.1375 prefetch_ms=1.4509 cache_hit=false cache_hits=0 cache_misses=13 cache_size=1 bare=false
+2026/11/24 17:58:41 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000114 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=50.5163 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:41 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000115 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=71.017 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:41 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000116 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=17.5849 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=4.1362 prefetch_ms=2.7306 cache_hit=false cache_hits=0 cache_misses=14 cache_size=1 bare=false
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000117 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=38.7622 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000118 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.086 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000119 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=8.23 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000120 method=GET route=/api/v1/works/{id} status=200 duration_ms=5.03 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000121 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=18.5987 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000122 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=30.5638 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=5.6588 prefetch_ms=1.3362 cache_hit=false cache_hits=0 cache_misses=15 cache_size=1 bare=false
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000123 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.1185 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000124 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.8814 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000125 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=12.5358 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000126 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.5067 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000127 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=12.1048 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000128 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=13.089 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000129 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=17.5547 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000130 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.0476 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:42 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000131 method=POST route=/api/v1/agent/conversations status=200 duration_ms=18.9468 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:43 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000132 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=707.1166 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:43 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000133 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=34.4137 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:43 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000134 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=885.1788 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:43 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000135 method=POST route=/api/v1/agent/actions/{id}/execute status=409 duration_ms=8.7932 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:43 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000136 method=POST route=/api/v1/agent/actions/{id}/execute status=409 duration_ms=6.9821 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:45 WARN HTTP 请求 request_id=ASUS/DXma8IvFOZ-000137 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1635.6111 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:47 WARN HTTP 请求 request_id=ASUS/DXma8IvFOZ-000138 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1925.7734 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC29_Provenance (5.85s)
+=== RUN   TestHC30_Secrets
+2026/11/24 17:58:47 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000139 method=GET route=/api/v1/auth/me status=200 duration_ms=3.6499 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:47 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000140 method=GET route=/api/v1/model-providers status=200 duration_ms=3.626 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:47 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000141 method=POST route=/api/v1/auth/reauth status=200 duration_ms=31.1277 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:47 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000142 method=PUT route=/api/v1/accounts/{accountId}/wechat-credential status=200 duration_ms=7.9245 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:47 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000143 method=POST route=/api/v1/workspaces/current/invites status=200 duration_ms=5.9501 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:47 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000144 method=POST route=/api/v1/agent/conversations status=200 duration_ms=8.0466 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:48 INFO HTTP 请求 request_id=5e57457d-f9c5-48e5-a7b4-161b410ebd83 method=GET route=/api/v1/accounts status=200 duration_ms=1.8216 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f via=agent
+2026/11/24 17:58:48 INFO HTTP 请求 request_id=fca4d063-0d49-48b6-8ceb-960f231c7389 method=GET route=/api/v1/model-providers status=200 duration_ms=2.1763 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f via=agent
+2026/11/24 17:58:48 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000145 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=786.074 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:48 INFO HTTP 请求 request_id=c5408eea-a976-4dc5-99b4-b7d7ee21319e method=POST route=/api/v1/workspaces/current/invites status=200 duration_ms=6.6503 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f via=agent agent_action_id=16900d7e-33f1-42aa-82d6-23f2997b85e1
+2026/11/24 17:58:48 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000146 method=POST route=/api/v1/agent/actions/{id}/execute status=200 duration_ms=42.7417 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:48 INFO HTTP 请求 request_id=3b12004f-3ec5-40de-a5b6-b7901cedce8d method=PUT route=/api/v1/accounts/{accountId}/wechat-credential status=403 duration_ms=0.5056 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f via=agent
+2026/11/24 17:58:48 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000147 method=POST route=/api/v1/agent/conversations/{id}/messages status=422 duration_ms=4.7224 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC30_Secrets (0.91s)
+=== RUN   TestHC21_CrawlOffMakesNoRequests
+--- PASS: TestHC21_CrawlOffMakesNoRequests (3.99s)
+=== RUN   TestHC23_CrawlRequestIdentity
+--- PASS: TestHC23_CrawlRequestIdentity (0.04s)
+=== RUN   TestHC01_SuggestTopicsDoesNotWritePool
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000148 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=3.3168 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO context pack assemble task_type=topic_suggest workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=1.4486 prefetch_ms=0.7011 cache_hit=false cache_hits=0 cache_misses=16 cache_size=1 bare=false
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000149 method=POST route=/api/v1/accounts/{accountId}/topics/suggest status=200 duration_ms=14.2475 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000150 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=3.1465 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO context pack assemble task_type=topic_hot_suggest workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=1.5736 prefetch_ms=1.0493 cache_hit=false cache_hits=0 cache_misses=17 cache_size=1 bare=false
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000151 method=POST route=/api/v1/accounts/{accountId}/topics/hot-suggest status=200 duration_ms=14.6516 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000152 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=2.0173 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000153 method=POST route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=9.5794 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000154 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=2.7325 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC01_SuggestTopicsDoesNotWritePool (0.05s)
+=== RUN   TestHC02_OutlineRequiresViewpoint
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000155 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=7.4739 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000156 method=POST route=/api/v1/works/{id}/outline/generate status=409 duration_ms=2.7266 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC02_OutlineRequiresViewpoint (0.01s)
+=== RUN   TestHC02_ConfirmOutlineRequiresViewpoint
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000157 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=7.7853 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000158 method=PUT route=/api/v1/works/{id}/outline status=409 duration_ms=1.0393 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000159 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=9.1546 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000160 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=10.916 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC02_ConfirmOutlineRequiresViewpoint (0.03s)
+=== RUN   TestHC03_DraftRequiresConfirmedOutline
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000161 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=7.6457 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000162 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=8.9822 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000163 method=POST route=/api/v1/works/{id}/sections status=409 duration_ms=2.0694 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000164 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=7.9041 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000165 method=POST route=/api/v1/sections/{id}/draft status=409 duration_ms=1.8784 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+    hc_test.go:223: unexpected draft route: GET /api/v1/accounts/{accountId}/wechat/drafts
+--- FAIL: TestHC03_DraftRequiresConfirmedOutline (0.04s)
+=== RUN   TestHC04_PushAndPackRequireConfirmedChecks
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000166 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=8.1287 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000167 method=POST route=/api/v1/works/{id}/wechat/push status=409 duration_ms=3.0057 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000168 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=9.2434 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 WARN 请求 JSON 格式错误 err=EOF
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000169 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=36.0265 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=1.6577 prefetch_ms=0.527 cache_hit=false cache_hits=0 cache_misses=18 cache_size=1 bare=false
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000170 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.797 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000171 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.2149 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000172 method=POST route=/api/v1/works/{id}/checks/complete status=409 duration_ms=5.1759 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000173 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=8.0777 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000174 method=POST route=/api/v1/works/{id}/xhs/pack status=409 duration_ms=4.3959 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000175 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=9.2594 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 WARN 请求 JSON 格式错误 err=EOF
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000176 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=24.167 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=4568637a-df6d-4510-8896-1526c2ca38b6 duration_ms=2.2931 prefetch_ms=1.0426 cache_hit=false cache_hits=0 cache_misses=19 cache_size=1 bare=false
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000177 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.819 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000178 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.5509 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:52 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000179 method=POST route=/api/v1/works/{id}/checks/complete status=409 duration_ms=4.8463 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC04_PushAndPackRequireConfirmedChecks (0.25s)
+=== RUN   TestHC05_PushIsSingleWorkOnly
+--- PASS: TestHC05_PushIsSingleWorkOnly (0.00s)
+=== RUN   TestHC06_NoPublishOrMassSendAPIs
+--- PASS: TestHC06_NoPublishOrMassSendAPIs (0.24s)
+=== RUN   TestHC07_OnlyHumanMarksPublished
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000180 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=8.5597 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000181 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=9.8209 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO context pack assemble task_type=outline workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=6.6179 prefetch_ms=4.3461 cache_hit=false cache_hits=0 cache_misses=20 cache_size=1 bare=false
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000182 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=22.5165 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000183 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=11.9143 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=6.8375 prefetch_ms=3.158 cache_hit=false cache_hits=0 cache_misses=21 cache_size=1 bare=false
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000184 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=47.2087 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=5.4199 prefetch_ms=1.5647 cache_hit=false cache_hits=0 cache_misses=22 cache_size=1 bare=false
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000185 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=49.0083 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000186 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=67.4858 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000187 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=12.7944 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000188 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=26.9512 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=2.6174 prefetch_ms=1.0557 cache_hit=false cache_hits=0 cache_misses=23 cache_size=1 bare=false
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000189 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.548 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000190 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.5537 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000191 method=GET route=/api/v1/works/{id} status=200 duration_ms=5.3819 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000192 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=17.7596 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000193 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=38.5782 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=2.6076 prefetch_ms=0.5256 cache_hit=false cache_hits=0 cache_misses=24 cache_size=1 bare=false
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000194 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=13.2976 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000195 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.1675 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000196 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=13.3856 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000197 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=12.8695 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000198 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.5284 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000199 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.9599 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000200 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=15.8529 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000201 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.1597 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000202 method=POST route=/api/v1/works/{id}/wechat/push status=200 duration_ms=37.0416 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:53 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000203 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.2265 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000204 method=POST route=/api/v1/works/{id}/published status=200 duration_ms=26.2763 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC07_OnlyHumanMarksPublished (0.91s)
+=== RUN   TestHC08_ReviewDoesNotWriteTopics
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000205 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=8.5152 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000206 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=10.1982 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO context pack assemble task_type=outline workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=6.9566 prefetch_ms=4.2202 cache_hit=false cache_hits=0 cache_misses=25 cache_size=1 bare=false
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000207 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=23.257 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000208 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=12.4424 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=7.0708 prefetch_ms=2.9838 cache_hit=false cache_hits=0 cache_misses=26 cache_size=1 bare=false
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000209 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=50.4716 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=12.5042 prefetch_ms=3.65 cache_hit=false cache_hits=0 cache_misses=27 cache_size=1 bare=false
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000210 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=80.8653 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000211 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=66.7831 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000212 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=19.1073 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000213 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=41.9705 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=3.4336 prefetch_ms=1.3376 cache_hit=false cache_hits=0 cache_misses=28 cache_size=1 bare=false
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000214 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.432 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000215 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.9709 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000216 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.637 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000217 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=15.4185 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000218 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=30.3551 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=2.1343 prefetch_ms=0.5182 cache_hit=false cache_hits=0 cache_misses=29 cache_size=1 bare=false
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000219 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.8981 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000220 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.7297 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000221 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.6376 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000222 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.4281 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000223 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=10.5612 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000224 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.2269 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000225 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=14.8434 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000226 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.9885 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000227 method=POST route=/api/v1/works/{id}/wechat/push status=200 duration_ms=28.335 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000228 method=POST route=/api/v1/works/{id}/metrics status=200 duration_ms=13.9183 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000229 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=2.5587 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO context pack assemble task_type=review_analysis workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=1.6137 prefetch_ms=1.1099 cache_hit=false cache_hits=0 cache_misses=30 cache_size=1 bare=false
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000230 method=POST route=/api/v1/accounts/{accountId}/reviews status=200 duration_ms=15.6748 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000231 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=2.4472 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000232 method=POST route=/api/v1/review-reports/{id}/suggestions/{index}/adopt status=200 duration_ms=11.9203 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000233 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=2.588 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000234 method=POST route=/api/v1/review-reports/{id}/suggestions/{index}/adopt status=409 duration_ms=2.2694 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC08_ReviewDoesNotWriteTopics (0.67s)
+=== RUN   TestHC09_DeriveRejectsSamePlatform
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000235 method=POST route=/api/v1/accounts status=200 duration_ms=5.6768 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000236 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=8.907 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000237 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=11.4739 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO context pack assemble task_type=outline workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=4.6305 prefetch_ms=2.5753 cache_hit=false cache_hits=0 cache_misses=31 cache_size=1 bare=false
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000238 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=23.7443 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000239 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=14.5 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=6.0304 prefetch_ms=2.0903 cache_hit=false cache_hits=0 cache_misses=32 cache_size=1 bare=false
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000240 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=47.9289 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=6.0599 prefetch_ms=1.7981 cache_hit=false cache_hits=0 cache_misses=33 cache_size=1 bare=false
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000241 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=52.2047 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000242 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=65.4866 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000243 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=21.8719 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000244 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=31.7007 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:54 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=2.5433 prefetch_ms=0.6122 cache_hit=false cache_hits=0 cache_misses=34 cache_size=1 bare=false
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000245 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.8578 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000246 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.0066 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000247 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.9108 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000248 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=13.6488 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000249 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=26.2554 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=2.6062 prefetch_ms=1.0257 cache_hit=false cache_hits=0 cache_misses=35 cache_size=1 bare=false
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000250 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.3755 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000251 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.6511 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000252 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=14.3876 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000253 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=13.4607 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000254 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.7927 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000255 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=12.5759 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000256 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=16.7532 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000257 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.9619 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000258 method=POST route=/api/v1/works/{id}/derive status=422 duration_ms=2.6505 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000259 method=POST route=/api/v1/accounts/{accountId}/disable status=200 duration_ms=8.9063 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC09_DeriveRejectsSamePlatform (0.57s)
+=== RUN   TestHC10_DailyPushLimitNeedsConfirmation
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000260 method=PATCH route=/api/v1/accounts/{accountId} status=422 duration_ms=3.012 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000261 method=PATCH route=/api/v1/accounts/{accountId} status=200 duration_ms=5.6541 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000262 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=8.0261 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000263 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=9.0136 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO context pack assemble task_type=outline workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=7.3562 prefetch_ms=5.1992 cache_hit=false cache_hits=0 cache_misses=36 cache_size=1 bare=false
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000264 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=23.1942 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000265 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=13.4156 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=6.4618 prefetch_ms=2.2216 cache_hit=false cache_hits=0 cache_misses=37 cache_size=1 bare=false
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000266 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=50.1223 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=9.7184 prefetch_ms=2.4824 cache_hit=false cache_hits=0 cache_misses=38 cache_size=1 bare=false
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000267 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=57.5691 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000268 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=73.0499 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000269 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=12.3249 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000270 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=26.1623 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=2.3821 prefetch_ms=1.067 cache_hit=false cache_hits=0 cache_misses=39 cache_size=1 bare=false
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000271 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.0869 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000272 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.316 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000273 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.2008 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000274 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=15.2601 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000275 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=27.045 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=3.3168 prefetch_ms=1.3796 cache_hit=false cache_hits=0 cache_misses=40 cache_size=1 bare=false
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000276 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.6105 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000277 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=8.0575 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000278 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.7957 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000279 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.9411 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000280 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.5812 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000281 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.8186 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000282 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=14.9578 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000283 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.3168 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000284 method=POST route=/api/v1/works/{id}/wechat/push status=409 duration_ms=12.4449 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000285 method=POST route=/api/v1/works/{id}/wechat/push status=200 duration_ms=24.6865 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000286 method=PATCH route=/api/v1/accounts/{accountId} status=200 duration_ms=5.2266 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC10_DailyPushLimitNeedsConfirmation (0.61s)
+=== RUN   TestHC11_CrossWorkspaceAccountIs404
+2026/11/24 17:58:55 INFO 已添加本地模拟模型（仅开发模式） workspace_id=8db11db5-2663-458d-8926-269ea12eed71
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000287 method=POST route=/api/v1/auth/register status=200 duration_ms=62.8716 workspace_id=""
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000288 method=GET route=/api/v1/auth/me status=200 duration_ms=4.4598 workspace_id=8db11db5-2663-458d-8926-269ea12eed71
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000289 method=GET route=/api/v1/accounts/{accountId} status=404 duration_ms=1.543 workspace_id=8db11db5-2663-458d-8926-269ea12eed71
+--- PASS: TestHC11_CrossWorkspaceAccountIs404 (0.07s)
+=== RUN   TestHC12_EditorCannotCreateModelProvider
+2026/11/24 17:58:55 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000290 method=POST route=/api/v1/workspaces/current/invites status=200 duration_ms=5.2831 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:55 INFO 已添加本地模拟模型（仅开发模式） workspace_id=5117478b-2a6a-4940-9ac0-d69deb6435ed
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000291 method=POST route=/api/v1/auth/register status=200 duration_ms=51.3143 workspace_id=""
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000292 method=GET route=/api/v1/auth/me status=200 duration_ms=2.5624 workspace_id=5117478b-2a6a-4940-9ac0-d69deb6435ed
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000293 method=POST route=/api/v1/workspaces/join status=200 duration_ms=15.4894 workspace_id=5117478b-2a6a-4940-9ac0-d69deb6435ed
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000294 method=GET route=/api/v1/auth/me status=200 duration_ms=2.9088 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000295 method=POST route=/api/v1/auth/reauth status=200 duration_ms=22.8974 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000296 method=GET route=/api/v1/auth/me status=200 duration_ms=3.1731 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000297 method=POST route=/api/v1/model-providers status=403 duration_ms=1.4929 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC12_EditorCannotCreateModelProvider (0.11s)
+=== RUN   TestHC13_ViewerCannotCreateWork
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000298 method=POST route=/api/v1/workspaces/current/invites status=200 duration_ms=3.7342 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO invite email (dev, SMTP unset) to=viewer@example.com code=R8T7LCQB workspace="owner 的工作区"
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000299 method=POST route=/api/v1/workspaces/current/invites/{id}/send-email status=200 duration_ms=16.3207 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO 已添加本地模拟模型（仅开发模式） workspace_id=163222c6-d9d4-4235-a35d-f4e11887fda6
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000300 method=POST route=/api/v1/auth/register status=200 duration_ms=43.5911 workspace_id=""
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000301 method=GET route=/api/v1/auth/me status=200 duration_ms=2.7216 workspace_id=163222c6-d9d4-4235-a35d-f4e11887fda6
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000302 method=POST route=/api/v1/workspaces/join status=200 duration_ms=11.1466 workspace_id=163222c6-d9d4-4235-a35d-f4e11887fda6
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000303 method=GET route=/api/v1/auth/me status=200 duration_ms=2.7907 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000304 method=POST route=/api/v1/accounts/{accountId}/works status=403 duration_ms=0.539 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC13_ViewerCannotCreateWork (0.08s)
+=== RUN   TestHC14_TransferOwner
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000305 method=GET route=/api/v1/auth/me status=200 duration_ms=1.6649 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000306 method=POST route=/api/v1/workspaces/current/invites status=200 duration_ms=4.6406 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO 已添加本地模拟模型（仅开发模式） workspace_id=b99a609a-796d-49c5-921c-da2d88cefc4b
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000307 method=POST route=/api/v1/auth/register status=200 duration_ms=44.2943 workspace_id=""
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000308 method=GET route=/api/v1/auth/me status=200 duration_ms=2.5537 workspace_id=b99a609a-796d-49c5-921c-da2d88cefc4b
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000309 method=POST route=/api/v1/workspaces/join status=200 duration_ms=10.3537 workspace_id=b99a609a-796d-49c5-921c-da2d88cefc4b
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000310 method=GET route=/api/v1/auth/me status=200 duration_ms=2.3279 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000311 method=POST route=/api/v1/workspaces/current/transfer status=200 duration_ms=5.88 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000312 method=GET route=/api/v1/auth/me status=200 duration_ms=2.2897 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000313 method=GET route=/api/v1/auth/me status=200 duration_ms=2.1504 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000314 method=POST route=/api/v1/workspaces/current/invites status=403 duration_ms=1.5967 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000315 method=POST route=/api/v1/workspaces/current/transfer status=200 duration_ms=6.2368 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC14_TransferOwner (0.09s)
+=== RUN   TestHC15_SystemAdmin
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000316 method=POST route=/api/v1/auth/login status=200 duration_ms=31.6037 workspace_id=""
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000317 method=GET route=/api/v1/auth/me status=200 duration_ms=1.7864 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:56 INFO 已添加本地模拟模型（仅开发模式） workspace_id=7dd888da-379e-47d2-922c-ae99731f07d7
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000318 method=POST route=/api/v1/auth/register status=200 duration_ms=45.5743 workspace_id=""
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000319 method=GET route=/api/v1/auth/me status=200 duration_ms=2.6515 workspace_id=7dd888da-379e-47d2-922c-ae99731f07d7
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000320 method=GET route=/api/v1/auth/me status=200 duration_ms=2.2596 workspace_id=7dd888da-379e-47d2-922c-ae99731f07d7
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000321 method=GET route=/api/v1/admin/users status=403 duration_ms=1.0592 workspace_id=7dd888da-379e-47d2-922c-ae99731f07d7
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000322 method=GET route=/api/v1/admin/users status=200 duration_ms=1.6039 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000323 method=POST route=/api/v1/admin/users/{id}/revoke-sessions status=200 duration_ms=4.8493 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000324 method=PATCH route=/api/v1/admin/users/{id} status=200 duration_ms=7.6799 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000325 method=POST route=/api/v1/auth/login status=403 duration_ms=1.0362 workspace_id=""
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000326 method=PATCH route=/api/v1/admin/users/{id} status=200 duration_ms=5.511 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000327 method=GET route=/api/v1/admin/workspaces status=200 duration_ms=2.2147 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000328 method=POST route=/api/v1/admin/workspaces/{id}/enter status=200 duration_ms=4.9225 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000329 method=GET route=/api/v1/auth/me status=200 duration_ms=3.7146 workspace_id=7dd888da-379e-47d2-922c-ae99731f07d7
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000330 method=POST route=/api/v1/workspaces/current/invites status=200 duration_ms=4.7883 workspace_id=7dd888da-379e-47d2-922c-ae99731f07d7
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000331 method=POST route=/api/v1/admin/workspaces/exit status=200 duration_ms=4.7263 workspace_id=7dd888da-379e-47d2-922c-ae99731f07d7
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000332 method=PUT route=/api/v1/admin/system-settings status=200 duration_ms=17.0272 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000333 method=POST route=/api/v1/auth/register status=403 duration_ms=1.0471 workspace_id=""
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000334 method=PUT route=/api/v1/admin/system-settings status=200 duration_ms=17.0849 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000335 method=PUT route=/api/v1/admin/system-settings status=200 duration_ms=16.3418 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000336 method=POST route=/api/v1/auth/login status=200 duration_ms=30.9476 workspace_id=""
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000337 method=GET route=/api/v1/auth/me status=200 duration_ms=2.8389 workspace_id=7dd888da-379e-47d2-922c-ae99731f07d7
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000338 method=GET route=/api/v1/accounts status=503 duration_ms=0.5199 workspace_id=7dd888da-379e-47d2-922c-ae99731f07d7
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000339 method=PUT route=/api/v1/admin/system-settings status=200 duration_ms=18.4695 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000340 method=POST route=/api/v1/auth/login status=200 duration_ms=29.874 workspace_id=""
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000341 method=GET route=/api/v1/auth/me status=200 duration_ms=4.8315 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC15_SystemAdmin (0.27s)
+=== RUN   TestHC16_PlannedDateNeverPublishes
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000342 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=9.0162 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000343 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=10.9512 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO context pack assemble task_type=outline workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=6.3012 prefetch_ms=2.5724 cache_hit=false cache_hits=0 cache_misses=41 cache_size=1 bare=false
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000344 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=24.4361 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000345 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=15.6795 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=7.2516 prefetch_ms=3.1733 cache_hit=false cache_hits=0 cache_misses=42 cache_size=1 bare=false
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000346 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=50.2121 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=6.5277 prefetch_ms=2.4242 cache_hit=false cache_hits=0 cache_misses=43 cache_size=1 bare=false
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000347 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=51.9931 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000348 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=71.0495 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000349 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=18.1282 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000350 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=37.607 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=2.9086 prefetch_ms=0.5818 cache_hit=false cache_hits=0 cache_misses=44 cache_size=1 bare=false
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000351 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=8.245 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000352 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=8.1373 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000353 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.6854 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000354 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=17.8481 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000355 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=31.18 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=2.1376 prefetch_ms=0.5344 cache_hit=false cache_hits=0 cache_misses=45 cache_size=1 bare=false
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000356 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.427 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:56 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000357 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.1594 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000358 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=14.2488 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000359 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=13.3254 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000360 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=13.1617 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000361 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=12.9565 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000362 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=18.7817 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000363 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.3139 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000364 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=10.0786 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO context pack assemble task_type=daily_brief workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=0 prefetch_ms=0 cache_hit=false cache_hits=0 cache_misses=46 cache_size=1 bare=false
+2026/11/24 17:58:57 INFO context pack assemble task_type=daily_brief workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=0 prefetch_ms=0 cache_hit=false cache_hits=0 cache_misses=47 cache_size=1 bare=false
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000365 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.5435 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC16_PlannedDateNeverPublishes (0.90s)
+=== RUN   TestHC17_CopilotNeverWritesBody
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000366 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=9.6159 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000367 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=11.572 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO context pack assemble task_type=outline workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=6.061 prefetch_ms=2.6008 cache_hit=false cache_hits=0 cache_misses=48 cache_size=1 bare=false
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000368 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=25.7848 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000369 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=16.8208 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=8.2547 prefetch_ms=2.9127 cache_hit=false cache_hits=0 cache_misses=49 cache_size=1 bare=false
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000370 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=64.3697 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=6.6717 prefetch_ms=2.3755 cache_hit=false cache_hits=0 cache_misses=50 cache_size=1 bare=false
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000371 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=52.6973 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000372 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.5328 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO context pack assemble task_type=copilot_chat workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=2.8158 prefetch_ms=1.3041 cache_hit=false cache_hits=0 cache_misses=51 cache_size=1 bare=false
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000373 method=POST route=/api/v1/works/{id}/copilot status=200 duration_ms=27.4316 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000374 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.2434 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC17_CopilotNeverWritesBody (0.22s)
+=== RUN   TestHC18_FixSuggestIsPerItem
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000375 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=9.3327 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000376 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=10.398 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO context pack assemble task_type=outline workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=4.6548 prefetch_ms=2.1413 cache_hit=false cache_hits=0 cache_misses=52 cache_size=1 bare=false
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000377 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=23.391 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000378 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=14.2481 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=7.2362 prefetch_ms=3.8489 cache_hit=false cache_hits=0 cache_misses=53 cache_size=1 bare=false
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000379 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=52.9526 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=7.4327 prefetch_ms=2.6952 cache_hit=false cache_hits=0 cache_misses=54 cache_size=1 bare=false
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000380 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=54.2655 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000381 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.4157 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000382 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=13.6288 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000383 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=41.057 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=3.4573 prefetch_ms=1.2329 cache_hit=false cache_hits=0 cache_misses=55 cache_size=1 bare=false
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000384 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.6557 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000385 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.4009 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO context pack assemble task_type=fix_suggest workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=1.6221 prefetch_ms=0.5273 cache_hit=false cache_hits=0 cache_misses=56 cache_size=1 bare=false
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000386 method=POST route=/api/v1/check-items/{id}/fix-suggest status=200 duration_ms=14.0955 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000387 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.066 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000388 method=POST route=/api/v1/works/{id}/checks/complete status=409 duration_ms=6.1337 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000389 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.8133 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000390 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=14.499 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000391 method=POST route=/api/v1/works/{id}/checks/complete status=409 duration_ms=5.8891 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC18_FixSuggestIsPerItem (0.35s)
+=== RUN   TestHC19_ReviewGateBeforePushAndPack
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000392 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=9.1851 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:57 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000393 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=11.1155 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO context pack assemble task_type=outline workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=5.3872 prefetch_ms=2.0305 cache_hit=false cache_hits=0 cache_misses=57 cache_size=1 bare=false
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000394 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=23.2748 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000395 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=12.6499 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=6.8232 prefetch_ms=3.0616 cache_hit=false cache_hits=0 cache_misses=58 cache_size=1 bare=false
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000396 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=48.5348 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=6.9299 prefetch_ms=3.2731 cache_hit=false cache_hits=0 cache_misses=59 cache_size=1 bare=false
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000397 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=55.8187 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000398 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=125.0763 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000399 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=22.0364 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000400 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=33.4738 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=4.155 prefetch_ms=1.6882 cache_hit=false cache_hits=0 cache_misses=60 cache_size=1 bare=false
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000401 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=12.7551 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000402 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=8.0752 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000403 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.7328 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000404 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=19.4525 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000405 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=40.6665 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=3.2296 prefetch_ms=1.1009 cache_hit=false cache_hits=0 cache_misses=61 cache_size=1 bare=false
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000406 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=8.064 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000407 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.0125 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000408 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=14.8271 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000409 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=13.5215 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000410 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=13.5419 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000411 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=14.095 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000412 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=16.3952 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000413 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.3947 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000414 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=10.7828 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000415 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.7444 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000416 method=POST route=/api/v1/works/{id}/wechat/push status=409 duration_ms=5.0089 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000417 method=POST route=/api/v1/works/{id}/review/approve status=200 duration_ms=15.5293 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000418 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=9.3879 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000419 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=9.7454 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO context pack assemble task_type=outline workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=4568637a-df6d-4510-8896-1526c2ca38b6 duration_ms=4.2776 prefetch_ms=2.3505 cache_hit=false cache_hits=0 cache_misses=62 cache_size=1 bare=false
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000420 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=20.6336 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000421 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=14.7905 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=4568637a-df6d-4510-8896-1526c2ca38b6 duration_ms=4.7909 prefetch_ms=1.622 cache_hit=false cache_hits=0 cache_misses=63 cache_size=1 bare=false
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000422 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=43.2856 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=4568637a-df6d-4510-8896-1526c2ca38b6 duration_ms=4.914 prefetch_ms=1.0906 cache_hit=false cache_hits=0 cache_misses=64 cache_size=1 bare=false
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000423 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=44.8111 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000424 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=69.7763 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000425 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=13.6069 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000426 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=29.0249 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:58 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=4568637a-df6d-4510-8896-1526c2ca38b6 duration_ms=1.6465 prefetch_ms=0.5335 cache_hit=false cache_hits=0 cache_misses=65 cache_size=1 bare=false
+2026/11/24 17:58:58 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000427 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.2409 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000428 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.172 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000429 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.5118 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000430 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=15.7709 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000431 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=27.7225 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO context pack assemble task_type=fact_flag workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=4568637a-df6d-4510-8896-1526c2ca38b6 duration_ms=2.9393 prefetch_ms=0.5238 cache_hit=false cache_hits=0 cache_misses=66 cache_size=1 bare=false
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000432 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.3178 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000433 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.3588 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000434 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=12.2848 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000435 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=14.7558 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000436 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=16.39 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000437 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=13.3726 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000438 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=18.5373 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000439 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.1514 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000440 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=10.648 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000441 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.7417 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000442 method=POST route=/api/v1/works/{id}/xhs/pack status=409 duration_ms=4.2445 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000443 method=POST route=/api/v1/works/{id}/review/approve status=200 duration_ms=13.7702 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000444 method=POST route=/api/v1/works/{id}/xhs/pack status=200 duration_ms=15.184 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC19_ReviewGateBeforePushAndPack (1.28s)
+=== RUN   TestHC20_SuggestedMemoryNotInContext
+2026/11/24 17:58:59 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=8.76 prefetch_ms=5.8425 cache_hit=false cache_hits=0 cache_misses=67 cache_size=1 bare=false
+2026/11/24 17:58:59 INFO context pack assemble task_type=title workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=5.3398 prefetch_ms=3.1457 cache_hit=false cache_hits=0 cache_misses=68 cache_size=2 bare=false
+2026/11/24 17:58:59 INFO context pack assemble task_type=topic_suggest workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=2.1048 prefetch_ms=0.5229 cache_hit=false cache_hits=0 cache_misses=69 cache_size=3 bare=false
+2026/11/24 17:58:59 INFO context pack assemble task_type=copilot_chat workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=1.7813 prefetch_ms=0.5224 cache_hit=false cache_hits=0 cache_misses=70 cache_size=4 bare=false
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000445 method=GET route=/api/v1/accounts/{accountId}/memories status=200 duration_ms=3.9702 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000446 method=PATCH route=/api/v1/memories/{id} status=200 duration_ms=6.9601 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO context pack assemble task_type=section_draft workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=a967b52f-70b3-4af9-86ad-09318c3d3ab1 duration_ms=5.9654 prefetch_ms=2.7002 cache_hit=false cache_hits=0 cache_misses=71 cache_size=1 bare=false
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000447 method=PATCH route=/api/v1/memories/{id} status=200 duration_ms=3.5183 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC20_SuggestedMemoryNotInContext (0.05s)
+=== RUN   TestHC22V4SingleObjectActions
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000448 method=POST route=/api/v1/daily/{id}/items/{idx}/{action} status=400 duration_ms=1.5719 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000449 method=POST route=/api/v1/daily/{id}/items/{idx}/{action} status=400 duration_ms=1.0689 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000450 method=POST route=/api/v1/hot-matches/{id}/convert status=400 duration_ms=0.5159 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000451 method=POST route=/api/v1/plan-slots/{id}/adopt status=400 duration_ms=1.5918 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+--- PASS: TestHC22V4SingleObjectActions (0.01s)
+=== RUN   TestHC25V4NoWechatWrites
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000452 method=POST route=/api/v1/accounts status=200 duration_ms=8.1676 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO context pack assemble task_type=account_positioning workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=eac24b9c-559f-48c7-ad85-458dc2693ebb duration_ms=1.5851 prefetch_ms=0.5141 cache_hit=false cache_hits=0 cache_misses=72 cache_size=1 bare=false
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000453 method=POST route=/api/v1/accounts/{accountId}/strategy/options status=200 duration_ms=16.5697 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000454 method=POST route=/api/v1/accounts/{accountId}/strategy status=200 duration_ms=34.2861 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO context pack assemble task_type=daily_recommend workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=eac24b9c-559f-48c7-ad85-458dc2693ebb duration_ms=2.7411 prefetch_ms=1.0944 cache_hit=false cache_hits=0 cache_misses=73 cache_size=1 bare=false
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000455 method=POST route=/api/v1/accounts/{accountId}/daily/regenerate status=200 duration_ms=52.0187 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000456 method=POST route=/api/v1/daily/{id}/items/{idx}/{action} status=200 duration_ms=14.9527 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000457 method=POST route=/api/v1/topics/{id}/verify status=200 duration_ms=11.319 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000458 method=PATCH route=/api/v1/topics/{id} status=422 duration_ms=4.4483 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000459 method=PATCH route=/api/v1/topics/{id} status=422 duration_ms=5.0731 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000460 method=POST route=/api/v1/daily/{id}/items/{idx}/{action} status=200 duration_ms=18.4725 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000461 method=POST route=/api/v1/daily/{id}/items/{idx}/{action} status=409 duration_ms=4.317 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO context pack assemble task_type=daily_recommend workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=eac24b9c-559f-48c7-ad85-458dc2693ebb duration_ms=2.265 prefetch_ms=1.1511 cache_hit=false cache_hits=0 cache_misses=74 cache_size=1 bare=false
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000462 method=POST route=/api/v1/daily/{id}/items/{idx}/{action} status=200 duration_ms=52.6941 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000463 method=POST route=/api/v1/daily/{id}/items/{idx}/{action} status=200 duration_ms=10.9627 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO context pack assemble task_type=daily_recommend workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=eac24b9c-559f-48c7-ad85-458dc2693ebb duration_ms=2.452 prefetch_ms=1.1629 cache_hit=false cache_hits=0 cache_misses=75 cache_size=1 bare=false
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000464 method=POST route=/api/v1/accounts/{accountId}/daily/regenerate status=200 duration_ms=43.8643 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO context pack assemble task_type=daily_recommend workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f account_id=eac24b9c-559f-48c7-ad85-458dc2693ebb duration_ms=2.1195 prefetch_ms=0.5308 cache_hit=false cache_hits=0 cache_misses=76 cache_size=1 bare=false
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000465 method=POST route=/api/v1/accounts/{accountId}/daily/regenerate status=200 duration_ms=40.5296 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000466 method=POST route=/api/v1/accounts/{accountId}/daily/regenerate status=409 duration_ms=3.7319 workspace_id=40113180-7a86-4804-b2f8-0ddcef21073f
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000467 method=POST route=/api/v1/auth/login status=200 duration_ms=30.7317 workspace_id=""
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000468 method=GET route=/api/v1/auth/me status=200 duration_ms=2.816 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000469 method=PUT route=/api/v1/admin/crawl status=422 duration_ms=0.6249 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000470 method=PUT route=/api/v1/admin/crawl status=422 duration_ms=1.0879 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000471 method=PUT route=/api/v1/admin/crawl status=422 duration_ms=1.0614 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+--- PASS: TestHC25V4NoWechatWrites (0.39s)
+=== RUN   TestHC24SensitiveAndReferenceIsolation
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000472 method=POST route=/api/v1/auth/login status=200 duration_ms=32.4377 workspace_id=""
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000473 method=GET route=/api/v1/auth/me status=200 duration_ms=2.2722 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000474 method=PUT route=/api/v1/admin/crawl/platforms/{platform} status=422 duration_ms=0.5315 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000475 method=PUT route=/api/v1/admin/crawl/platforms/{platform} status=422 duration_ms=1.049 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000476 method=PUT route=/api/v1/admin/crawl/platforms/{platform} status=422 duration_ms=1.112 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000477 method=PUT route=/api/v1/admin/crawl/platforms/{platform} status=422 duration_ms=0.5362 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000478 method=PUT route=/api/v1/admin/crawl/platforms/{platform} status=422 duration_ms=1.053 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+2026/11/24 17:58:59 INFO HTTP 请求 request_id=ASUS/DXma8IvFOZ-000479 method=PUT route=/api/v1/admin/crawl/platforms/{platform} status=422 duration_ms=1.0982 workspace_id=59e18822-5a78-4568-83fb-05d90c80a4be
+--- PASS: TestHC24SensitiveAndReferenceIsolation (0.10s)
+FAIL
+FAIL	ops/internal/app	45.037s
+FAIL

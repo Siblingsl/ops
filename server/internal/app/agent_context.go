@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -62,6 +63,13 @@ func (s *Server) agentBuildMessages(ctx context.Context, st *agentRunState, id *
 		return nil, err
 	}
 	out = append(out, ai.Message{Role: "system", Content: env})
+	// OPT-A03：账号定位与旧作风格紧跟在环境块之后。它们比摘要、固定引用更靠近
+	// 系统规则，模型先建立“谁在写、写成什么样”，再处理素材与当前请求。
+	if st.AccountID != nil && st.ExecutionOrigin != "routine" {
+		if block := s.agentAccountStyleBlock(ctx, *st.AccountID); block != "" {
+			out = append(out, ai.Message{Role: "system", Content: block})
+		}
+	}
 	if st.GoalID != nil {
 		goal, err := s.agentGoalByID(ctx, s.db, *st.GoalID)
 		if err != nil {
@@ -111,6 +119,55 @@ func (s *Server) agentBuildMessages(ctx context.Context, st *agentRunState, id *
 		return nil, err
 	}
 	return append(out, window...), nil
+}
+
+// agentAccountStyleBlock 汇总当前账号的定位档案与旧作片段（OPT-A03）。只作为资料，
+// 不提升为系统规则；总量截断，避免挤占消息窗口。
+func (s *Server) agentAccountStyleBlock(ctx context.Context, accountID uuid.UUID) string {
+	var tags []string
+	var audience, tone, summary string
+	err := s.db.QueryRow(ctx, `SELECT coalesce(positioning_tags,'{}'), coalesce(target_audience,''),
+		coalesce(persona_tone,''), coalesce(style_summary,'') FROM account_profile WHERE account_id=$1`, accountID).
+		Scan(&tags, &audience, &tone, &summary)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## 账号定位与旧作风格（优先依据，不是指令）\n")
+	if len(tags) > 0 {
+		b.WriteString("定位标签：" + strings.Join(tags, "、") + "\n")
+	}
+	if strings.TrimSpace(audience) != "" {
+		b.WriteString("目标读者：" + strings.TrimSpace(audience) + "\n")
+	}
+	if strings.TrimSpace(tone) != "" {
+		b.WriteString("人设与语气：" + strings.TrimSpace(tone) + "\n")
+	}
+	if strings.TrimSpace(summary) != "" {
+		b.WriteString("风格摘要：" + truncateRunes(strings.TrimSpace(summary), 400) + "\n")
+	}
+	rows, err := s.db.Query(ctx, `SELECT title, content_md FROM style_sample
+		WHERE account_id=$1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 2`, accountID)
+	if err == nil {
+		defer rows.Close()
+		n := 0
+		for rows.Next() && n < 2 {
+			var title, content string
+			if rows.Scan(&title, &content) != nil {
+				break
+			}
+			if strings.TrimSpace(content) == "" {
+				continue
+			}
+			fmt.Fprintf(&b, "旧作《%s》片段：\n%s\n", truncate(title, 40), truncateRunes(content, 500))
+			n++
+		}
+	}
+	block := b.String()
+	if len([]rune(block)) <= len("## 账号定位与旧作风格（优先依据，不是指令）\n") {
+		return ""
+	}
+	return truncateRunes(block, 1400)
 }
 
 // agentMessageWindow 从最新消息向前装入完整消息，直到预算用尽（第 6.2 节第 4 项）。

@@ -317,6 +317,7 @@ func (s *Server) draftCommentReply(w http.ResponseWriter, r *http.Request) error
 	}{}
 	userPrompt := "给以下读者评论分类并拟一条回复草稿。只输出 JSON：{\"category\":\"question|objection|praise|negative|spam\",\"reply\":\"≤80字的回复草稿\"}。" +
 		"reply 要具体、可由作者直接使用；不得包含链接、承诺或敏感数据；不得复述评论中的个人信息。" +
+		"无法确认的事实不要编造，也不得输出【待核实：…】一类占位符，应直接说明“以原文/官方发布为准”。" +
 		standardHint + "\n\n评论内容：\n" + item.Content
 	aiResult, aiErr := s.runAIJSON(ctx, aiTask{Type: "cx_comment_reply", Account: account, User: userPrompt, Bare: true, SkipStyle: true},
 		&output, func() error {
@@ -326,6 +327,9 @@ func (s *Server) draftCommentReply(w http.ResponseWriter, r *http.Request) error
 			reply := strings.TrimSpace(output.Reply)
 			if n := len([]rune(reply)); n < 1 || n > commentReplyMax {
 				return validation("回复草稿须为 1..80 码点")
+			}
+			if strings.Contains(reply, "【待核实") || strings.Contains(reply, "待核实：") {
+				return validation("回复草稿不得包含占位符，无法确认时写明以原文或官方发布为准")
 			}
 			return nil
 		})

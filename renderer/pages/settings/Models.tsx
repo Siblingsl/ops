@@ -16,14 +16,31 @@ import { usePageVisible } from '@/lib/visibility'
 
 // DEV-U101（12 文档）：供应商能力自检结果。
 interface SelfTestProbe { key: string; label: string; ok: boolean; skipped: boolean; latency_ms: number; detail: string }
-interface SelfTestResult { model: string; summary: string; ok: boolean; results: SelfTestProbe[] }
+interface SelfTestResult {
+  model: string; summary: string; ok: boolean; results: SelfTestProbe[]
+  chat_ok?: boolean; tools_ok?: boolean; vision_ok?: boolean; core_ok?: boolean
+}
 
 function SelfTestDialog({ result, onClose }: { result: SelfTestResult; onClose: () => void }) {
   const icon = (p: SelfTestProbe) => p.skipped
     ? <MinusCircle className="size-4 text-mist-400" />
     : p.ok ? <CheckCircle2 className="size-4 text-ink-600" /> : <XCircle className="size-4 text-danger" />
+  // OPT-A01：三槽位只关心对话/工具/看图；核心三项单独置顶，非核心探针失败不误导。
+  const core = [
+    { key: 'chat', label: '对话', ok: result.chat_ok ?? result.results.find((p) => p.key === 'chat')?.ok },
+    { key: 'tools', label: '工具调用', ok: result.tools_ok ?? result.results.find((p) => p.key === 'tools')?.ok },
+    { key: 'vision', label: '看图', ok: result.vision_ok ?? result.results.find((p) => p.key === 'vision')?.ok },
+  ]
   return (
     <Dialog open onClose={onClose} title="供应商能力自检" desc={`模型 ${result.model} · ${result.summary}`} width="max-w-xl">
+      <div className="mb-3 grid grid-cols-3 gap-2">
+        {core.map((c) => (
+          <div key={c.key} className={`rounded-lg border px-3 py-2 text-[12.5px] ${c.ok ? 'border-ink-100 bg-ink-50 text-ink-700' : 'border-red-100 bg-red-50 text-danger'}`}>
+            <div className="font-medium">{c.label}</div>
+            <div>{c.ok ? 'PASS' : 'FAIL'}</div>
+          </div>
+        ))}
+      </div>
       <div className="divide-y divide-mist-100 rounded-lg border border-mist-100">
         {result.results.map((p) => (
           <div key={p.key} className="flex items-start gap-3 px-4 py-3">
@@ -344,6 +361,137 @@ function QuickSetupDialog({ onClose }: { onClose: () => void }) {
 
 const keyRoutes = ['default', 'tier_economy', 'tier_quality', 'metric_screenshot', 'image_gen']
 
+// OPT-A01：把底层 60+ task_type 收拢成三个业务槽位。保存时写回真实路由：
+// 主写作 = default + agent_chat，轻量辅助 = tier_economy，视觉识图 = metric_screenshot。
+type SlotKey = 'main' | 'light' | 'vision'
+interface SlotPick { provider_id: string; model: string }
+const modelSlots: { key: SlotKey; title: string; desc: string; tasks: string[]; need: 'tools' | 'vision' | 'none' }[] = [
+  { key: 'main', title: '主写作与对话', desc: '长文、快写、大纲、对话改写；必须支持对话与原生工具调用', tasks: ['default', 'agent_chat'], need: 'tools' },
+  { key: 'light', title: '轻量辅助', desc: '标签、摘要、评论拟稿等短任务；可与主模型相同', tasks: ['tier_economy'], need: 'none' },
+  { key: 'vision', title: '视觉识图', desc: '数据截图与图片理解；必须支持图片输入', tasks: ['metric_screenshot'], need: 'vision' },
+]
+
+function ThreeSlotCard({ providers }: { providers: Provider[] }) {
+  const { data, refetch } = useQuery({ queryKey: ['routes'], queryFn: () => get<ModelRoute[]>('/model-routes') })
+  const [routes, setRoutes] = useState<ModelRoute[]>([])
+  const [picks, setPicks] = useState<Record<SlotKey, SlotPick>>({
+    main: { provider_id: '', model: '' }, light: { provider_id: '', model: '' }, vision: { provider_id: '', model: '' },
+  })
+  const [busy, setBusy] = useState(false)
+  const [dirty, setDirty] = useState(false)
+  const inv = useInvalidate()
+  useSettingsDraft(dirty, busy)
+  useEffect(() => {
+    if (!data) return
+    setRoutes(data)
+    const pick = (tasks: string[]): SlotPick => {
+      const r = data.find((x) => tasks.includes(x.task_type))
+      return { provider_id: r?.provider_id ?? '', model: r?.model ?? '' }
+    }
+    setPicks({ main: pick(['default', 'agent_chat']), light: pick(['tier_economy']), vision: pick(['metric_screenshot']) })
+    setDirty(false)
+  }, [data])
+  const active = providers.filter((p) => p.status === 'active')
+  const capOf = (pick: SlotPick) => providers.find((p) => p.id === pick.provider_id)?.capabilities?.find((c) => c.model === pick.model)
+  const setPick = (key: SlotKey, patch: Partial<SlotPick>) => {
+    setPicks((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }))
+    setDirty(true)
+  }
+  const changeProvider = (key: SlotKey, providerID: string) => {
+    const p = providers.find((x) => x.id === providerID)
+    const slot = modelSlots.find((s) => s.key === key)
+    const visionModel = p?.models.find((m) => p.capabilities?.find((c) => c.model === m)?.vision_ok === true)
+    const model = slot?.need === 'vision' && visionModel ? visionModel : (p?.models[0] ?? '')
+    setPick(key, { provider_id: providerID, model })
+  }
+  const applyMain = () => {
+    if (!picks.main.provider_id || !picks.main.model) {
+      toast.error('先选择主写作模型，再套用')
+      return
+    }
+    setPicks((prev) => ({ ...prev, light: { ...prev.main }, vision: { ...prev.main } }))
+    setDirty(true)
+  }
+  const save = async () => {
+    if (!picks.main.provider_id || !picks.main.model) return toast.error('主写作模型必填')
+    const mainCap = capOf(picks.main)
+    if (mainCap?.tools_ok !== true) {
+      return toast.error('主写作模型必须先通过「对话 + 工具调用」自检，请在供应商卡片点「自检」')
+    }
+    const visionCap = capOf(picks.vision)
+    if (picks.vision.provider_id && visionCap?.vision_ok !== true) {
+      return toast.error('视觉识图模型必须先通过「看图」自检，否则截图识别会失败')
+    }
+    setBusy(true)
+    try {
+      let next = routes
+      for (const slot of modelSlots) {
+        const pick = picks[slot.key]
+        next = next.map((r) => slot.tasks.includes(r.task_type)
+          ? { ...r, provider_id: pick.provider_id || null, model: pick.model }
+          : r)
+      }
+      setRoutes(await put<ModelRoute[]>('/model-routes', next.map((r) => ({
+        task_type: r.task_type, provider_id: r.provider_id || null, model: r.model,
+        fallback_provider_id: r.fallback_provider_id || null, fallback_model: r.fallback_model ?? '',
+      }))))
+      toast.success('三槽位已保存，主写作与识图路由已统一')
+      await refetch()
+      inv(['ai-status'])
+      setDirty(false)
+    } catch (e) {
+      toast.error(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const mainMixed = data ? data.find((r) => r.task_type === 'default')?.provider_id !== data.find((r) => r.task_type === 'agent_chat')?.provider_id
+    || data.find((r) => r.task_type === 'default')?.model !== data.find((r) => r.task_type === 'agent_chat')?.model : false
+  return (
+    <Card>
+      <CardHeader title="写作与识图模型（三槽位）"
+        desc="只配三件事：主写作与对话、轻量辅助、视觉识图。主写作需通过对话+工具自检，识图需通过看图自检；保存后所有写作、智能体与截图任务都指向已验证模型。"
+        action={<div className="flex items-center gap-2">
+          <Button size="sm" variant="ghost" onClick={applyMain}>套用主模型</Button>
+          <Button size="sm" variant="primary" loading={busy} onClick={save}>保存三槽位</Button>
+        </div>} />
+      {mainMixed && <div className="border-b border-orange-100 bg-orange-50 px-5 py-2 text-[12.5px] text-orange-800">
+        当前「默认模型」与「智能体对话」指向不同模型；保存后会统一为主写作模型。
+      </div>}
+      <div className="grid gap-3 p-5 lg:grid-cols-3">
+        {modelSlots.map((slot) => {
+          const pick = picks[slot.key]
+          const cap = capOf(pick)
+          const bad = slot.need === 'tools' ? cap?.tools_ok === false : slot.need === 'vision' ? cap?.vision_ok === false : false
+          const untested = slot.need !== 'none' && (!cap || (slot.need === 'tools' ? cap.tools_ok === null : cap.vision_ok === null))
+          return (
+            <div key={slot.key} className={`space-y-2 rounded-lg border p-3 ${bad ? 'border-red-200 bg-red-50/40' : 'border-mist-100'}`}>
+              <div className="flex items-center gap-2">
+                <span className="text-[13.5px] font-semibold text-mist-900">{slot.title}</span>
+                {slot.need === 'tools' && <CapabilityTag label="工具调用" ok={cap?.tools_ok} />}
+                {slot.need === 'vision' && <CapabilityTag label="看图" ok={cap?.vision_ok} />}
+              </div>
+              <p className="min-h-8 text-[12px] leading-snug text-mist-500">{slot.desc}</p>
+              <Select aria-label={`${slot.title} 供应商`} value={pick.provider_id} onChange={(e) => changeProvider(slot.key, e.target.value)}>
+                <option value="">{slot.key === 'light' ? '跟随默认模型' : '请选择供应商'}</option>
+                {active.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </Select>
+              <Select aria-label={`${slot.title} 模型`} value={pick.model} disabled={!pick.provider_id}
+                onChange={(e) => setPick(slot.key, { model: e.target.value })}>
+                {!pick.provider_id && <option value="">—</option>}
+                {providers.find((p) => p.id === pick.provider_id)?.models.map((m) => <option key={m} value={m}>{m}</option>)}
+              </Select>
+              {(bad || untested) && <p className="text-[11.5px] leading-snug text-danger">
+                {bad ? (slot.need === 'tools' ? '该模型未通过工具调用自检' : '该模型未通过看图自检') : '该模型还没有核心能力自检结果，请先点供应商卡片的「自检」'}
+              </p>}
+            </div>
+          )
+        })}
+      </div>
+    </Card>
+  )
+}
+
 function RoutesCard({ providers }: { providers: Provider[] }) {
   const { data, refetch } = useQuery({ queryKey: ['routes'], queryFn: () => get<ModelRoute[]>('/model-routes') })
   const [routes, setRoutes] = useState<ModelRoute[]>([])
@@ -657,6 +805,7 @@ export default function Models() {
           ))}
         </div>
       )}
+      {isOwner && list.length > 0 && <ThreeSlotCard providers={list} />}
       {isOwner && list.length > 0 && <RoutesCard providers={list} />}
       {isOwner && <SamplingCard />}
       {isOwner && !embedded && <LimitCard />}

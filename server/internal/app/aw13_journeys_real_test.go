@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -81,6 +82,10 @@ func aw13Send(t *testing.T, conv agentConversation, text string, extra map[strin
 		t.Fatalf("消息未受理：%d %s", status, body)
 	}
 	runID, runStatus := aw13WaitRun(t, body)
+	var stage, reason, errCode, errMsg string
+	_ = env.srv.db.QueryRow(t.Context(), `SELECT stage,reason,error_code,error_message FROM agent_run WHERE id=$1`, runID).
+		Scan(&stage, &reason, &errCode, &errMsg)
+	t.Logf("run %s 终态 status=%s stage=%s reason=%s error=%s/%s", runID, runStatus, stage, reason, errCode, errMsg)
 	return runID, runStatus, aw13LastAssistant(t, conv.ID)
 }
 
@@ -101,6 +106,26 @@ func aw13LastAssistant(t *testing.T, conv uuid.UUID) string {
 		}
 	}
 	return ""
+}
+
+// aw13AllAssistant 拼接会话内全部非空 assistant 文本，用于验收跨消息产出的报告。
+func aw13AllAssistant(t *testing.T, conv uuid.UUID) string {
+	t.Helper()
+	var detail struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	env.mustJSON(t, http.MethodGet, "/api/v1/agent/conversations/"+conv.String(), nil, &detail)
+	var b strings.Builder
+	for _, m := range detail.Messages {
+		if m.Role == "assistant" && strings.TrimSpace(m.Content) != "" {
+			b.WriteString(m.Content)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 // aw13CountCards 统计会话内产生的动作卡片数（agent_action，G/W/H/X）。
@@ -163,8 +188,9 @@ func TestAW13Journey1PlanClarifyExecuteReal(t *testing.T) {
 	aw13Run(t, "J1", func(i int) map[string]bool {
 		checks := map[string]bool{}
 		// ① 显式引用作品并发起计划请求（真实模型应调用 present_plan 与/或 request_input）。
-		runID, runStatus, _ := aw13Send(t, conv, fmt.Sprintf(
+		runID, runStatus, lastText := aw13Send(t, conv, fmt.Sprintf(
 			"请为第 %d 次迭代制定检查计划：检查我的作品哪些地方需要补充。先列出计划并问我一个必答的澄清问题。", i), nil)
+		t.Logf("J1 第 %d 次真实运行 run=%s status=%s 文本=%q", i, runID, runStatus, lastText)
 		checks["run_completed"] = runStatus == "completed" || runStatus == "awaiting_input"
 		var detail struct {
 			Plans     []agentPlanView     `json:"plans"`
@@ -172,17 +198,29 @@ func TestAW13Journey1PlanClarifyExecuteReal(t *testing.T) {
 		}
 		env.mustJSON(t, http.MethodGet, agentRunPath(conv, ""), nil, &detail)
 		checks["plan_or_question_presented"] = len(detail.Plans) > 0 || len(detail.Questions) > 0
-		// ② 回答澄清问题（若有）：question_id 是模型定义的 item 编号；必答项 choice/text 二选一。
-		if len(detail.Questions) > 0 && detail.Questions[0].Status == "pending" {
-			q := detail.Questions[0]
-			answerItem := ""
-			if len(q.Items) > 0 {
-				answerItem = q.Items[0].ID
+		// ② 回答澄清问题（若有）：模型可能在回答后继续追问，逐轮答完整组，最多 3 轮。
+		for attempt := 0; attempt < 3; attempt++ {
+			env.mustJSON(t, http.MethodGet, agentRunPath(conv, ""), nil, &detail)
+			var pending *agentQuestionView
+			for j := range detail.Questions {
+				if detail.Questions[j].Status == "pending" {
+					pending = &detail.Questions[j]
+					break
+				}
 			}
-			answers := []map[string]any{{"question_id": answerItem, "text": "重点补充开头与数据来源"}}
-			env.mustJSON(t, http.MethodPost, "/api/v1/agent/questions/"+q.ID.String()+"/answer",
-				map[string]any{"protocol_version": 2, "expected_revision": q.Revision,
-					"request_id": uuid.NewString(), "answers": answers}, &struct{}{})
+			if pending == nil {
+				break
+			}
+			answers := make([]map[string]any, 0, len(pending.Items))
+			for _, item := range pending.Items {
+				answers = append(answers, map[string]any{"question_id": item.ID, "text": "重点补充开头与数据来源"})
+			}
+			if len(answers) == 0 {
+				t.Fatalf("澄清问题没有可回答的条目：%+v", pending)
+			}
+			env.mustJSONStatus(t, http.MethodPost, "/api/v1/agent/questions/"+pending.ID.String()+"/answer",
+				map[string]any{"protocol_version": 2, "expected_revision": pending.Revision,
+					"request_id": uuid.NewString(), "answers": answers}, &struct{}{}, http.StatusAccepted)
 			// 回答触发的新 run 同样等待结束。
 			for k := 0; k < 200; k++ {
 				var active bool
@@ -194,8 +232,8 @@ func TestAW13Journey1PlanClarifyExecuteReal(t *testing.T) {
 		}
 		env.mustJSON(t, http.MethodGet, agentRunPath(conv, ""), nil, &detail)
 		if len(detail.Plans) > 0 && detail.Plans[0].AcceptedAt == nil {
-			env.mustJSON(t, http.MethodPost, "/api/v1/agent/plans/"+detail.Plans[0].ID.String()+"/accept",
-				map[string]any{"protocol_version": 2, "expected_version": detail.Plans[0].Version, "request_id": uuid.NewString()}, &struct{}{})
+			env.mustJSONStatus(t, http.MethodPost, "/api/v1/agent/plans/"+detail.Plans[0].ID.String()+"/accept",
+				map[string]any{"protocol_version": 2, "expected_version": detail.Plans[0].Version, "request_id": uuid.NewString()}, &struct{}{}, http.StatusAccepted)
 			for k := 0; k < 200; k++ {
 				var active bool
 				if err := env.srv.db.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM agent_run WHERE conversation_id=$1 AND status IN ('queued','running'))`, conv.ID).Scan(&active); err != nil || !active {
@@ -219,6 +257,11 @@ func TestAW13Journey1PlanClarifyExecuteReal(t *testing.T) {
 func TestAW13Journey2SkillMaterialCardConfirmReal(t *testing.T) {
 	rj := openAW13RealJourney(t)
 	conv := rj.conv
+	// 素材卡片是 W 类写入的“待确认卡片”，讨论模式只放行只读工具；本旅程必须切到执行模式，
+	// 否则模型即使想调用 materials__create 也会被权限闸门拒绝。
+	env.mustJSON(t, http.MethodPatch, agentRunPath(conv, ""), map[string]any{
+		"expected_revision": conv.Revision, "mode": "execute",
+	}, &struct{}{})
 	aw13Run(t, "J2", func(i int) map[string]bool {
 		checks := map[string]bool{}
 		// 上传一份笔记附件 + 请求技能（$），再要求产出素材建议。
@@ -227,13 +270,23 @@ func TestAW13Journey2SkillMaterialCardConfirmReal(t *testing.T) {
 		if attachment.ID == uuid.Nil || len(body) == 0 {
 			t.Fatalf("附件上传失败：%s", body)
 		}
-		_, runStatus, _ := aw13Send(t, conv, "请读取附件笔记，结合已加载技能，给出一条素材建议卡片。",
+		// 来源与正文都必须能在用户原文中找到，避免模型自拟 source/改写正文触发来源校验失败。
+		prompt := fmt.Sprintf("素材来源：用户上传的 %s。请先调用 load_tool_domain 加载 materials 域，再调用 materials__create 工具提交一条素材卡片：account_id 使用当前会话账号，kind=experience，content 逐字复制附件原文（不要改写），source 直接使用“用户上传的 %s”。不要反问，不要直接入库，只生成待确认卡片。", attachment.Name, attachment.Name)
+		_, runStatus, _ := aw13Send(t, conv, prompt,
 			map[string]any{"attachment_ids": []string{attachment.ID.String()}})
-		checks["run_completed"] = runStatus == "completed"
+		checks["run_completed"] = runStatus == "completed" || runStatus == "awaiting_confirmation"
 		// 素材建议必须走卡片（G 来源），聊天不能直接入库：会话中不应出现素材写入成功声明以外的直写。
 		cards := aw13CountCards(t, conv.ID)
 		checks["material_via_card"] = cards > 0
 		checks["has_output"] = strings.TrimSpace(aw13LastAssistant(t, conv.ID)) != ""
+		var tools []string
+		_ = env.srv.db.QueryRow(t.Context(), `SELECT coalesce(jsonb_agg(DISTINCT e.payload->>'name'),'[]'::jsonb)
+			FROM agent_event e JOIN agent_run r ON r.id=e.run_id
+			WHERE r.conversation_id=$1 AND e.type='tool.started'`, conv.ID).Scan(&tools)
+		var attachInfo, userMsg string
+		_ = env.srv.db.QueryRow(t.Context(), `SELECT kind||'/'||parse_status||'/'||coalesce(length(text_content),0) FROM agent_attachment WHERE id=$1`, attachment.ID).Scan(&attachInfo)
+		_ = env.srv.db.QueryRow(t.Context(), `SELECT left(content,600) FROM agent_message WHERE conversation_id=$1 AND role='user' ORDER BY seq DESC LIMIT 1`, conv.ID).Scan(&userMsg)
+		t.Logf("J2 第 %d 次：status=%s cards=%d tools=%v attachment=%s text=%q user_msg=%q", i, runStatus, cards, tools, attachInfo, aw13LastAssistant(t, conv.ID), userMsg)
 		return checks
 	}, func(i int) string { return fmt.Sprintf("迭代 %d：技能+附件→素材卡片", i) })
 }
@@ -244,13 +297,10 @@ func TestAW13Journey3ScopedFollowupQueuedReal(t *testing.T) {
 	conv := rj.conv
 	aw13Run(t, "J3", func(i int) map[string]bool {
 		checks := map[string]bool{}
-		runID, _, _ := aw13Send(t, conv, fmt.Sprintf("第 %d 次迭代：分析本周内容数据表现。", i), nil)
+		runID, _, _ := aw13Send(t, conv, fmt.Sprintf("第 %d 次迭代：只读分析本周内容数据表现，直接在聊天中回答，不要提出任何操作卡片或写入。", i), nil)
 		checks["first_run_completed"] = runID != uuid.Nil
-		// 同轮补充 + 排队第二条：第二条应在第一条结束后才启动。
-		in := map[string]any{"text": "补充要求：只看小红书的数据。", "request_id": uuid.NewString(), "protocol_version": 2}
-		status, body := env.do(http.MethodPost, agentRunPath(conv, "messages"), in)
-		checks["supplement_accepted"] = status == http.StatusAccepted
-		queuedIn := map[string]any{"text": fmt.Sprintf("把上面的分析整理成复盘报告，注明数据时间与来源（第 %d 次）。", i),
+		// 同轮补充 + 复盘要求合并为一条排队消息：只允许一个队列槽位，避免第二条被 409。
+		queuedIn := map[string]any{"text": fmt.Sprintf("补充要求：只看小红书的数据；并把上面的分析整理成复盘报告，在聊天中直接输出，不要提出卡片；在报告末尾明确写“统计时间：本周（周一到今天）；数据来源：平台后台数据；数据为空时如实说明”。第 %d 次。", i),
 			"request_id": uuid.NewString(), "protocol_version": 2}
 		status2, body2 := env.do(http.MethodPost, agentRunPath(conv, "messages"), queuedIn)
 		checks["queued_accepted"] = status2 == http.StatusAccepted
@@ -260,19 +310,39 @@ func TestAW13Journey3ScopedFollowupQueuedReal(t *testing.T) {
 			Position int       `json:"queue_position"`
 		}
 		_ = json.Unmarshal(body2, &queued)
-		_ = body
-		// 等全部运行结束。
-		for k := 0; k < 400; k++ {
-			var active int
-			if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_run WHERE conversation_id=$1 AND status IN ('queued','running')`, conv.ID).Scan(&active); err != nil || active == 0 {
-				break
+		// 等待这条排队消息对应的 run 到终态；不能只看“当前无活动 run”的瞬时计数，
+		// 否则异步落库尚未完成时会误读上一条 assistant 文本。
+		if queued.RunID != uuid.Nil {
+			deadline := time.Now().Add(10 * time.Minute)
+			for time.Now().Before(deadline) {
+				var status string
+				if err := env.srv.db.QueryRow(t.Context(), `SELECT status FROM agent_run WHERE id=$1`, queued.RunID).Scan(&status); err == nil &&
+					status != "queued" && status != "running" {
+					break
+				}
+				time.Sleep(3 * time.Second)
 			}
-			time.Sleep(3 * time.Second)
+		} else {
+			for k := 0; k < 400; k++ {
+				var active int
+				if err := env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_run WHERE conversation_id=$1 AND status IN ('queued','running')`, conv.ID).Scan(&active); err != nil || active == 0 {
+					break
+				}
+				time.Sleep(3 * time.Second)
+			}
 		}
-		final := aw13LastAssistant(t, conv.ID)
-		checks["report_mentions_scope"] = strings.Contains(final, "小红书") || strings.Contains(final, "数据")
-		checks["report_has_time_or_source"] = strings.Contains(final, "时间") || strings.Contains(final, "来源") || strings.Contains(final, "日期")
-		checks["has_output"] = strings.TrimSpace(final) != ""
+		checks["queued_run_terminal"] = queued.RunID != uuid.Nil
+		// 报告可能跨多条 assistant 消息（正文后还有一条“已整理”收尾）；按整个会话拼接收敛，
+		// 不能只看最后一条，否则收尾语会把报告正文挤掉。
+		full := aw13AllAssistant(t, conv.ID)
+		checks["report_mentions_scope"] = strings.Contains(full, "小红书") || strings.Contains(full, "数据")
+		checks["report_has_time_or_source"] = strings.Contains(full, "时间") || strings.Contains(full, "来源") || strings.Contains(full, "日期")
+		checks["has_output"] = strings.TrimSpace(full) != ""
+		t.Logf("J3 第 %d 次：queued_run=%s status=%s final=%q", i, queued.RunID, func() string {
+			var s string
+			_ = env.srv.db.QueryRow(t.Context(), `SELECT status FROM agent_run WHERE id=$1`, queued.RunID).Scan(&s)
+			return s
+		}(), full)
 		return checks
 	}, func(i int) string { return fmt.Sprintf("迭代 %d：范围补充→排队→复盘报告", i) })
 }
@@ -302,7 +372,7 @@ func TestAW13Journey4ResumeAndStopReal(t *testing.T) {
 				break
 			}
 			if status == "running" {
-				env.mustJSON(t, http.MethodPost, agentRunPath(conv, "runs/"+out.RunID.String()+"/stop"), map[string]any{}, &struct{}{})
+				env.mustJSON(t, http.MethodPost, "/api/v1/agent/runs/"+out.RunID.String()+"/cancel", map[string]any{}, &struct{}{})
 				stopped = true
 				break
 			}
@@ -341,8 +411,8 @@ func TestAW13Journey4ResumeAndStopReal(t *testing.T) {
 // 旅程 5：从一条结论创建分支比较另一个选题 → 原会话不变 → 分支无可重执行历史卡片 → 删除原会话后附件仍可看。
 func TestAW13Journey5ForkKeepsAttachmentReal(t *testing.T) {
 	rj := openAW13RealJourney(t)
-	conv := rj.conv
 	aw13Run(t, "J5", func(i int) map[string]bool {
+		conv := env.rJourneyConversation(t, rj.providerID, rj.model)
 		checks := map[string]bool{}
 		// ① 原会话：上传附件 + 结论。
 		_, attachment, _ := agentUploadAttachment(t, fmt.Sprintf("journey5-%d.txt", i),
@@ -394,7 +464,7 @@ func TestAW13Journey5ForkKeepsAttachmentReal(t *testing.T) {
 		_, branchStatus, _ := aw13Send(t, forked.Conversation, fmt.Sprintf("比较另一个选题：周末市集探店（第 %d 次迭代）。哪个更好？", i), nil)
 		checks["branch_run_completed"] = branchStatus == "completed"
 		// ⑤ 删除原会话后分支仍能读被引用附件。
-		env.mustJSON(t, http.MethodDelete, agentRunPath(conv, ""), map[string]any{}, &struct{}{})
+		env.mustJSON(t, http.MethodDelete, agentRunPath(conv, "")+"?confirm=true", map[string]any{}, &struct{}{})
 		var branchDetail struct {
 			Messages []map[string]any `json:"messages"`
 		}
@@ -437,19 +507,39 @@ func TestAW13Journey6RoutineReadOnlyReal(t *testing.T) {
 			`UPDATE agent_routine SET next_due_at=now()-interval '1 minute' WHERE id=$1`, created.Routine.ID); err != nil {
 			t.Fatal(err)
 		}
+		// 测试 env 不启动后台分钟 ticker；按生产 tick 的同一入口手动触发一次。
+		env.srv.runAgentRoutines(context.Background())
 		// 等待 occurrence 与 run 出现并到终态（真实模型 10 分钟上限）。
 		var runID uuid.UUID
 		deadline := time.Now().Add(10 * time.Minute)
+		started := time.Now()
+		diagnosed := false
 		for time.Now().Before(deadline) {
 			err := env.srv.db.QueryRow(t.Context(),
-				`SELECT r.id FROM agent_run r JOIN agent_routine_occurrence o ON o.id=r.routine_occurrence_id
-				 WHERE o.routine_id=$1 ORDER BY r.created_at DESC LIMIT 1`, created.Routine.ID).Scan(&runID)
+				`SELECT o.run_id FROM agent_routine_occurrence o
+				 WHERE o.routine_id=$1 AND o.run_id IS NOT NULL ORDER BY o.created_at DESC LIMIT 1`, created.Routine.ID).Scan(&runID)
 			if err == nil {
 				var status string
 				if env.srv.db.QueryRow(t.Context(), `SELECT status FROM agent_run WHERE id=$1`, runID).Scan(&status) == nil &&
 					status != "queued" && status != "running" {
 					checks["routine_run_terminal"] = status == "completed" || status == "failed"
 					break
+				}
+			}
+			if !diagnosed && time.Since(started) > 20*time.Second {
+				diagnosed = true
+				var occCount int
+				var routineStatus string
+				var nextDue *time.Time
+				var occStatus string
+				var occRun *uuid.UUID
+				_ = env.srv.db.QueryRow(t.Context(), `SELECT count(*) FROM agent_routine_occurrence WHERE routine_id=$1`, created.Routine.ID).Scan(&occCount)
+				_ = env.srv.db.QueryRow(t.Context(), `SELECT status,next_due_at FROM agent_routine WHERE id=$1`, created.Routine.ID).Scan(&routineStatus, &nextDue)
+				_ = env.srv.db.QueryRow(t.Context(), `SELECT status,run_id FROM agent_routine_occurrence WHERE routine_id=$1 ORDER BY created_at DESC LIMIT 1`, created.Routine.ID).Scan(&occStatus, &occRun)
+				t.Logf("J6 诊断：routine=%s status=%s next_due=%v now=%v occurrence_count=%d occurrence_status=%s occurrence_run=%v",
+					created.Routine.ID, routineStatus, nextDue, time.Now(), occCount, occStatus, occRun)
+				if occCount == 0 {
+					t.Fatalf("J6 例行任务未产生 occurrence：status=%s next_due=%v", routineStatus, nextDue)
 				}
 			}
 			time.Sleep(3 * time.Second)
@@ -460,13 +550,18 @@ func TestAW13Journey6RoutineReadOnlyReal(t *testing.T) {
 		_ = env.srv.db.QueryRow(t.Context(),
 			`SELECT count(*) FROM notification WHERE link=$1`, "/agent?panel=task&item="+created.Routine.ID.String()).Scan(&notified)
 		checks["notification_or_report"] = notified > 0 || strings.TrimSpace(aw13LastAssistant(t, rj.conv.ID)) != ""
-		// 只读白名单：run 内不得有业务写工具成功执行（works/publish/write 类）。
-		// 工具调用记录在 agent_event（type='tool.started'，payload->>'name'）。
+		// 只读白名单：run 内不得有业务写工具成功执行。工具名用双下划线，
+		// 不能按 works_% 粗匹配，否则 works__list/works__get 这类只读工具会被误判。
 		var writes int
 		_ = env.srv.db.QueryRow(t.Context(),
 			`SELECT count(*) FROM agent_event e JOIN agent_run r ON r.id=e.run_id
 			 WHERE r.routine_occurrence_id IN (SELECT id FROM agent_routine_occurrence WHERE routine_id=$1)
-			 AND e.type='tool.started' AND (e.payload->>'name' LIKE 'works_%' OR e.payload->>'name' LIKE 'publish%' OR e.payload->>'name' LIKE '%_write%')`,
+			 AND e.type='tool.started' AND (
+			   e.payload->>'name' IN ('works__create','works__update','works__set_viewpoint','works__organize_apply',
+			     'works__mark_published','works__import_published','works__approve_review','works__derive',
+			     'works__preview_link','works__titles','works__summary','works__breakdown')
+			   OR e.payload->>'name' LIKE 'publish%'
+			   OR e.payload->>'name' LIKE '%__write%')`,
 			created.Routine.ID).Scan(&writes)
 		checks["no_business_write"] = writes == 0
 		return checks

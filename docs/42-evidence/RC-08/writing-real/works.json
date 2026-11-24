@@ -1,0 +1,188 @@
+[
+  {
+    "key": "wc-01",
+    "work_id": "8327d05e-7e29-4ddb-aa45-0fc6b8227071",
+    "title": "把读书会从“打卡”变回“聊天”：我们试了三个月",
+    "platform": "wechat",
+    "sections": [
+      {
+        "id": "86385d15-af25-4585-a386-a943e9ca0e97",
+        "title": "从“三个月”的尝试写起",
+        "chars": 353
+      },
+      {
+        "id": "fc4babe9-472d-498d-870a-c3bddd2bd148",
+        "title": "打卡感从哪里来",
+        "chars": 537
+      },
+      {
+        "id": "f99df436-6cb3-4b69-a2b6-c549dbad74ba",
+        "title": "把提问换一个方向",
+        "chars": 462
+      },
+      {
+        "id": "908b1b6e-9bb5-462a-b42b-2ce4203a75d9",
+        "title": "让“没读懂”被说出来",
+        "chars": 389
+      }
+    ],
+    "total_chars": 1741,
+    "edited": "移除【待核实】占位符，最后一段改为可执行建议"
+  },
+  {
+    "key": "wc-02",
+    "work_id": "eae1c52b-68a5-44a3-802d-2ff742212844",
+    "title": "一周只读二十页，为什么反而记得住",
+    "platform": "wechat",
+    "sections": [
+      {
+        "id": "f4467e88-9dff-460f-9385-3d8a707f1647",
+        "title": "从标题里的反问说起",
+        "chars": 404
+      },
+      {
+        "id": "37b22e43-7184-4c8d-bf6e-7707051ae636",
+        "title": "翻过不等于读过",
+        "chars": 455
+      },
+      {
+        "id": "fff7d896-52d1-4a4c-8917-2dfb1ee2ddd3",
+        "title": "二十页给复述留出位置",
+        "chars": 462
+      },
+      {
+        "id": "ea91812f-d746-4e01-bfe9-d195e779aec2",
+        "title": "联想不是跑题",
+        "chars": 491
+      }
+    ],
+    "total_chars": 1812
+  },
+  {
+    "key": "wc-03",
+    "work_id": "272667cd-1a67-413b-ba8f-bad365cc25ee",
+    "title": "在青岛办一场海边读书会，需要准备什么",
+    "platform": "wechat",
+    "sections": [
+      {
+        "id": "fda75ea7-8130-4e13-8adf-75a2d521a2b9",
+        "title": "先别急着选海景",
+        "chars": 383
+      },
+      {
+        "id": "6a5df8e6-fabd-40f2-baed-496d73542843",
+        "title": "场地：能围坐，也能挡一点风",
+        "chars": 468
+      },
+      {
+        "id": "ac024611-30b9-4e13-8c85-867948fba32c",
+        "title": "人数与座位：让沉默的人不容易被漏掉",
+        "chars": 509
+      },
+      {
+        "id": "acecc62f-5d39-4ac8-93a9-329840d87ed6",
+        "title": "文本：选一段能带进现场的短段落",
+        "chars": 476
+      }
+    ],
+    "total_chars": 1836
+  },
+  {
+    "key": "xhs-01",
+    "work_id": "bac3ed83-2738-4e11-a0d5-3b50ba01ca3d",
+    "title": "青岛周末一个人也能去的3个读书角落",
+    "platform": "xiaohongshu",
+    "sections": [
+      {
+        "id": "31789049-6ba2-4f50-a0df-b7664b174138",
+        "title": "开头先给结论：不用凑仪式",
+        "chars": 125
+      },
+      {
+        "id": "ce42ef8c-aa39-41d5-bbaa-bf38129b97e8",
+        "title": "角落1：海边公共长椅，挑背风的那一排",
+        "chars": 156
+      },
+      {
+        "id": "b2163ca9-0851-4fb7-bd9a-035dc644aa2e",
+        "title": "角落2-3：城市书房与工作日下午的咖啡馆",
+        "chars": 281
+      }
+    ],
+    "total_chars": 562,
+    "edited": "移除【待核实】占位符；第三种找座位方法合并城市书房与咖啡馆"
+  },
+  {
+    "key": "xhs-02",
+    "work_id": "d0be8ed3-a397-4715-b25f-920024dd2b91",
+    "title": "打工人重启阅读：每天10页的笨办法",
+    "platform": "xiaohongshu",
+    "sections": [
+      {
+        "id": "4fb63bc0-490c-4af4-bae0-7dabc8535fd7",
+        "title": "先说结论",
+        "chars": 143
+      },
+      {
+        "id": "2fccd595-c1b2-412b-9e66-129db26b4f83",
+        "title": "目标只设10页",
+        "chars": 127
+      },
+      {
+        "id": "a600e02b-6a92-4278-864a-77c001a6adfe",
+        "title": "把书塞进日常动作",
+        "chars": 100
+      }
+    ],
+    "total_chars": 370
+  },
+  {
+    "key": "xhs-03",
+    "work_id": "95fee639-947a-4e2b-9c03-23cb0737d290",
+    "title": "海边读书会清单｜不晒不累，坐一下午",
+    "platform": "xiaohongshu",
+    "sections": [
+      {
+        "id": "ba4456de-7090-4c4a-a5f8-cb526c4ef71d",
+        "title": "先给结论：别先忙布置",
+        "chars": 133
+      },
+      {
+        "id": "1db9e698-2857-49a0-8fac-4dddd390a15b",
+        "title": "到场先看晒不晒",
+        "chars": 112
+      },
+      {
+        "id": "5d843735-0bab-48e3-bfd1-6cc2d96a94a3",
+        "title": "坐垫先铺，再拿书",
+        "chars": 101
+      }
+    ],
+    "total_chars": 346
+  },
+  {
+    "key": "xhs-04",
+    "work_id": "ccc9ba68-e7a8-408c-830d-d6e196cc7fd5",
+    "title": "在青岛找读书角落，我只看这三件事",
+    "platform": "xiaohongshu",
+    "sections": [
+      {
+        "id": "34b95bb8-c82b-4b7e-a56e-5a4a5ffaff28",
+        "title": "先给结论",
+        "chars": 125
+      },
+      {
+        "id": "24250059-dfc8-4dcf-ac69-f593ffcf0eda",
+        "title": "不赶人",
+        "chars": 132
+      },
+      {
+        "id": "0f0675be-1c1e-4976-9ada-14a20644b346",
+        "title": "能背风，也避开反光",
+        "chars": 223
+      }
+    ],
+    "total_chars": 480.0,
+    "edited": "补写“光线不反光”一段；新增 93 字，占终稿 19.4%，未改写原有句子"
+  }
+]

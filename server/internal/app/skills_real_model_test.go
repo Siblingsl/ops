@@ -80,8 +80,13 @@ func TestSkillRealModelAcceptance(t *testing.T) {
 		model = selected
 	}
 	upstream, err := url.Parse(baseURL)
-	if err != nil || upstream.Scheme != "https" || upstream.User != nil || upstream.RawQuery != "" {
+	if err != nil || upstream.User != nil || upstream.RawQuery != "" {
 		t.Fatal("真实模型验收需要无内嵌凭证的 HTTPS 接口")
+	}
+	loopbackHTTP := os.Getenv("OPS_SKILL_REAL_ALLOW_HTTP") == "1" &&
+		upstream.Scheme == "http" && (upstream.Hostname() == "127.0.0.1" || upstream.Hostname() == "localhost")
+	if upstream.Scheme != "https" && !loopbackHTTP {
+		t.Fatal("真实模型验收需要无内嵌凭证的 HTTPS 接口（本地回环可用 OPS_SKILL_REAL_ALLOW_HTTP=1 显式放行）")
 	}
 	box, err := secure.NewBox(cfg.MasterKey)
 	if err != nil {

@@ -1,0 +1,583 @@
+2026/11/24 15:24:05 INFO 数据库连接池已配置 max_conns=20 max_conn_idle_time=5m0s max_conn_lifetime=1h0m0s statement_timeout=30s idle_in_transaction_session_timeout=60s timezone=Asia/Shanghai
+2026/11/24 15:24:05 INFO 已添加本地模拟模型（仅开发模式） workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:05 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000001 method=POST route=/api/v1/auth/setup status=200 duration_ms=61.7476 workspace_id=""
+2026/11/24 15:24:05 INFO 已添加本地模拟模型（仅开发模式） workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:05 INFO 已创建永久超级管理员账号 username=skyeder
+2026/11/24 15:24:05 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000002 method=GET route=/api/v1/auth/me status=200 duration_ms=7.8867 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+--- FAIL: TestHC28_RouteClassificationComplete (0.00s)
+    agent_catalog_test.go:84: 以下路由未在附录 A、附录 B 或元工具中归类（16 文档第 3.7 节第 8 条）：
+          GET /api/v1/accounts/{accountId}/wechat/drafts
+          GET /api/v1/accounts/{accountId}/wechat/drafts/count
+          DELETE /api/v1/accounts/{accountId}/wechat/drafts/{mediaId}
+2026/11/24 15:24:08 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000003 method=GET route=/api/v1/auth/me status=200 duration_ms=3.6136 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:08 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000004 method=POST route=/api/v1/workspaces/current/invites status=200 duration_ms=6.8158 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:08 INFO 已添加本地模拟模型（仅开发模式） workspace_id=d59a06e1-6c14-44cd-972d-aeb886d8abaf
+2026/11/24 15:24:08 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000005 method=POST route=/api/v1/auth/register status=200 duration_ms=42.8842 workspace_id=""
+2026/11/24 15:24:08 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000006 method=GET route=/api/v1/auth/me status=200 duration_ms=2.4595 workspace_id=d59a06e1-6c14-44cd-972d-aeb886d8abaf
+2026/11/24 15:24:08 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000007 method=POST route=/api/v1/workspaces/join status=200 duration_ms=18.56 workspace_id=d59a06e1-6c14-44cd-972d-aeb886d8abaf
+2026/11/24 15:24:08 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000008 method=GET route=/api/v1/auth/me status=200 duration_ms=2.4798 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:08 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000009 method=POST route=/api/v1/agent/conversations status=200 duration_ms=14.6953 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:09 WARN HTTP 请求 request_id=ASUS/pEcI25nbNI-000010 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=1073.5626 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:09 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000011 method=GET route=/api/v1/agent/conversations/{id} status=404 duration_ms=1.1903 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:09 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000012 method=POST route=/api/v1/agent/conversations/{id}/messages/{messageId}/edit status=404 duration_ms=2.4534 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:09 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000013 method=POST route=/api/v1/agent/actions/{id}/reject status=404 duration_ms=2.7221 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:09 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000014 method=POST route=/api/v1/agent/actions/{id}/execute status=404 duration_ms=2.062 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:09 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000015 method=GET route=/api/v1/model-providers status=200 duration_ms=4.7552 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:09 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000016 method=POST route=/api/v1/model-providers/{id}/selftest status=200 duration_ms=12.6999 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:09 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000017 method=POST route=/api/v1/accounts status=200 duration_ms=9.1249 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:09 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000018 method=POST route=/api/v1/accounts status=200 duration_ms=6.5623 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:10 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000019 method=POST route=/api/v1/auth/reauth status=200 duration_ms=23.4064 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:10 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000020 method=PUT route=/api/v1/accounts/{accountId}/wechat-credential status=200 duration_ms=7.9243 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:10 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000021 method=POST route=/api/v1/accounts/{accountId}/wechat-credential/test status=200 duration_ms=9.6537 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:10 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000022 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=23.2808 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:10 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000023 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=15.0588 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO context pack assemble task_type=outline workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=1051.0766 prefetch_ms=1039.8471 cache_hit=false cache_hits=0 cache_misses=1 cache_size=1 bare=false
+2026/11/24 15:24:11 WARN HTTP 请求 request_id=ASUS/pEcI25nbNI-000024 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=1084.7255 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000025 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=38.4701 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=16.9986 prefetch_ms=5.8118 cache_hit=false cache_hits=0 cache_misses=2 cache_size=1 bare=false
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000026 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=95.5224 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=20.4526 prefetch_ms=4.0395 cache_hit=false cache_hits=0 cache_misses=3 cache_size=1 bare=false
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000027 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=101.813 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000028 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=69.146 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000029 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=25.4234 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000030 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=50.6419 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000031 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=8.5307 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=4.8102 prefetch_ms=0.513 cache_hit=false cache_hits=0 cache_misses=4 cache_size=1 bare=false
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000032 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=12.8433 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000033 method=GET route=/api/v1/works/{id} status=200 duration_ms=9.2962 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000034 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=30.2754 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000035 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=43.6009 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=1.7904 prefetch_ms=0.5814 cache_hit=false cache_hits=0 cache_misses=5 cache_size=1 bare=false
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000036 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=13.8365 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000037 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=9.7752 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000038 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=18.8766 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000039 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=14.5662 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000040 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.7933 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000041 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.9191 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000042 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=20.9248 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000043 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.6988 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000044 method=POST route=/api/v1/agent/conversations status=200 duration_ms=14.8858 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:11 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000045 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.1818 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:13 WARN HTTP 请求 request_id=ASUS/pEcI25nbNI-000046 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1339.2766 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:14 WARN HTTP 请求 request_id=ASUS/pEcI25nbNI-000047 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1414.709 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:15 WARN HTTP 请求 request_id=ASUS/pEcI25nbNI-000048 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1231.9761 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:17 WARN HTTP 请求 request_id=ASUS/pEcI25nbNI-000049 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1517.3057 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:18 WARN HTTP 请求 request_id=ASUS/pEcI25nbNI-000050 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1272.7675 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:19 WARN HTTP 请求 request_id=ASUS/pEcI25nbNI-000051 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1232.2719 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:21 WARN HTTP 请求 request_id=ASUS/pEcI25nbNI-000052 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1942.827 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:21 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000053 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=29.9572 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:21 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000054 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=29.3559 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:21 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000055 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=29.9285 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:21 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000056 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=29.725 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000057 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=32.8589 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000058 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=60.1854 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000059 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=366.707 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000060 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=40.3011 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000061 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=31.7631 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000062 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=33.3051 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000063 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=42.6908 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000064 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=53.286 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000065 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=37.0507 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000066 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=33.1232 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000067 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=35.4858 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000068 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=31.8439 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000069 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=30.9664 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000070 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=31.8523 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000071 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=55.9917 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:22 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000072 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=52.2569 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000073 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=50.8456 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000074 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=31.7219 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000075 method=GET route=/api/v1/model-providers status=200 duration_ms=3.9833 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000076 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=10.0097 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000077 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=11.7805 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO context pack assemble task_type=outline workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=10.184 prefetch_ms=3.2055 cache_hit=false cache_hits=0 cache_misses=6 cache_size=1 bare=false
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000078 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=31.7667 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000079 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=16.9898 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=6.0529 prefetch_ms=1.5912 cache_hit=false cache_hits=0 cache_misses=7 cache_size=1 bare=false
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000080 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=64.7295 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=16.2255 prefetch_ms=11.0209 cache_hit=false cache_hits=0 cache_misses=8 cache_size=1 bare=false
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000081 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=79.6096 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000082 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=74.9508 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000083 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=17.2434 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000084 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=42.13 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=4.4916 prefetch_ms=3.364 cache_hit=false cache_hits=0 cache_misses=9 cache_size=1 bare=false
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000085 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.5739 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000086 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.7026 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000087 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.0237 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000088 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=15.7341 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000089 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=28.6533 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=4.585 prefetch_ms=2.8605 cache_hit=false cache_hits=0 cache_misses=10 cache_size=1 bare=false
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000090 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=12.8417 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000091 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=10.8092 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000092 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=17.2143 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000093 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=12.7516 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000094 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=15.1853 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000095 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=21.5024 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000096 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=48.8598 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000097 method=GET route=/api/v1/works/{id} status=200 duration_ms=11.9775 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000098 method=POST route=/api/v1/agent/conversations status=200 duration_ms=33.7475 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000099 method=POST route=/api/v1/agent/actions/{id}/execute status=400 duration_ms=3.6689 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:23 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000100 method=POST route=/api/v1/agent/actions/{id}/execute status=400 duration_ms=2.9633 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:24 INFO HTTP 请求 request_id=c3a90355-70f4-46b8-916a-27a01de2406b method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.4868 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b via=agent
+2026/11/24 15:24:24 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000101 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=961.4727 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:24 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000102 method=POST route=/api/v1/agent/actions/{id}/execute status=409 duration_ms=9.8211 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:26 WARN HTTP 请求 request_id=ASUS/pEcI25nbNI-000103 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1232.8558 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:26 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000104 method=POST route=/api/v1/agent/actions/{id}/execute status=409 duration_ms=6.6971 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:26 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000105 method=POST route=/api/v1/agent/actions/{id}/execute status=409 duration_ms=6.7028 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 WARN HTTP 请求 request_id=ASUS/pEcI25nbNI-000106 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1235.9942 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000107 method=POST route=/api/v1/agent/actions/{id}/execute status=409 duration_ms=18.1419 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000108 method=GET route=/api/v1/model-providers status=200 duration_ms=2.8391 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000109 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=10.8394 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000110 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=11.9174 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO context pack assemble task_type=outline workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=3.5231 prefetch_ms=1.2793 cache_hit=false cache_hits=0 cache_misses=11 cache_size=1 bare=false
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000111 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=22.4682 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000112 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=13.09 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=4.7716 prefetch_ms=0.9939 cache_hit=false cache_hits=0 cache_misses=12 cache_size=1 bare=false
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000113 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=42.9731 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=5.4438 prefetch_ms=1.2684 cache_hit=false cache_hits=0 cache_misses=13 cache_size=1 bare=false
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000114 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=49.2725 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000115 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=76.5535 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000116 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=18.8585 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000117 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=42.9434 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=2.2697 prefetch_ms=1.0752 cache_hit=false cache_hits=0 cache_misses=14 cache_size=1 bare=false
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000118 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.6383 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000119 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.3092 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000120 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.1779 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000121 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=15.0818 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000122 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=27.0298 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=2.8718 prefetch_ms=0.522 cache_hit=false cache_hits=0 cache_misses=15 cache_size=1 bare=false
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000123 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=9.7526 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000124 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.1677 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000125 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.5315 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000126 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=10.2074 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000127 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.204 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000128 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=10.6848 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000129 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=12.7967 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000130 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.2578 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:27 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000131 method=POST route=/api/v1/agent/conversations status=200 duration_ms=7.2204 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:28 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000132 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=707.6661 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:28 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000133 method=POST route=/api/v1/agent/actions/{id}/reject status=200 duration_ms=34.6169 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:29 WARN HTTP 请求 request_id=ASUS/pEcI25nbNI-000134 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1111.1333 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:29 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000135 method=POST route=/api/v1/agent/actions/{id}/execute status=409 duration_ms=6.7031 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:29 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000136 method=POST route=/api/v1/agent/actions/{id}/execute status=409 duration_ms=5.88 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:31 WARN HTTP 请求 request_id=ASUS/pEcI25nbNI-000137 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=1683.746 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:33 WARN HTTP 请求 request_id=ASUS/pEcI25nbNI-000138 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=2096.0805 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:33 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000139 method=GET route=/api/v1/auth/me status=200 duration_ms=3.3124 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:33 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000140 method=GET route=/api/v1/model-providers status=200 duration_ms=2.712 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:33 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000141 method=POST route=/api/v1/auth/reauth status=200 duration_ms=32.9179 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:33 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000142 method=PUT route=/api/v1/accounts/{accountId}/wechat-credential status=200 duration_ms=9.3009 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:33 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000143 method=POST route=/api/v1/workspaces/current/invites status=200 duration_ms=5.3276 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:33 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000144 method=POST route=/api/v1/agent/conversations status=200 duration_ms=7.6238 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:34 INFO HTTP 请求 request_id=e6517edc-d8ea-4903-b9ca-0e0f96554b83 method=GET route=/api/v1/accounts status=200 duration_ms=2.1814 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b via=agent
+2026/11/24 15:24:34 INFO HTTP 请求 request_id=dbbd0158-b7d9-48df-9783-8c41d45fe1f5 method=GET route=/api/v1/model-providers status=200 duration_ms=2.3193 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b via=agent
+2026/11/24 15:24:34 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000145 method=POST route=/api/v1/agent/conversations/{id}/messages status=200 duration_ms=804.5963 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:34 INFO HTTP 请求 request_id=d0c3b068-ba83-4ff6-9ee7-21a7d0fd07ac method=POST route=/api/v1/workspaces/current/invites status=200 duration_ms=2.7106 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b via=agent agent_action_id=58448b4d-ab0a-4ed6-b134-19995762e39f
+2026/11/24 15:24:34 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000146 method=POST route=/api/v1/agent/actions/{id}/execute status=200 duration_ms=34.3934 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:34 INFO HTTP 请求 request_id=b6d32f43-e79b-4d85-98a3-65ca1d37d601 method=PUT route=/api/v1/accounts/{accountId}/wechat-credential status=403 duration_ms=1.0962 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b via=agent
+2026/11/24 15:24:34 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000147 method=POST route=/api/v1/agent/conversations/{id}/messages status=422 duration_ms=3.231 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000148 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=3.6008 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO context pack assemble task_type=topic_suggest workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=2.083 prefetch_ms=1.5592 cache_hit=false cache_hits=0 cache_misses=16 cache_size=1 bare=false
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000149 method=POST route=/api/v1/accounts/{accountId}/topics/suggest status=200 duration_ms=15.1986 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000150 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=4.1279 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO context pack assemble task_type=topic_hot_suggest workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=2.3687 prefetch_ms=1.0726 cache_hit=false cache_hits=0 cache_misses=17 cache_size=1 bare=false
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000151 method=POST route=/api/v1/accounts/{accountId}/topics/hot-suggest status=200 duration_ms=22.1654 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000152 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=2.834 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000153 method=POST route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=10.8009 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000154 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=1.7589 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000155 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=9.5944 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000156 method=POST route=/api/v1/works/{id}/outline/generate status=409 duration_ms=1.1608 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000157 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=9.0684 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000158 method=PUT route=/api/v1/works/{id}/outline status=409 duration_ms=2.1409 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000159 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=12.4948 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000160 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=11.6798 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000161 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=7.7343 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000162 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=9.5552 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000163 method=POST route=/api/v1/works/{id}/sections status=409 duration_ms=2.5753 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000164 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=7.5293 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000165 method=POST route=/api/v1/sections/{id}/draft status=409 duration_ms=3.3578 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+--- FAIL: TestHC03_DraftRequiresConfirmedOutline (0.04s)
+    hc_test.go:223: unexpected draft route: GET /api/v1/accounts/{accountId}/wechat/drafts
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000166 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=8.0248 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000167 method=POST route=/api/v1/works/{id}/wechat/push status=409 duration_ms=4.8737 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000168 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=9.2126 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 WARN 请求 JSON 格式错误 err=EOF
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000169 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=33.8789 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=2.315 prefetch_ms=1.2309 cache_hit=false cache_hits=0 cache_misses=18 cache_size=1 bare=false
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000170 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.6219 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000171 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.8318 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000172 method=POST route=/api/v1/works/{id}/checks/complete status=409 duration_ms=5.2254 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000173 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=8.7605 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000174 method=POST route=/api/v1/works/{id}/xhs/pack status=409 duration_ms=4.881 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000175 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=10.3268 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 WARN 请求 JSON 格式错误 err=EOF
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000176 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=27.2003 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=b5f220bb-1783-4843-b7e8-895a7db11670 duration_ms=2.0837 prefetch_ms=0.5266 cache_hit=false cache_hits=0 cache_misses=19 cache_size=1 bare=false
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000177 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.1206 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000178 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=8.3935 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000179 method=POST route=/api/v1/works/{id}/checks/complete status=409 duration_ms=6.037 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000180 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=14.2462 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000181 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=13.7882 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:39 INFO context pack assemble task_type=outline workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=8.6979 prefetch_ms=4.6571 cache_hit=false cache_hits=0 cache_misses=20 cache_size=1 bare=false
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000182 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=30.4427 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000183 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=16.6567 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=7.4001 prefetch_ms=2.7516 cache_hit=false cache_hits=0 cache_misses=21 cache_size=1 bare=false
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000184 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=50.5199 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=5.7535 prefetch_ms=1.7043 cache_hit=false cache_hits=0 cache_misses=22 cache_size=1 bare=false
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000185 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=69.0449 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000186 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=91.3874 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000187 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=18.5418 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000188 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=31.0222 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=5.1966 prefetch_ms=3.6159 cache_hit=false cache_hits=0 cache_misses=23 cache_size=1 bare=false
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000189 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=8.0818 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000190 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.3243 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000191 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.2068 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000192 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=14.188 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000193 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=56.7122 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=3.0172 prefetch_ms=1.0585 cache_hit=false cache_hits=0 cache_misses=24 cache_size=1 bare=false
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000194 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=9.4729 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000195 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=10.9333 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000196 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=25.3594 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000197 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=21.5931 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000198 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=22.8019 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000199 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=32.4213 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000200 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=36.6336 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000201 method=GET route=/api/v1/works/{id} status=200 duration_ms=5.0148 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000202 method=POST route=/api/v1/works/{id}/wechat/push status=200 duration_ms=42.2106 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:40 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000203 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.7977 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000204 method=POST route=/api/v1/works/{id}/published status=200 duration_ms=30.0083 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000205 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=8.6931 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000206 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=8.9825 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO context pack assemble task_type=outline workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=6.3384 prefetch_ms=3.9479 cache_hit=false cache_hits=0 cache_misses=25 cache_size=1 bare=false
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000207 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=26.1891 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000208 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=13.736 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=5.6719 prefetch_ms=1.8894 cache_hit=false cache_hits=0 cache_misses=26 cache_size=1 bare=false
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000209 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=49.2841 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=6.4799 prefetch_ms=2.0817 cache_hit=false cache_hits=0 cache_misses=27 cache_size=1 bare=false
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000210 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=50.0433 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000211 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=68.4585 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000212 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=16.6989 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000213 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=48.2385 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=3.9386 prefetch_ms=1.0627 cache_hit=false cache_hits=0 cache_misses=28 cache_size=1 bare=false
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000214 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=11.9515 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000215 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=14.1276 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000216 method=GET route=/api/v1/works/{id} status=200 duration_ms=9.9728 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000217 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=38.0907 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000218 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=48.2246 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=7.6365 prefetch_ms=0.8935 cache_hit=false cache_hits=0 cache_misses=29 cache_size=1 bare=false
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000219 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=14.576 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000220 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.6167 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000221 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=13.1478 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000222 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=17.1257 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000223 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=25.0914 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000224 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=17.1644 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000225 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=25.6026 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000226 method=GET route=/api/v1/works/{id} status=200 duration_ms=2.9007 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000227 method=POST route=/api/v1/works/{id}/wechat/push status=200 duration_ms=30.2763 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000228 method=POST route=/api/v1/works/{id}/metrics status=200 duration_ms=15.1265 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000229 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=2.4875 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO context pack assemble task_type=review_analysis workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=1.9568 prefetch_ms=1.4533 cache_hit=false cache_hits=0 cache_misses=30 cache_size=1 bare=false
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000230 method=POST route=/api/v1/accounts/{accountId}/reviews status=200 duration_ms=17.1146 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000231 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=3.1868 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000232 method=POST route=/api/v1/review-reports/{id}/suggestions/{index}/adopt status=200 duration_ms=13.5768 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000233 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=2.9787 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000234 method=POST route=/api/v1/review-reports/{id}/suggestions/{index}/adopt status=409 duration_ms=1.7602 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000235 method=POST route=/api/v1/accounts status=200 duration_ms=9.9946 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000236 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=13.4328 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000237 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=12.3623 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO context pack assemble task_type=outline workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=8.2909 prefetch_ms=4.4185 cache_hit=false cache_hits=0 cache_misses=31 cache_size=1 bare=false
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000238 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=27.8357 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000239 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=14.1277 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:41 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=7.0309 prefetch_ms=2.3226 cache_hit=false cache_hits=0 cache_misses=32 cache_size=1 bare=false
+2026/11/24 15:24:41 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000240 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=53.6471 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=5.922 prefetch_ms=1.7486 cache_hit=false cache_hits=0 cache_misses=33 cache_size=1 bare=false
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000241 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=52.0572 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000242 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=70.6976 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000243 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=16.4606 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000244 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=34.4957 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=3.2295 prefetch_ms=1.0648 cache_hit=false cache_hits=0 cache_misses=34 cache_size=1 bare=false
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000245 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=8.252 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000246 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=8.6176 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000247 method=GET route=/api/v1/works/{id} status=200 duration_ms=5.0025 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000248 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=24.5601 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000249 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=42.3096 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=2.6367 prefetch_ms=1.0634 cache_hit=false cache_hits=0 cache_misses=35 cache_size=1 bare=false
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000250 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.9807 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000251 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.2404 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000252 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=18.122 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000253 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=18.1435 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000254 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=18.0482 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000255 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=15.349 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000256 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=19.5788 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000257 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.8192 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000258 method=POST route=/api/v1/works/{id}/derive status=422 duration_ms=3.821 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000259 method=POST route=/api/v1/accounts/{accountId}/disable status=200 duration_ms=11.8407 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000260 method=PATCH route=/api/v1/accounts/{accountId} status=422 duration_ms=2.5428 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000261 method=PATCH route=/api/v1/accounts/{accountId} status=200 duration_ms=5.9786 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000262 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=7.3365 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000263 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=10.8196 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO context pack assemble task_type=outline workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=4.6316 prefetch_ms=2.1025 cache_hit=false cache_hits=0 cache_misses=36 cache_size=1 bare=false
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000264 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=21.2407 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000265 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=10.0441 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=5.6533 prefetch_ms=2.3343 cache_hit=false cache_hits=0 cache_misses=37 cache_size=1 bare=false
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000266 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=48.7364 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=6.6705 prefetch_ms=2.6192 cache_hit=false cache_hits=0 cache_misses=38 cache_size=1 bare=false
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000267 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=55.725 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000268 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=85.1914 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000269 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=16.0822 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000270 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=32.0628 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=2.473 prefetch_ms=0.8196 cache_hit=false cache_hits=0 cache_misses=39 cache_size=1 bare=false
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000271 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.1958 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000272 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.7863 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000273 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.6005 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000274 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=18.7486 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000275 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=29.5612 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:42 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=3.0257 prefetch_ms=1.0542 cache_hit=false cache_hits=0 cache_misses=40 cache_size=1 bare=false
+2026/11/24 15:24:42 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000276 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.942 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000277 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.4799 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000278 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=15.7053 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000279 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.8154 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000280 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.4151 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000281 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=12.3979 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000282 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=24.8783 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000283 method=GET route=/api/v1/works/{id} status=200 duration_ms=5.2098 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000284 method=POST route=/api/v1/works/{id}/wechat/push status=409 duration_ms=20.0071 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000285 method=POST route=/api/v1/works/{id}/wechat/push status=200 duration_ms=41.1996 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000286 method=PATCH route=/api/v1/accounts/{accountId} status=200 duration_ms=18.6043 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO 已添加本地模拟模型（仅开发模式） workspace_id=bc81127d-b00d-4e88-8230-e498d9bb359a
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000287 method=POST route=/api/v1/auth/register status=200 duration_ms=69.6024 workspace_id=""
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000288 method=GET route=/api/v1/auth/me status=200 duration_ms=5.3307 workspace_id=bc81127d-b00d-4e88-8230-e498d9bb359a
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000289 method=GET route=/api/v1/accounts/{accountId} status=404 duration_ms=1.6387 workspace_id=bc81127d-b00d-4e88-8230-e498d9bb359a
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000290 method=POST route=/api/v1/workspaces/current/invites status=200 duration_ms=6.1837 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO 已添加本地模拟模型（仅开发模式） workspace_id=a6241be1-2d44-4f09-a2a4-abb97ed4ed60
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000291 method=POST route=/api/v1/auth/register status=200 duration_ms=62.3614 workspace_id=""
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000292 method=GET route=/api/v1/auth/me status=200 duration_ms=3.4829 workspace_id=a6241be1-2d44-4f09-a2a4-abb97ed4ed60
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000293 method=POST route=/api/v1/workspaces/join status=200 duration_ms=15.8391 workspace_id=a6241be1-2d44-4f09-a2a4-abb97ed4ed60
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000294 method=GET route=/api/v1/auth/me status=200 duration_ms=3.0898 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000295 method=POST route=/api/v1/auth/reauth status=200 duration_ms=36.847 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000296 method=GET route=/api/v1/auth/me status=200 duration_ms=3.7609 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000297 method=POST route=/api/v1/model-providers status=403 duration_ms=1.5432 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000298 method=POST route=/api/v1/workspaces/current/invites status=200 duration_ms=4.5897 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO invite email (dev, SMTP unset) to=viewer@example.com code=D9UE7JWZ workspace="owner 的工作区"
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000299 method=POST route=/api/v1/workspaces/current/invites/{id}/send-email status=200 duration_ms=8.8775 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO 已添加本地模拟模型（仅开发模式） workspace_id=d2208154-dbdf-43cc-a278-72cec8c24d54
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000300 method=POST route=/api/v1/auth/register status=200 duration_ms=55.0984 workspace_id=""
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000301 method=GET route=/api/v1/auth/me status=200 duration_ms=2.4436 workspace_id=d2208154-dbdf-43cc-a278-72cec8c24d54
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000302 method=POST route=/api/v1/workspaces/join status=200 duration_ms=12.6411 workspace_id=d2208154-dbdf-43cc-a278-72cec8c24d54
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000303 method=GET route=/api/v1/auth/me status=200 duration_ms=2.9798 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000304 method=POST route=/api/v1/accounts/{accountId}/works status=403 duration_ms=1.3523 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000305 method=GET route=/api/v1/auth/me status=200 duration_ms=2.1336 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000306 method=POST route=/api/v1/workspaces/current/invites status=200 duration_ms=5.2494 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO 已添加本地模拟模型（仅开发模式） workspace_id=e834f675-ebea-489a-aea5-453e4908d038
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000307 method=POST route=/api/v1/auth/register status=200 duration_ms=50.7037 workspace_id=""
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000308 method=GET route=/api/v1/auth/me status=200 duration_ms=3.056 workspace_id=e834f675-ebea-489a-aea5-453e4908d038
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000309 method=POST route=/api/v1/workspaces/join status=200 duration_ms=12.0773 workspace_id=e834f675-ebea-489a-aea5-453e4908d038
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000310 method=GET route=/api/v1/auth/me status=200 duration_ms=2.239 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000311 method=POST route=/api/v1/workspaces/current/transfer status=200 duration_ms=8.139 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000312 method=GET route=/api/v1/auth/me status=200 duration_ms=2.6555 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000313 method=GET route=/api/v1/auth/me status=200 duration_ms=2.2474 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000314 method=POST route=/api/v1/workspaces/current/invites status=403 duration_ms=0.5205 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000315 method=POST route=/api/v1/workspaces/current/transfer status=200 duration_ms=7.7314 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000316 method=POST route=/api/v1/auth/login status=200 duration_ms=31.2867 workspace_id=""
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000317 method=GET route=/api/v1/auth/me status=200 duration_ms=3.3948 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:43 INFO 已添加本地模拟模型（仅开发模式） workspace_id=20a7132a-6188-4637-80c8-b937aee2e443
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000318 method=POST route=/api/v1/auth/register status=200 duration_ms=63.2498 workspace_id=""
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000319 method=GET route=/api/v1/auth/me status=200 duration_ms=2.6455 workspace_id=20a7132a-6188-4637-80c8-b937aee2e443
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000320 method=GET route=/api/v1/auth/me status=200 duration_ms=2.5855 workspace_id=20a7132a-6188-4637-80c8-b937aee2e443
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000321 method=GET route=/api/v1/admin/users status=403 duration_ms=0.5343 workspace_id=20a7132a-6188-4637-80c8-b937aee2e443
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000322 method=GET route=/api/v1/admin/users status=200 duration_ms=2.6426 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000323 method=POST route=/api/v1/admin/users/{id}/revoke-sessions status=200 duration_ms=4.6012 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000324 method=PATCH route=/api/v1/admin/users/{id} status=200 duration_ms=9.0403 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000325 method=POST route=/api/v1/auth/login status=403 duration_ms=1.2483 workspace_id=""
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000326 method=PATCH route=/api/v1/admin/users/{id} status=200 duration_ms=6.0928 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000327 method=GET route=/api/v1/admin/workspaces status=200 duration_ms=2.9628 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000328 method=POST route=/api/v1/admin/workspaces/{id}/enter status=200 duration_ms=6.4909 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000329 method=GET route=/api/v1/auth/me status=200 duration_ms=4.7348 workspace_id=20a7132a-6188-4637-80c8-b937aee2e443
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000330 method=POST route=/api/v1/workspaces/current/invites status=200 duration_ms=5.5128 workspace_id=20a7132a-6188-4637-80c8-b937aee2e443
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000331 method=POST route=/api/v1/admin/workspaces/exit status=200 duration_ms=5.8964 workspace_id=20a7132a-6188-4637-80c8-b937aee2e443
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000332 method=PUT route=/api/v1/admin/system-settings status=200 duration_ms=18.4232 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000333 method=POST route=/api/v1/auth/register status=403 duration_ms=1.1861 workspace_id=""
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000334 method=PUT route=/api/v1/admin/system-settings status=200 duration_ms=17.0702 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000335 method=PUT route=/api/v1/admin/system-settings status=200 duration_ms=18.0595 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000336 method=POST route=/api/v1/auth/login status=200 duration_ms=32.0057 workspace_id=""
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000337 method=GET route=/api/v1/auth/me status=200 duration_ms=3.3384 workspace_id=20a7132a-6188-4637-80c8-b937aee2e443
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000338 method=GET route=/api/v1/accounts status=503 duration_ms=1.0516 workspace_id=20a7132a-6188-4637-80c8-b937aee2e443
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000339 method=PUT route=/api/v1/admin/system-settings status=200 duration_ms=15.4285 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000340 method=POST route=/api/v1/auth/login status=200 duration_ms=27.4648 workspace_id=""
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000341 method=GET route=/api/v1/auth/me status=200 duration_ms=2.2879 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000342 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=8.261 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000343 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=17.1461 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO context pack assemble task_type=outline workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=6.8261 prefetch_ms=2.9419 cache_hit=false cache_hits=0 cache_misses=41 cache_size=1 bare=false
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000344 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=30.0453 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:43 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000345 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=14.7064 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=8.0049 prefetch_ms=3.2703 cache_hit=false cache_hits=0 cache_misses=42 cache_size=1 bare=false
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000346 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=54.64 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=6.1979 prefetch_ms=2.3187 cache_hit=false cache_hits=0 cache_misses=43 cache_size=1 bare=false
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000347 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=53.7203 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000348 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=81.431 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000349 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=14.5973 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000350 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=31.1604 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=2.8869 prefetch_ms=0.5185 cache_hit=false cache_hits=0 cache_misses=44 cache_size=1 bare=false
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000351 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.1767 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000352 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.8082 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000353 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.6701 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000354 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=16.3628 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000355 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=36.3951 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=1.9515 prefetch_ms=0.564 cache_hit=false cache_hits=0 cache_misses=45 cache_size=1 bare=false
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000356 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.3535 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000357 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.7138 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000358 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=15.9755 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000359 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=14.4209 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000360 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=18.293 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000361 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=15.4371 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000362 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=24.1111 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000363 method=GET route=/api/v1/works/{id} status=200 duration_ms=5.3347 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000364 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=13.3806 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO context pack assemble task_type=daily_brief workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=0 prefetch_ms=0 cache_hit=false cache_hits=0 cache_misses=46 cache_size=1 bare=false
+2026/11/24 15:24:44 INFO context pack assemble task_type=daily_brief workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=0 prefetch_ms=0 cache_hit=false cache_hits=0 cache_misses=47 cache_size=1 bare=false
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000365 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.3946 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000366 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=9.3938 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000367 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=8.4422 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO context pack assemble task_type=outline workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=8.063 prefetch_ms=5.1036 cache_hit=false cache_hits=0 cache_misses=48 cache_size=1 bare=false
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000368 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=25.3895 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000369 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=12.0616 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:44 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=6.728 prefetch_ms=2.8032 cache_hit=false cache_hits=0 cache_misses=49 cache_size=1 bare=false
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000370 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=48.563 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=7.4557 prefetch_ms=2.7334 cache_hit=false cache_hits=0 cache_misses=50 cache_size=1 bare=false
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000371 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=49.8402 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000372 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.1225 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO context pack assemble task_type=copilot_chat workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=2.2697 prefetch_ms=1.0112 cache_hit=false cache_hits=0 cache_misses=51 cache_size=1 bare=false
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000373 method=POST route=/api/v1/works/{id}/copilot status=200 duration_ms=24.7438 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000374 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.8613 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000375 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=9.5279 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000376 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=11.3196 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO context pack assemble task_type=outline workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=4.8632 prefetch_ms=2.2432 cache_hit=false cache_hits=0 cache_misses=52 cache_size=1 bare=false
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000377 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=22.6275 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000378 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=12.5867 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=6.0459 prefetch_ms=1.8318 cache_hit=false cache_hits=0 cache_misses=53 cache_size=1 bare=false
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000379 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=46.2845 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=5.8202 prefetch_ms=2.243 cache_hit=false cache_hits=0 cache_misses=54 cache_size=1 bare=false
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000380 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=47.2441 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000381 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.8132 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000382 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=15.0305 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000383 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=27.2381 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=2.1104 prefetch_ms=1.0453 cache_hit=false cache_hits=0 cache_misses=55 cache_size=1 bare=false
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000384 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=14.1263 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000385 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.9361 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO context pack assemble task_type=fix_suggest workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=1.7798 prefetch_ms=0.7161 cache_hit=false cache_hits=0 cache_misses=56 cache_size=1 bare=false
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000386 method=POST route=/api/v1/check-items/{id}/fix-suggest status=200 duration_ms=14.0522 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000387 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.2577 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000388 method=POST route=/api/v1/works/{id}/checks/complete status=409 duration_ms=5.0356 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000389 method=GET route=/api/v1/works/{id} status=200 duration_ms=4.398 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000390 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=15.0505 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000391 method=POST route=/api/v1/works/{id}/checks/complete status=409 duration_ms=5.4195 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000392 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=8.2405 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000393 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=12.249 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO context pack assemble task_type=outline workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=3.3037 prefetch_ms=1.7475 cache_hit=false cache_hits=0 cache_misses=57 cache_size=1 bare=false
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000394 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=20.4564 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000395 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=11.8454 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=6.4184 prefetch_ms=2.6523 cache_hit=false cache_hits=0 cache_misses=58 cache_size=1 bare=false
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000396 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=44.9603 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=5.6591 prefetch_ms=2.29 cache_hit=false cache_hits=0 cache_misses=59 cache_size=1 bare=false
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000397 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=44.7684 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000398 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=69.7297 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000399 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=26.4732 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000400 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=58.02 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=3.1818 prefetch_ms=1.594 cache_hit=false cache_hits=0 cache_misses=60 cache_size=1 bare=false
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000401 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=9.7718 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000402 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=11.8315 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000403 method=GET route=/api/v1/works/{id} status=200 duration_ms=5.576 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000404 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=11.7828 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000405 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=25.9225 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=2.1124 prefetch_ms=1.0648 cache_hit=false cache_hits=0 cache_misses=61 cache_size=1 bare=false
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000406 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=4.918 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000407 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.8507 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000408 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=11.2756 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000409 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=10.304 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000410 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=9.2144 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000411 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=10.9321 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:45 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000412 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=13.746 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000413 method=GET route=/api/v1/works/{id} status=200 duration_ms=2.9161 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000414 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=8.7523 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000415 method=GET route=/api/v1/works/{id} status=200 duration_ms=2.8859 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000416 method=POST route=/api/v1/works/{id}/wechat/push status=409 duration_ms=4.2784 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000417 method=POST route=/api/v1/works/{id}/review/approve status=200 duration_ms=11.7718 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000418 method=POST route=/api/v1/accounts/{accountId}/works status=200 duration_ms=7.857 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000419 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=9.2885 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO context pack assemble task_type=outline workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=b5f220bb-1783-4843-b7e8-895a7db11670 duration_ms=3.9272 prefetch_ms=1.0422 cache_hit=false cache_hits=0 cache_misses=62 cache_size=1 bare=false
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000420 method=POST route=/api/v1/works/{id}/outline/generate status=200 duration_ms=20.0917 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000421 method=PUT route=/api/v1/works/{id}/outline status=200 duration_ms=12.3015 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=b5f220bb-1783-4843-b7e8-895a7db11670 duration_ms=5.3529 prefetch_ms=1.7299 cache_hit=false cache_hits=0 cache_misses=63 cache_size=1 bare=false
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000422 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=43.4366 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=b5f220bb-1783-4843-b7e8-895a7db11670 duration_ms=4.8945 prefetch_ms=1.5362 cache_hit=false cache_hits=0 cache_misses=64 cache_size=1 bare=false
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000423 method=POST route=/api/v1/sections/{id}/draft status=200 duration_ms=50.7982 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000424 method=POST route=/api/v1/works/{id}/assets status=200 duration_ms=65.8133 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000425 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=10.0107 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000426 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=26.2722 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=b5f220bb-1783-4843-b7e8-895a7db11670 duration_ms=2.8024 prefetch_ms=0 cache_hit=false cache_hits=0 cache_misses=65 cache_size=1 bare=false
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000427 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=6.4497 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000428 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.4775 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000429 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.4332 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000430 method=PATCH route=/api/v1/sections/{id} status=200 duration_ms=13.9238 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000431 method=POST route=/api/v1/works/{id}/checks status=200 duration_ms=26.3014 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO context pack assemble task_type=fact_flag workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=b5f220bb-1783-4843-b7e8-895a7db11670 duration_ms=1.6645 prefetch_ms=0.5523 cache_hit=false cache_hits=0 cache_misses=66 cache_size=1 bare=false
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000432 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=5.9439 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000433 method=GET route=/api/v1/works/{id}/checks/latest status=200 duration_ms=7.6191 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000434 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=14.7711 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000435 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=13.3483 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000436 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=10.8633 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000437 method=PATCH route=/api/v1/check-items/{id} status=200 duration_ms=10.7984 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000438 method=POST route=/api/v1/works/{id}/checks/complete status=200 duration_ms=14.8298 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000439 method=GET route=/api/v1/works/{id} status=200 duration_ms=3.2267 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000440 method=PATCH route=/api/v1/works/{id} status=200 duration_ms=8.7694 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000441 method=GET route=/api/v1/works/{id} status=200 duration_ms=2.9667 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000442 method=POST route=/api/v1/works/{id}/xhs/pack status=409 duration_ms=2.4048 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000443 method=POST route=/api/v1/works/{id}/review/approve status=200 duration_ms=11.3509 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000444 method=POST route=/api/v1/works/{id}/xhs/pack status=200 duration_ms=11.9756 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=6.7165 prefetch_ms=4.4499 cache_hit=false cache_hits=0 cache_misses=67 cache_size=1 bare=false
+2026/11/24 15:24:46 INFO context pack assemble task_type=title workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=2.9607 prefetch_ms=1.938 cache_hit=false cache_hits=0 cache_misses=68 cache_size=2 bare=false
+2026/11/24 15:24:46 INFO context pack assemble task_type=topic_suggest workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=1.1203 prefetch_ms=0.586 cache_hit=false cache_hits=0 cache_misses=69 cache_size=3 bare=false
+2026/11/24 15:24:46 INFO context pack assemble task_type=copilot_chat workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=2.2326 prefetch_ms=0.6689 cache_hit=false cache_hits=0 cache_misses=70 cache_size=4 bare=false
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000445 method=GET route=/api/v1/accounts/{accountId}/memories status=200 duration_ms=2.1928 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000446 method=PATCH route=/api/v1/memories/{id} status=200 duration_ms=6.3989 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO context pack assemble task_type=section_draft workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=cca51836-929d-4533-ac3c-0b2da0154140 duration_ms=4.6306 prefetch_ms=1.7698 cache_hit=false cache_hits=0 cache_misses=71 cache_size=1 bare=false
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000447 method=PATCH route=/api/v1/memories/{id} status=200 duration_ms=2.8718 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000448 method=POST route=/api/v1/daily/{id}/items/{idx}/{action} status=400 duration_ms=1.0437 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000449 method=POST route=/api/v1/daily/{id}/items/{idx}/{action} status=400 duration_ms=1.9698 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000450 method=POST route=/api/v1/hot-matches/{id}/convert status=400 duration_ms=1.0335 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000451 method=POST route=/api/v1/plan-slots/{id}/adopt status=400 duration_ms=0.5497 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000452 method=POST route=/api/v1/accounts status=200 duration_ms=6.4192 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO context pack assemble task_type=account_positioning workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=ea064dcc-230a-4aa0-805e-eea2baccd43f duration_ms=1.2182 prefetch_ms=0.5232 cache_hit=false cache_hits=0 cache_misses=72 cache_size=1 bare=false
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000453 method=POST route=/api/v1/accounts/{accountId}/strategy/options status=200 duration_ms=15.1816 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000454 method=POST route=/api/v1/accounts/{accountId}/strategy status=200 duration_ms=30.9431 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO context pack assemble task_type=daily_recommend workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=ea064dcc-230a-4aa0-805e-eea2baccd43f duration_ms=1.3963 prefetch_ms=0.652 cache_hit=false cache_hits=0 cache_misses=73 cache_size=1 bare=false
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000455 method=POST route=/api/v1/accounts/{accountId}/daily/regenerate status=200 duration_ms=37.509 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000456 method=POST route=/api/v1/daily/{id}/items/{idx}/{action} status=200 duration_ms=12.4957 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000457 method=POST route=/api/v1/topics/{id}/verify status=200 duration_ms=8.2067 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000458 method=PATCH route=/api/v1/topics/{id} status=422 duration_ms=5.1291 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000459 method=PATCH route=/api/v1/topics/{id} status=422 duration_ms=3.1768 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000460 method=POST route=/api/v1/daily/{id}/items/{idx}/{action} status=200 duration_ms=15.0986 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000461 method=POST route=/api/v1/daily/{id}/items/{idx}/{action} status=409 duration_ms=3.8006 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO context pack assemble task_type=daily_recommend workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=ea064dcc-230a-4aa0-805e-eea2baccd43f duration_ms=1.4138 prefetch_ms=0.7354 cache_hit=false cache_hits=0 cache_misses=74 cache_size=1 bare=false
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000462 method=POST route=/api/v1/daily/{id}/items/{idx}/{action} status=200 duration_ms=35.2833 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000463 method=POST route=/api/v1/daily/{id}/items/{idx}/{action} status=200 duration_ms=7.6891 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO context pack assemble task_type=daily_recommend workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=ea064dcc-230a-4aa0-805e-eea2baccd43f duration_ms=1.4874 prefetch_ms=0.9847 cache_hit=false cache_hits=0 cache_misses=75 cache_size=1 bare=false
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000464 method=POST route=/api/v1/accounts/{accountId}/daily/regenerate status=200 duration_ms=26.2425 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO context pack assemble task_type=daily_recommend workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b account_id=ea064dcc-230a-4aa0-805e-eea2baccd43f duration_ms=1.3775 prefetch_ms=0.8734 cache_hit=false cache_hits=0 cache_misses=76 cache_size=1 bare=false
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000465 method=POST route=/api/v1/accounts/{accountId}/daily/regenerate status=200 duration_ms=29.8109 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000466 method=POST route=/api/v1/accounts/{accountId}/daily/regenerate status=409 duration_ms=4.6096 workspace_id=56f373b5-bf51-4158-ba23-d85962a94f9b
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000467 method=POST route=/api/v1/auth/login status=200 duration_ms=29.0033 workspace_id=""
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000468 method=GET route=/api/v1/auth/me status=200 duration_ms=2.5054 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000469 method=PUT route=/api/v1/admin/crawl status=422 duration_ms=1.1006 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000470 method=PUT route=/api/v1/admin/crawl status=422 duration_ms=0.5345 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000471 method=PUT route=/api/v1/admin/crawl status=422 duration_ms=0.9409 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000472 method=POST route=/api/v1/auth/login status=200 duration_ms=33.9481 workspace_id=""
+2026/11/24 15:24:46 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000473 method=GET route=/api/v1/auth/me status=200 duration_ms=3.7333 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:47 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000474 method=PUT route=/api/v1/admin/crawl/platforms/{platform} status=422 duration_ms=1.1269 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:47 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000475 method=PUT route=/api/v1/admin/crawl/platforms/{platform} status=422 duration_ms=0.507 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:47 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000476 method=PUT route=/api/v1/admin/crawl/platforms/{platform} status=422 duration_ms=1.009 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:47 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000477 method=PUT route=/api/v1/admin/crawl/platforms/{platform} status=422 duration_ms=0.5314 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:47 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000478 method=PUT route=/api/v1/admin/crawl/platforms/{platform} status=422 duration_ms=0.5246 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+2026/11/24 15:24:47 INFO HTTP 请求 request_id=ASUS/pEcI25nbNI-000479 method=PUT route=/api/v1/admin/crawl/platforms/{platform} status=422 duration_ms=0.8885 workspace_id=09a5d2ab-3dff-467d-96f7-09aab69b4c70
+FAIL
+FAIL	ops/internal/app	47.528s
+FAIL

@@ -1,0 +1,105 @@
+2026/11/24 16:16:57 INFO 数据库连接池已配置 max_conns=20 max_conn_idle_time=5m0s max_conn_lifetime=1h0m0s statement_timeout=30s idle_in_transaction_session_timeout=60s timezone=Asia/Shanghai
+2026/11/24 16:16:57 INFO 已添加本地模拟模型（仅开发模式） workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:16:57 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000001 method=POST route=/api/v1/auth/setup status=200 duration_ms=97.6288 workspace_id=""
+2026/11/24 16:16:57 INFO 已添加本地模拟模型（仅开发模式） workspace_id=b365304a-390b-452a-89e1-d081ef831a3d
+2026/11/24 16:16:57 INFO 已创建永久超级管理员账号 username=skyeder
+2026/11/24 16:16:57 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000002 method=GET route=/api/v1/auth/me status=200 duration_ms=9.7384 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+=== RUN   TestAW13Journey2SkillMaterialCardConfirmReal
+2026/11/24 16:16:57 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000003 method=POST route=/api/v1/auth/login status=200 duration_ms=35.2172 workspace_id=""
+2026/11/24 16:16:57 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000004 method=GET route=/api/v1/auth/me status=200 duration_ms=4.6976 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:16:57 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000005 method=GET route=/api/v1/auth/me status=200 duration_ms=4.1645 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:16:57 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000006 method=POST route=/api/v1/accounts status=200 duration_ms=15.7772 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:16:57 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000007 method=POST route=/api/v1/accounts status=200 duration_ms=8.4104 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:16:57 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000008 method=POST route=/api/v1/auth/reauth status=200 duration_ms=30.5704 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:16:57 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000009 method=PUT route=/api/v1/accounts/{accountId}/wechat-credential status=200 duration_ms=17.729 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:16:57 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000010 method=POST route=/api/v1/accounts/{accountId}/wechat-credential/test status=200 duration_ms=13.4401 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:16:57 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000011 method=POST route=/api/v1/agent/conversations status=200 duration_ms=20.2299 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:16:57 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000012 method=POST route=/api/v1/agent/attachments status=200 duration_ms=13.2682 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:16:57 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000013 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=94.5588 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:17:17 INFO context pack assemble task_type=material_extract workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 account_id=cc760a28-3305-4bb2-81cc-fd26418f57ef duration_ms=1049.577 prefetch_ms=1044.1568 cache_hit=false cache_hits=0 cache_misses=1 cache_size=1 bare=false
+2026/11/24 16:17:17 WARN HTTP 请求 request_id=354ff078-1c35-4b6d-8098-54822c56c13d method=POST route=/api/v1/materials/extract status=200 duration_ms=1068.5916 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+    aw13_journeys_real_test.go:248: run ba8efe7b-9c44-4ebb-b27e-7326caaf9004 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:17:34 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000014 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=56.3428 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:17:34 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000015 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=27.9411 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+    aw13_journeys_real_test.go:240: J2 第 1 次检查未过：material_via_card
+--- FAIL: TestAW13Journey2SkillMaterialCardConfirmReal (37.48s)
+=== RUN   TestAW13Journey3ScopedFollowupQueuedReal
+2026/11/24 16:17:34 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000016 method=POST route=/api/v1/auth/login status=200 duration_ms=54.1436 workspace_id=""
+2026/11/24 16:17:34 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000017 method=GET route=/api/v1/auth/me status=200 duration_ms=6.6866 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:17:34 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000018 method=GET route=/api/v1/auth/me status=200 duration_ms=3.5758 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:17:34 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000019 method=POST route=/api/v1/agent/conversations status=200 duration_ms=16.2751 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:17:34 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000020 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=65.8536 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:17:49 INFO HTTP 请求 request_id=024f0a74-7a81-4d61-8262-efb11d4e865e method=GET route=/api/v1/accounts/{accountId}/works status=200 duration_ms=8.6484 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:17:49 INFO HTTP 请求 request_id=dbecd2a3-3e44-4761-b3ce-b89976b4c720 method=GET route=/api/v1/accounts/{accountId}/works status=200 duration_ms=3.8259 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:17:49 INFO HTTP 请求 request_id=b7b3c9b8-c868-421d-b005-04fc708e54b3 method=GET route=/api/v1/accounts/{accountId}/dashboard status=200 duration_ms=12.4053 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:17:49 INFO HTTP 请求 request_id=cc7788da-c10b-47d9-a62b-17d069332c78 method=GET route=/api/v1/accounts/{accountId}/dashboard status=200 duration_ms=6.1882 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:17:49 INFO HTTP 请求 request_id=52f66ccb-b2fe-4b29-8375-1e6643cfd643 method=GET route=/api/v1/accounts/{accountId}/top-works status=200 duration_ms=5.5183 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:17:49 INFO HTTP 请求 request_id=bf506e95-9653-4290-ab90-ab5a77e60f92 method=GET route=/api/v1/accounts/{accountId}/top-works status=200 duration_ms=2.389 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:17:56 INFO HTTP 请求 request_id=60b6b247-dd4e-49ee-83bf-7d2ea109fffe method=GET route=/api/v1/search status=200 duration_ms=17.8004 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:17:56 INFO HTTP 请求 request_id=e8a4e580-7ada-476e-86dd-0dddb752e320 method=GET route=/api/v1/accounts/{accountId}/daily status=200 duration_ms=7.1618 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:17:56 INFO HTTP 请求 request_id=a3848038-7c06-485d-ba1c-a03fd0e86072 method=GET route=/api/v1/accounts/{accountId}/daily status=200 duration_ms=3.1954 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+    aw13_journeys_real_test.go:265: run 444d83ce-4dcc-4f48-ac15-5550dc3b7825 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:18:10 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000021 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=42.8991 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:10 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000022 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=31.4715 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:11 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000023 method=POST route=/api/v1/agent/conversations/{id}/messages status=409 duration_ms=28.6875 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:17 INFO HTTP 请求 request_id=584994bf-0a29-4d06-998f-8674f4bbf972 method=GET route=/api/v1/accounts/{accountId}/works status=200 duration_ms=64.1561 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:18:17 INFO HTTP 请求 request_id=9a788ed5-d508-4384-a632-6342a73f0041 method=GET route=/api/v1/accounts/{accountId}/dashboard status=200 duration_ms=41.7763 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:18:18 INFO HTTP 请求 request_id=7bb8c4e7-540a-4a75-8429-e8543fc2c492 method=GET route=/api/v1/accounts/{accountId}/top-works status=200 duration_ms=24.7257 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:18:29 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000024 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=53.8387 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+    aw13_journeys_real_test.go:263: J3 第 1 次检查未过：queued_accepted
+--- FAIL: TestAW13Journey3ScopedFollowupQueuedReal (54.44s)
+=== RUN   TestAW13Journey4ResumeAndStopReal
+2026/11/24 16:18:29 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000025 method=POST route=/api/v1/auth/login status=200 duration_ms=56.6227 workspace_id=""
+2026/11/24 16:18:29 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000026 method=GET route=/api/v1/auth/me status=200 duration_ms=6.5292 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:29 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000027 method=GET route=/api/v1/auth/me status=200 duration_ms=4.2927 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:29 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000028 method=POST route=/api/v1/agent/conversations status=200 duration_ms=12.6467 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:29 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000029 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=47.4211 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:29 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000030 method=POST route=/api/v1/agent/runs/{id}/cancel status=200 duration_ms=13.5838 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:29 WARN 待处理操作卡片计数失败 error_code=agent_run_pending_count_failed route=internal/agent/run/pending_count workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 duration_ms=0 conversation_id=2a26eb55-caa8-4f84-befa-8ca9493f7fff err="context canceled"
+2026/11/24 16:18:30 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000031 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=15.9761 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+    aw13_journeys_real_test.go:302: J4 第 1 次完成：3 项检查全过
+2026/11/24 16:18:30 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000032 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=32.4308 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:30 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000033 method=POST route=/api/v1/agent/runs/{id}/cancel status=200 duration_ms=10.0507 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:30 WARN 待处理操作卡片计数失败 error_code=agent_run_pending_count_failed route=internal/agent/run/pending_count workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 duration_ms=0 conversation_id=2a26eb55-caa8-4f84-befa-8ca9493f7fff err="context canceled"
+2026/11/24 16:18:31 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000034 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=17.016 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+    aw13_journeys_real_test.go:302: J4 第 2 次完成：3 项检查全过
+2026/11/24 16:18:31 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000035 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=44.207 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:32 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000036 method=POST route=/api/v1/agent/runs/{id}/cancel status=200 duration_ms=10.5298 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:32 WARN 待处理操作卡片计数失败 error_code=agent_run_pending_count_failed route=internal/agent/run/pending_count workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 duration_ms=0 conversation_id=2a26eb55-caa8-4f84-befa-8ca9493f7fff err="context canceled"
+2026/11/24 16:18:33 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000037 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=17.4582 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+    aw13_journeys_real_test.go:302: J4 第 3 次完成：3 项检查全过
+--- PASS: TestAW13Journey4ResumeAndStopReal (3.98s)
+=== RUN   TestAW13Journey5ForkKeepsAttachmentReal
+2026/11/24 16:18:33 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000038 method=POST route=/api/v1/auth/login status=200 duration_ms=28.5822 workspace_id=""
+2026/11/24 16:18:33 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000039 method=GET route=/api/v1/auth/me status=200 duration_ms=2.2719 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:33 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000040 method=GET route=/api/v1/auth/me status=200 duration_ms=3.0773 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:33 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000041 method=POST route=/api/v1/agent/conversations status=200 duration_ms=8.2034 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:33 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000042 method=POST route=/api/v1/agent/attachments status=200 duration_ms=6.7843 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:33 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000043 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=34.1474 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:37 INFO HTTP 请求 request_id=389ef0f0-0b89-4d1c-95d4-d7b8af823940 method=GET route=/api/v1/search status=200 duration_ms=10.2468 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:18:46 INFO HTTP 请求 request_id=a34f7bba-7a29-4e60-98eb-f5a90d9db5f5 method=GET route=/api/v1/search status=200 duration_ms=6.1866 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+    aw13_journeys_real_test.go:368: run 32da904c-4879-4830-871d-6e3f865d5ac2 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:18:54 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000044 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=60.9932 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:54 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000045 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=33.7595 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:54 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000046 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=27.6517 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:54 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000047 method=POST route=/api/v1/agent/conversations/{id}/fork status=200 duration_ms=48.0837 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:54 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000048 method=POST route=/api/v1/agent/conversations/{id}/messages status=202 duration_ms=86.1488 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:18:59 INFO HTTP 请求 request_id=d3b91fbc-7674-450f-a71c-3f821570e80b method=GET route=/api/v1/search status=200 duration_ms=31.0534 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:18:59 INFO HTTP 请求 request_id=3268b1ae-333f-4449-a840-40be949e3214 method=GET route=/api/v1/search status=200 duration_ms=11.6325 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:19:03 INFO HTTP 请求 request_id=42e5d267-5a9e-468b-90f2-1ffe66e30bd6 method=GET route=/api/v1/search status=200 duration_ms=6.9224 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:19:03 INFO HTTP 请求 request_id=58ace18a-2e3c-4047-a3ae-e54aabb8d7d1 method=GET route=/api/v1/search status=200 duration_ms=13.3408 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:19:03 INFO HTTP 请求 request_id=47ecbc99-a8e5-4308-a008-627d5015d7a9 method=GET route=/api/v1/search status=200 duration_ms=13.8209 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:19:09 INFO HTTP 请求 request_id=a5b67224-c144-4dea-98ff-201b1d3930a7 method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=4.7827 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+2026/11/24 16:19:09 INFO HTTP 请求 request_id=d2484d52-cc7e-4570-baed-b6db9c8699ff method=GET route=/api/v1/accounts/{accountId}/topics status=200 duration_ms=2.6749 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53 via=agent
+    aw13_journeys_real_test.go:412: run b05f2b45-1dc8-447a-b487-52d2eb9759d0 终态 status=completed stage=completed reason= error=/
+2026/11/24 16:19:18 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000049 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=53.2068 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:19:18 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000050 method=DELETE route=/api/v1/agent/conversations/{id} status=200 duration_ms=42.6322 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:19:18 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000051 method=GET route=/api/v1/agent/conversations/{id} status=200 duration_ms=86.8456 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+    aw13_journeys_real_test.go:363: J5 第 1 次完成：6 项检查全过
+2026/11/24 16:19:18 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000052 method=POST route=/api/v1/agent/attachments status=404 duration_ms=12.196 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+2026/11/24 16:19:18 INFO HTTP 请求 request_id=ASUS/OZPvJgVMac-000053 method=POST route=/api/v1/agent/conversations/{id}/messages status=404 duration_ms=5.8638 workspace_id=9785d50a-b16a-4132-b62a-5fcf8008ac53
+    aw13_journeys_real_test.go:368: 消息未受理：404 {"error":{"code":"not_found","message":"内容不存在或已删除","request_id":"ASUS/OZPvJgVMac-000053"}}
+--- FAIL: TestAW13Journey5ForkKeepsAttachmentReal (45.69s)
+FAIL
+FAIL	ops/internal/app	148.819s
+FAIL

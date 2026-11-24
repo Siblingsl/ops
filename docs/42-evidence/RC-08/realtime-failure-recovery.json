@@ -1,0 +1,225 @@
+{
+  "at": "2026-11-24T09:45:52.507Z",
+  "model_before": "workbuddy-ai/hy4flash-free",
+  "model_failing": "opencode-zen-free/deepseek-v4.1-flash-free",
+  "note": "真实第三方网关上游；失败由 OpenCode 免费额度 429 触发；恢复由同一产品段落在 WorkBuddy 上重试成功。",
+  "work_id": "b34892e1-aeb8-43ee-a621-b5aa662245dd",
+  "section_id": "9568de91-5a95-4105-9ef9-8e6c06260415",
+  "failure": {
+    "http_status": 200,
+    "events": [
+      {
+        "event": "job"
+      },
+      {
+        "event": "stage"
+      },
+      {
+        "event": "error",
+        "code": "ai_rate_limited",
+        "message": "模型服务触发限流或额度已用尽（本地网关 3425 · OpenCode DeepSeek），请稍后重试或切换到备用模型。你的内容没有被改动。"
+      }
+    ],
+    "raw_head": "event: job\ndata: {\"id\":\"500256b9-f9b4-4fcb-93ca-3e1ea28f6c98\"}\n\nevent: stage\ndata: {\"stage\":\"context\"}\n\nevent: error\ndata: {\"code\":\"ai_rate_limited\",\"message\":\"模型服务触发限流或额度已用尽（本地网关 3425 · OpenCode DeepSeek），请稍后重试或切换到备用模型。你的内容没有被改动。\",\"detail\":{\"fallback_available\":false},\"request_id\":\"ASUS/DQd5zJUbXW-001077\"}\n\n"
+  },
+  "recovery": {
+    "http_status": 200,
+    "has_done": true,
+    "done": {
+      "ai_call_id": "3b702951-d187-4ab6-9b58-2e394f51204a",
+      "cx_basis": {
+        "schema_version": 1,
+        "account_id": "bf07850c-7cfc-4b8b-b112-6ebc6eb00c4b",
+        "work_revision": 3,
+        "profile_hash": "1538cce9d5dd60eefa2ffa30e0ab9726391b404d9a7a6f4dbe8b93c3d7464f83",
+        "strategy_ref": null,
+        "standard_ref": null,
+        "dna_ref": null,
+        "sources": [
+          {
+            "ref": "profile:bf07850c-7cfc-4b8b-b112-6ebc6eb00c4b",
+            "kind": "profile",
+            "id": "bf07850c-7cfc-4b8b-b112-6ebc6eb00c4b",
+            "revision": null,
+            "as_of_at": "2026-11-24T16:16:42.339046+08:00",
+            "state": "unconfirmed",
+            "purpose": "创作定位"
+          },
+          {
+            "ref": "work_section:9568de91-5a95-4105-9ef9-8e6c06260415",
+            "kind": "work_section",
+            "id": "9568de91-5a95-4105-9ef9-8e6c06260415",
+            "revision": 1,
+            "as_of_at": "2026-11-24T17:45:52.48749+08:00",
+            "state": "unconfirmed",
+            "purpose": "当前段落提纲"
+          }
+        ],
+        "omitted": [
+          {
+            "ref": "material",
+            "reason": "本次没有选入可用素材；具体事实需由作者补充或核实"
+          }
+        ],
+        "coverage": "partial",
+        "assembled_at": "2026-11-24T09:45:52.7819763Z",
+        "input_hash": "d45dbfc892e53ce3e292dcaff940f0230efe4c3ff0f20508b53e6ff4c636b99d"
+      },
+      "fallback_used": false,
+      "job_id": "88a5c4a2-764e-4fa6-a1f1-1ea558f53c6c",
+      "refs": {
+        "cx_basis": {
+          "schema_version": 1,
+          "account_id": "bf07850c-7cfc-4b8b-b112-6ebc6eb00c4b",
+          "work_revision": 3,
+          "profile_hash": "1538cce9d5dd60eefa2ffa30e0ab9726391b404d9a7a6f4dbe8b93c3d7464f83",
+          "strategy_ref": null,
+          "standard_ref": null,
+          "dna_ref": null,
+          "sources": [
+            {
+              "ref": "profile:bf07850c-7cfc-4b8b-b112-6ebc6eb00c4b",
+              "kind": "profile",
+              "id": "bf07850c-7cfc-4b8b-b112-6ebc6eb00c4b",
+              "revision": null,
+              "as_of_at": "2026-11-24T16:16:42.339046+08:00",
+              "state": "unconfirmed",
+              "purpose": "创作定位"
+            },
+            {
+              "ref": "work_section:9568de91-5a95-4105-9ef9-8e6c06260415",
+              "kind": "work_section",
+              "id": "9568de91-5a95-4105-9ef9-8e6c06260415",
+              "revision": 1,
+              "as_of_at": "2026-11-24T17:45:52.48749+08:00",
+              "state": "unconfirmed",
+              "purpose": "当前段落提纲"
+            }
+          ],
+          "omitted": [
+            {
+              "ref": "material",
+              "reason": "本次没有选入可用素材；具体事实需由作者补充或核实"
+            }
+          ],
+          "coverage": "partial",
+          "assembled_at": "2026-11-24T09:45:52.7819763Z",
+          "input_hash": "d45dbfc892e53ce3e292dcaff940f0230efe4c3ff0f20508b53e6ff4c636b99d"
+        },
+        "latency_ms": 13936,
+        "memories": 0,
+        "model": "本地网关 3425 · WorkBuddy Hy4 / workbuddy-ai/hy4flash-free",
+        "profile": true,
+        "prompt_version": 1,
+        "section_id": "9568de91-5a95-4105-9ef9-8e6c06260415",
+        "skills": {
+          "allowed_set_version": "sk-c0.18-c1.7-v1",
+          "assembled_chars": null,
+          "budget": 3600,
+          "context": {
+            "account_id": "bf07850c-7cfc-4b8b-b112-6ebc6eb00c4b",
+            "actor_kind": "user",
+            "surface": "task",
+            "target_format": "long_article",
+            "task_type": "section_draft",
+            "work_id": "b34892e1-aeb8-43ee-a621-b5aa662245dd"
+          },
+          "items": [],
+          "personal_used_count": 0
+        },
+        "slots": [
+          {
+            "name": "rules",
+            "label": "系统规则",
+            "chars": 297,
+            "budget": 0,
+            "truncated": false,
+            "items": []
+          },
+          {
+            "name": "profile",
+            "label": "定位档案",
+            "chars": 165,
+            "budget": 800,
+            "truncated": false,
+            "items": [
+              {
+                "id": "bf07850c-7cfc-4b8b-b112-6ebc6eb00c4b",
+                "label": "定位与表达档案",
+                "chars": 165,
+                "used": true,
+                "content_hash": "1538cce9d5dd60eefa2ffa30e0ab9726391b404d9a7a6f4dbe8b93c3d7464f83",
+                "source_kind": "profile",
+                "as_of_at": "2026-11-24T16:16:42.339046+08:00",
+                "state": "unconfirmed",
+                "purpose": "创作定位"
+              }
+            ]
+          },
+          {
+            "name": "style",
+            "label": "风格参考",
+            "chars": 56,
+            "budget": 4000,
+            "truncated": false,
+            "items": [
+              {
+                "label": "风格摘要",
+                "chars": 50,
+                "used": true
+              }
+            ]
+          },
+          {
+            "name": "work",
+            "label": "作品内容",
+            "chars": 145,
+            "budget": 3000,
+            "truncated": false,
+            "items": [
+              {
+                "label": "观点与大纲",
+                "chars": 121,
+                "used": true
+              },
+              {
+                "label": "相邻段落",
+                "chars": 24,
+                "used": true
+              }
+            ]
+          }
+        ],
+        "status": "ok",
+        "style_samples": 0,
+        "style_summary": true,
+        "task_type": "section_draft",
+        "tokens": 2618
+      },
+      "result": {
+        "section": {
+          "id": "9568de91-5a95-4105-9ef9-8e6c06260415",
+          "position": 0,
+          "heading": "真实 429 与切模型恢复",
+          "key_point": "先失败，再切换到可用模型完成同一段。",
+          "content_md": "这次验证要看的，不是一次顺畅输出，而是请求被挡住之后，桌面端还能不能把人带回写作里。先让同一段文字在受限模型上发起请求，结果遇到 429。这个结果很容易被理解成写作失败，好像刚刚组织好的表达突然作废。其实要分开看：429 说的是请求被限流，说明当前通道暂时接不住，它并不评价这段文字写得好不好，也不等于作者写不出来。\n\n所以桌面端要给出可读原因。不要只丢一个状态码让人自己猜，也不要把问题包装成含糊的系统提醒。它需要说明三件事：这次中断来自限流；这段内容还没有被判失败；可以切换到可用模型后继续。提示越能落到写作者眼前正在发生的事，越不容易让人卡在原地。这里不是替工具开脱，而是把责任边界说清楚：限流是工具遇到的限制，不是写作者的能力问题。\n\n恢复动作也保持简单：先确认同一段停下来的位置，再切到可用模型，继续完成同一段。验证的价值就在这个来回里——先失败，不把失败解释成人的失败；再继续，不把继续说成某种神奇修复。一次 429 之后，写作者需要的是知道发生了什么，以及下一步能做什么。桌面端把这两件事讲清楚，写作就能接着往前走。",
+          "origin": "ai",
+          "source_section_ids": [],
+          "material_ids": [],
+          "revision": 2,
+          "updated_at": "2026-11-24T17:46:06.808938+08:00",
+          "ai_call_id": "3b702951-d187-4ab6-9b58-2e394f51204a",
+          "source_revisions": {}
+        }
+      },
+      "text": "这次验证要看的，不是一次顺畅输出，而是请求被挡住之后，桌面端还能不能把人带回写作里。先让同一段文字在受限模型上发起请求，结果遇到 429。这个结果很容易被理解成写作失败，好像刚刚组织好的表达突然作废。其实要分开看：429 说的是请求被限流，说明当前通道暂时接不住，它并不评价这段文字写得好不好，也不等于作者写不出来。\n\n所以桌面端要给出可读原因。不要只丢一个状态码让人自己猜，也不要把问题包装成含糊的系统提醒。它需要说明三件事：这次中断来自限流；这段内容还没有被判失败；可以切换到可用模型后继续。提示越能落到写作者眼前正在发生的事，越不容易让人卡在原地。这里不是替工具开脱，而是把责任边界说清楚：限流是工具遇到的限制，不是写作者的能力问题。\n\n恢复动作也保持简单：先确认同一段停下来的位置，再切到可用模型，继续完成同一段。验证的价值就在这个来回里——先失败，不把失败解释成人的失败；再继续，不把继续说成某种神奇修复。一次 429 之后，写作者需要的是知道发生了什么，以及下一步能做什么。桌面端把这两件事讲清楚，写作就能接着往前走。",
+      "usage": {
+        "prompt_tokens": 562,
+        "completion_tokens": 2056
+      }
+    },
+    "section_chars": 465
+  },
+  "verdict": "PASS：真实 429 可读错误 + 切回可用模型同段落重试成功",
+  "routes_restored": true
+}

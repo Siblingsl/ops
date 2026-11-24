@@ -245,6 +245,19 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 		}
 		p.add(Slot{Name: "profile", Chars: runeLen(pt), Items: []SlotItem{profileItem}})
 		p.Legacy["profile"] = true
+		// OPT-A03：旧作风格紧跟账号定位，先定“谁在写、像谁”，再给运营方案等辅助信息。
+		if !t.SkipStyle && (!t.StyleSummaryOnly || strings.TrimSpace(prof.StyleSummary) != "") {
+			text, sl, n, err := s.styleSlot(ctx, t.Account.ID, prof.StyleSummary)
+			if err != nil {
+				return nil, err
+			}
+			if text != "" {
+				sys.WriteString("\n## 风格参考\n" + text)
+			}
+			p.add(sl)
+			p.Legacy["style_samples"] = n
+			p.Legacy["style_summary"] = prof.StyleSummary != ""
+		}
 		// BE-05：strategy/mems/prefs/samples 已在上方 errgroup 并行预取（数据依赖图见彼处注释）。
 		if strategy != nil {
 			brief := strategyBrief(strategy) + "差异化：" + strategy.Differentiation + "\n人设：" + strategy.Persona + "\n屏蔽词：" + strings.Join(strategy.BlockedWords, "、")
@@ -343,19 +356,6 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 				p.add(Slot{Name: "performance", Budget: perfSlotBudget, Chars: runeLen(text), Items: items})
 			}
 		}
-
-		if !t.SkipStyle && (!t.StyleSummaryOnly || strings.TrimSpace(prof.StyleSummary) != "") {
-			text, sl, n, err := s.styleSlot(ctx, t.Account.ID, prof.StyleSummary)
-			if err != nil {
-				return nil, err
-			}
-			if text != "" {
-				sys.WriteString("\n## 风格参考\n" + text)
-			}
-			p.add(sl)
-			p.Legacy["style_samples"] = n
-			p.Legacy["style_summary"] = prof.StyleSummary != ""
-		}
 	}
 
 	if t.Account != nil && (strings.HasPrefix(t.Type, "section_") || t.Type == "outline") {
@@ -365,41 +365,8 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 			p.add(Slot{Name: "references", Budget: 1200, Chars: runeLen(text), Items: items})
 		}
 	}
-	restStart := 0
-	var taskInstruction string
-	var taskInstructionVersion int
-	if t.TaskPrompt != nil {
-		taskInstruction, taskInstructionVersion = t.TaskPrompt.Content, t.TaskPrompt.Version
-	} else {
-		taskInstruction, taskInstructionVersion = s.loadTaskInstruction(ctx, t.Type)
-	}
-	if instr, ver := taskInstruction, taskInstructionVersion; instr != "" {
-		used := []rune(instr)
-		sl := Slot{Name: "task_instruction", Chars: len(used)}
-		usr.WriteString(instructionBlock(instr))
-		restStart = usr.Len()
-		sl.Items = []SlotItem{{ID: t.Type, Label: fmt.Sprintf("%s v%d", t.Type, ver), Chars: len(used), Used: true}}
-		p.add(sl)
-		p.Legacy["prompt_template"] = t.Type
-		p.Legacy["prompt_template_version"] = ver
-	}
 
-	if len(t.Materials) > 0 {
-		var accountID *uuid.UUID
-		if t.Account != nil {
-			accountID = &t.Account.ID
-		}
-		text, sl, names, err := s.materialsSlot(ctx, accountID, t.Materials, includeCXBasis)
-		if err != nil {
-			return nil, err
-		}
-		if text != "" {
-			usr.WriteString(text + "\n")
-		}
-		p.add(sl)
-		p.Legacy["materials"] = names
-	}
-
+	// OPT-A03：先给旧作风格，再给本次勾选素材，最后给作品核心观点与大纲。
 	if t.History != "" && t.Account != nil && s.userPrefs(ctx).UseHistory {
 		hits, err := s.retrieveHistory(ctx, t.Account, t.History, t.WorkID, 2)
 		if err == nil && len(hits) > 0 {
@@ -426,6 +393,22 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 			}
 			p.add(sl)
 		}
+	}
+
+	if len(t.Materials) > 0 {
+		var accountID *uuid.UUID
+		if t.Account != nil {
+			accountID = &t.Account.ID
+		}
+		text, sl, names, err := s.materialsSlot(ctx, accountID, t.Materials, includeCXBasis)
+		if err != nil {
+			return nil, err
+		}
+		if text != "" {
+			usr.WriteString(text + "\n")
+		}
+		p.add(sl)
+		p.Legacy["materials"] = names
 	}
 
 	if t.Work != "" || t.Neighbors != "" {
@@ -455,6 +438,27 @@ func (s *Server) buildContext(ctx context.Context, t aiTask) (*ContextPack, erro
 		}
 		usr.WriteString("\n")
 		p.add(sl)
+	}
+
+	// OPT-A03：任务规则放在素材与作品核心之后，避免长模板先占住模型注意力；
+	// UserRest 从这里开始，仍只包含可编辑指令与用户原话。
+	restStart := 0
+	var taskInstruction string
+	var taskInstructionVersion int
+	if t.TaskPrompt != nil {
+		taskInstruction, taskInstructionVersion = t.TaskPrompt.Content, t.TaskPrompt.Version
+	} else {
+		taskInstruction, taskInstructionVersion = s.loadTaskInstruction(ctx, t.Type)
+	}
+	if instr, ver := taskInstruction, taskInstructionVersion; instr != "" {
+		used := []rune(instr)
+		sl := Slot{Name: "task_instruction", Chars: len(used)}
+		usr.WriteString(instructionBlock(instr))
+		restStart = usr.Len()
+		sl.Items = []SlotItem{{ID: t.Type, Label: fmt.Sprintf("%s v%d", t.Type, ver), Chars: len(used), Used: true}}
+		p.add(sl)
+		p.Legacy["prompt_template"] = t.Type
+		p.Legacy["prompt_template_version"] = ver
 	}
 
 	if instr := strings.TrimSpace(t.Instruction); instr != "" {

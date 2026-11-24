@@ -50,6 +50,9 @@ func agentInsertRun(t *testing.T, convID, wsID, userID, providerID uuid.UUID, st
 
 // agentRunPath 返回对话的运行入口路径。
 func agentRunPath(c agentConversation, suffix string) string {
+	if suffix == "" {
+		return "/api/v1/agent/conversations/" + c.ID.String()
+	}
 	return "/api/v1/agent/conversations/" + c.ID.String() + "/" + suffix
 }
 
