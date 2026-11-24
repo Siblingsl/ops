@@ -136,6 +136,11 @@ func agentClassifiedRouteList() map[string]string {
 		"PUT /api/v1/accounts/{accountId}/skill-bindings/{audience}/{skillId}",
 		"GET /api/v1/accounts/{accountId}/skill-context",
 		"GET /api/v1/ai-calls/{id}/skill-context",
+		// D-221 / FR-M10-14：公众号草稿箱管理只在账号设置页做人工只读巡检与逐篇确认删除，
+		// 不作为智能体工具（不含正文 AI 生成）。
+		"GET /api/v1/accounts/{accountId}/wechat/drafts",
+		"GET /api/v1/accounts/{accountId}/wechat/drafts/count",
+		"DELETE /api/v1/accounts/{accountId}/wechat/drafts/{mediaId}",
 	} {
 		out[r] = "附录 B.1：只给链接"
 	}

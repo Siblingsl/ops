@@ -86,7 +86,9 @@ test('F5 桌面 Preflight：submit-now 先过策略闸，拒绝时不回读也�
     submitNow: async () => { submits += 1; },
   }), policy);
   const result = await runDesktopPublishTask({
-    claim: async () => ({ ...request({ intent: 'submit', explicitSubmitNow: true }) }),
+    // D-222：小红书在 executor 入口直接拒绝 intent='submit'（direct_submit_not_supported），
+    // 无法覆盖 F5 策略闸本身；改用头条 submit-now 验证“策略拒绝即停止”。
+    claim: async () => ({ ...request({ platform: 'toutiao', intent: 'submit', explicitSubmitNow: true }) }),
     heartbeat: async () => undefined,
     result: async () => undefined,
     registry,
@@ -104,6 +106,7 @@ test('F5 桌面 Preflight：策略通过后才进入账号/锚点检查', async 
   let checks = 0;
   let fills = 0;
   let readbacks = 0;
+  let draftSaves = 0;
   const policy = { check: async () => { checks += 1; return { ok: true }; } };
   const registry = createDefaultDesktopPublishAdapterRegistry(page({
     fillFields: async () => { fills += 1; },
@@ -112,6 +115,8 @@ test('F5 桌面 Preflight：策略通过后才进入账号/锚点检查', async 
       readbacks += 1;
       return { title: '策略闸测试标题', body: '正文', tags: [], cover: { present: true, ratio: 0.75 }, schedule: '' };
     },
+    // RC-05 起小红书开启 saveDraftAfterReadback：回读通过后只保存草稿，不进入发布。
+    saveDraft: async () => { draftSaves += 1; },
   }), policy);
   const result = await runDesktopPublishTask({
     claim: async () => request(),
@@ -123,5 +128,6 @@ test('F5 桌面 Preflight：策略通过后才进入账号/锚点检查', async 
   assert.equal(checks, 1);
   assert.equal(fills, 1);
   assert.equal(readbacks, 1);
+  assert.equal(draftSaves, 1, '小红书回读通过后只保存一次草稿，不进入发布');
   assert.ok(result.state === 'approved' || result.state === 'awaiting_user' || result.state === 'filled', result.state);
 });
