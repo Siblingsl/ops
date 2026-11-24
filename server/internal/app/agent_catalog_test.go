@@ -545,6 +545,8 @@ func agentClassifiedRouteList() map[string]string {
 		"POST /api/v1/works/{id}/check/exit",
 		"GET /api/v1/healthz",
 		"GET /healthz",
+		// OPT-W03：服务端直出扫码预览 HTML，匿名只读，不作为智能体工具。
+		"GET /preview/{token}",
 		"GET /api/v1/auth/status",
 		"GET /api/v1/desktop/capabilities",
 		"POST /api/v1/desktop/challenges",

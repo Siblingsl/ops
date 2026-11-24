@@ -173,6 +173,8 @@ func (s *Server) buildRouter() http.Handler {
 	r.Use(middleware.Compress(5, "text/html", "text/css", "application/json", "application/javascript", "text/javascript", "image/svg+xml"))
 
 	r.Get("/healthz", s.healthz)
+	// OPT-W03：根路由直出扫码预览 HTML（必须在 SPA fallback 之前；禁止放进 /api/v1，见 HC-28）。
+	r.Get("/preview/{token}", s.renderPublicPreviewPage)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/healthz", s.healthz)
