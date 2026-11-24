@@ -65,6 +65,8 @@ docs/*
 !docs/42-真实闭环验收总台账.md
 !docs/42-evidence/
 !docs/42-evidence/**
+# 桌面端主攻与全局优化实施方案（D-224）
+!docs/43-桌面端主攻与全局优化实施方案.md
 # docs/33 6.2：仍在维护的盘点/交接（白名单放行；不改「docs/* 默认忽略」总规则）
 !docs/AI_HANDOFF.md
 !docs/31-未完成功能盘点与续作提示词.md
