@@ -1,0 +1,62 @@
+RC-01 公众号草稿箱产品路由复验（真实微信 API）
+时间：2026-11-23 15:57–15:59（Asia/Shanghai）
+服务：本机 OPS server，OPS_DEV=0，OPS_WECHAT_BASE=https://api.weixin.qq.com
+账号：8be65226-3bbc-4f96-b1c2-215f60d0ca71（wechat_mp，active，owner=ref41owner）
+说明：本文件只记录产品路由与真实草稿计数；AppID/AppSecret 不落盘。
+
+1. 基线（创建临时草稿前）
+GET /api/v1/accounts/{accountId}/wechat/drafts/count
+→ 200 {"total_count":2}
+GET /api/v1/accounts/{accountId}/wechat/drafts?offset=0&count=10
+→ 200 {"total_count":2,"items":[
+  {"title":"REF41 方案A 真实草稿回执验收"},
+  {"title":"REF41 真实公众号草稿验收"}
+]}
+这两篇是既有真实草稿，本次未删除、未修改。
+
+2. 创建一篇仅用于复验的临时草稿
+通过已有 wechat 适配器 DraftAdd（非本轮新增产品路由）创建：
+{"title":"RC-01 产品路由复验 2026-11-23 1600",
+ "media_id":"EKrmuYPOPNcu1A6jcfSuJhToZ_QhE2QtM__LjzLa679SlsriCIym2bKiGSlGfHip"}
+草稿内容明确写明：只验证列表、计数、逐篇删除；不发表、不群发。
+
+3. 产品路由列表/计数（创建后）
+GET /api/v1/accounts/{accountId}/wechat/drafts/count
+→ 200 {"total_count":3}
+GET /api/v1/accounts/{accountId}/wechat/drafts?offset=0&count=10
+→ 200 {"total_count":3,"items":[
+  {"title":"RC-01 产品路由复验 2026-11-23 1600"},
+  {"title":"REF41 方案A 真实草稿回执验收"},
+  {"title":"REF41 真实公众号草稿验收"}
+]}
+
+4. 产品路由删除闸门（不带 confirm）
+DELETE /api/v1/accounts/{accountId}/wechat/drafts/EKrmuYPOPNcu1A6jcfSuJhToZ_QhE2QtM__LjzLa679SlsriCIym2bKiGSlGfHip
+body: {}
+→ 409
+{"error":{"code":"confirm_required",
+ "message":"删除公众号草稿前必须逐张确认；本接口不提供批量删除。",
+ "request_id":"ASUS/n9NXWKUFuq-000009"}}
+结果：草稿未被删除。
+
+5. 产品路由逐篇删除（带 confirm）
+DELETE /api/v1/accounts/{accountId}/wechat/drafts/EKrmuYPOPNcu1A6jcfSuJhToZ_QhE2QtM__LjzLa679SlsriCIym2bKiGSlGfHip
+body: {"confirm":true}
+→ 200
+{"media_id":"EKrmuYPOPNcu1A6jcfSuJhToZ_QhE2QtM__LjzLa679SlsriCIym2bKiGSlGfHip",
+ "message":"草稿已删除","ok":true}
+
+6. 删除后回读
+GET /api/v1/accounts/{accountId}/wechat/drafts/count
+→ 200 {"total_count":2}
+GET /api/v1/accounts/{accountId}/wechat/drafts?offset=0&count=10
+→ 200 {"total_count":2,"items":[
+  {"title":"REF41 方案A 真实草稿回执验收"},
+  {"title":"REF41 真实公众号草稿验收"}
+]}
+临时草稿已从列表消失；既有两篇真实草稿仍在。
+
+结论：
+- 产品路由 list/count/delete 均对真实微信 API 生效，不依赖 mock。
+- 删除必须逐篇确认；不带 confirm 返回 409，单次只接受一个 media_id；无批量删除接口。
+- 未调用发表、群发或 freepublish；没有触碰既有真实草稿。

@@ -1,0 +1,30 @@
+-[ RECORD 1 ]---------+-----------------------------------------------------------------
+id                    | a60c08b3-2815-47e6-b7f0-0ea137d3083e
+title                 | RC-01 真实草稿闭环 2026-11-23
+status                | pushed
+revision              | 7
+wechat_draft_media_id | EKrmuYPOPNcu1A6jcfSuJtdTXzHJmYJIXPNHAy-rYS9mz5jaXCnPyRXMktHidm08
+draft_maybe_published | f
+
+-[ RECORD 1 ]------------------------------------
+id         | 9f524298-c44b-4954-8df3-36b862f775c4
+work_id    | a60c08b3-2815-47e6-b7f0-0ea137d3083e
+account_id | 8be65226-3bbc-4f96-b1c2-215f60d0ca71
+action     | add
+status     | failed
+over_limit | f
+created_at | 2026-11-23 07:04:10.874449+00
+-[ RECORD 2 ]------------------------------------
+id         | 6601120f-9c40-40c6-9a0e-616e3c69e834
+work_id    | a60c08b3-2815-47e6-b7f0-0ea137d3083e
+account_id | 8be65226-3bbc-4f96-b1c2-215f60d0ca71
+action     | add
+status     | ok
+over_limit | f
+created_at | 2026-11-23 07:04:37.633488+00
+
+-[ RECORD 1 ]-----+-------------------------------------
+account_id        | 8be65226-3bbc-4f96-b1c2-215f60d0ca71
+last_check_ok     | t
+last_check_result | 连接正常，已成功获取 access_token
+

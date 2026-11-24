@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { AccountCreateForm, credTone, CredentialPanel } from '@/components/account-forms'
 import { confirm, Dialog } from '@/components/dialog'
 import { PlatformConnectionCard } from '@/components/platform-connection'
+import { WechatDraftPanel } from '@/components/wechat-drafts'
 import { Badge, Button, Card, CardHeader, cn, Empty, Field, Input, Notice, PageHeader, PageLoading, PlatformMark, platformFormatLabel, platformLabel, platformFormats, roleReadOnlyHint, Select, Switch, Textarea } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post } from '@/lib/api'
 import { fmtTime } from '@/lib/format'
@@ -292,6 +293,7 @@ function AccountDetail({ account, onStatusChange, canManage }: {
   return (
     <div className="space-y-5">
       {platformConnectionCard}{basicInformationCard}
+      {account.platform === 'wechat_mp' && <WechatDraftPanel account={account} canDelete={canManage} />}
       {mergeOpen && <AccountMergeDialog account={account} open={mergeOpen} onClose={() => setMergeOpen(false)} onDone={() => inv(['accounts'])} />}
       <ChangeTypeDialog
         account={account}

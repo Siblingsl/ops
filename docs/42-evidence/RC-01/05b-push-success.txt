@@ -1,0 +1,21 @@
+event: step
+data: {"current":1,"name":"upload_images","status":"running","total":1}
+
+event: step
+data: {"current":1,"name":"upload_images","status":"done","total":1}
+
+event: step
+data: {"current":0,"name":"upload_cover","status":"running","total":0}
+
+event: step
+data: {"current":0,"name":"upload_cover","status":"done","total":0}
+
+event: step
+data: {"current":0,"name":"write_draft","status":"running","total":0}
+
+event: step
+data: {"current":0,"name":"write_draft","status":"done","total":0}
+
+event: done
+data: {"action":"add","backend_url":"https://mp.weixin.qq.com/","draft_media_id":"EKrmuYPOPNcu1A6jcfSuJtdTXzHJmYJIXPNHAy-rYS9mz5jaXCnPyRXMktHidm08","today_count":1}
+

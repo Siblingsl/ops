@@ -1,0 +1,19 @@
+# RC-02 真实 datacube 三端点返回（2026-11-23 16:24 CST）
+
+环境：OPS_DEV=0；OPS_WECHAT_BASE=https://api.weixin.qq.com；数据库 ops_ref41；账号 8be65226-3bbc-4f96-b1c2-215f60d0ca71。
+凭证：wechat_credential 密文（key_version=1），经 OPS_MASTER_KEY 解密后仅在进程内使用；未输出 AppSecret，AppID 已脱敏。
+
+探测命令：cd server; go run ./cmd/rc02probe（临时 probe，完成后已删除）
+输出（原样）：
+
+account=8be65226-3bbc-4f96-b1c2-215f60d0ca71 app_id=（已脱敏） secret_len=32
+token_ok=true token_len=137 expires_in=7200 elapsed_ms=494
+getarticletotal(2026-11-22): error elapsed_ms=88 errcode=48001 errmsg="api unauthorized rid: 6b03f883-7cb4b80c-35a11d6d" readable="该公众号没有此接口权限。"
+getusersummary(2026-11-16..2026-11-22): error elapsed_ms=107 errcode=48001 errmsg="api unauthorized rid: 6b03f883-12507621-72b88259" readable="该公众号没有此接口权限。"
+getusercumulate(2026-11-16..2026-11-22): error elapsed_ms=89 errcode=48001 errmsg="api unauthorized rid: 6b03f883-69257fa0-481465f4" readable="该公众号没有此接口权限。"
+
+
+说明：
+- getarticlesummary 未在产品适配器中实现；按 docs/14 §4.2 第 1 条，写快照只使用 getarticletotal，粉丝使用 getusersummary/getusercumulate。
+- 三个真实端点均返回 errcode=48001 api unauthorized，说明该个人未认证号没有任何 datacube 权限；不是空数组、不是 0 值。
+- token 获取成功（token_len=137、expires_in=7200），证明凭证有效；权限问题与凭证问题已区分。

@@ -1,0 +1,12 @@
+RC-01 白名单修复后真实 GetToken 与草稿计数基线（2026-11-23）
+命令摘要（脱敏）：
+  临时 probe：server/cmd/rc01probe
+  真实 api.weixin.qq.com
+输出：
+  app_id_masked=<REDACTED> cipher_len=60
+  master_key_source=env
+  secret_decrypted=true secret_len=<REDACTED>
+  token_ok=true token_len=137 expires_in=7200 elapsed_ms=431
+  draft_count_ok=true total_count=2
+
+说明：total_count=2 是新建 RC-01 测试草稿之前的公众号草稿箱基线。

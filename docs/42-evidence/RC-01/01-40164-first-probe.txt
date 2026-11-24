@@ -1,0 +1,10 @@
+RC-01 首次真实 GetToken：40164（2026-11-23，修复白名单前）
+命令摘要（脱敏）：
+  临时 probe：server/cmd/rc01probe
+  OPS_DATABASE_URL=本地 ops_ref41
+  OPS_MASTER_KEY=从本地 master key 文件读取（未打印、未落盘）
+  真实 api.weixin.qq.com
+输出：
+  token_ok=false errcode=40164 errmsg="invalid ip 221.3.15.164 ipv6 ::ffff:221.3.15.164, not in whitelist rid: 6b03d0ba-6ef39352-2f52751e" elapsed_ms=207
+
+真实出站 IP：221.3.15.164

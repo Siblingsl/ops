@@ -1,0 +1,5 @@
+                                                                                                                                                                capabilities                                                                                                                                                                 
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"workList": "supported", "detectedAt": "2026-10-22T07:59:25.209Z", "creatorLogin": "supported", "followerTotal": "unknown", "mainSiteLogin": "supported", "adapterVersion": "xhs-1", "browserVersion": "Chrome/155.0.8059.85", "mappingVersion": 1, "perNoteMetrics": "unknown", "noteImpressions": "unknown", "sessionTtlObserved": null}
+(1 row)
+

@@ -286,8 +286,8 @@ func (c *Client) DraftCount(ctx context.Context, token string) (int, error) {
 	return out.TotalCount, nil
 }
 
-// DraftDelete 删除一条草稿（Q-26）。产品路由未接入；仅按用户逐张确认后的调用方使用，
-// 不得用于批量清理（红线：逐张执行）。
+// DraftDelete 删除一条草稿（Q-26）。产品路由见 DELETE /accounts/{accountId}/wechat/drafts/{mediaId}；
+// 该路由仅按用户逐张确认后调用，不得批量清理（红线：逐张执行）。
 func (c *Client) DraftDelete(ctx context.Context, token, mediaID string) error {
 	return c.postJSON(ctx, "/cgi-bin/draft/delete", token, map[string]any{"media_id": mediaID}, nil)
 }

@@ -1,0 +1,121 @@
+{
+  "limits": {
+    "chunk_bytes": 65536,
+    "max_request_bytes": 33554432,
+    "max_response_bytes": 16777216
+  },
+  "minimum_client_version": "1.0.0",
+  "platform_collection": {
+    "account_sync_platforms": [
+      "xhs"
+    ],
+    "enabled": true,
+    "limits": {
+      "challenge_per_minute": 60,
+      "request_bytes": 65536,
+      "results_bytes": 2097152,
+      "v1_results_bytes": 524288,
+      "v2_account_batch_bytes": 524288,
+      "v2_catalog_batch_bytes": 524288,
+      "v2_content_batch_bytes": 2097152,
+      "v2_content_bytes": 1048576
+    },
+    "metrics_refresh_platforms": [],
+    "operations": [
+      "platform.device.register",
+      "platform.connection.create",
+      "platform.connection.verify",
+      "platform.connection.mine.list",
+      "platform.connection.mine.revoke",
+      "platform.presence",
+      "platform.run.claim",
+      "platform.run.heartbeat",
+      "platform.run.result",
+      "platform.run.receipt",
+      "platform.account.sync.request",
+      "platform.metrics.refresh.request",
+      "platform.sync.operation.resume",
+      "platform.comment.ingest",
+      "platform.parser.events",
+      "browser.policy.check",
+      "publish.task.claim",
+      "publish.task.heartbeat",
+      "publish.task.result",
+      "publish.health.claim",
+      "publish.health.heartbeat",
+      "publish.health.result",
+      "benchmark.observe.claim",
+      "benchmark.observe.heartbeat",
+      "benchmark.observe.result"
+    ],
+    "platforms": [
+      "wechat_mp",
+      "xhs"
+    ],
+    "protocol_version": 1,
+    "protocol_versions": [
+      1,
+      2
+    ],
+    "purpose": "platform_collection",
+    "v2": {
+      "account_sync_platforms": [
+        "xhs"
+      ],
+      "enabled": true,
+      "limits": {
+        "account_batch_bytes": 524288,
+        "account_batch_rows": 25,
+        "catalog_batch_bytes": 524288,
+        "content_batch_bytes": 2097152,
+        "content_batch_rows": 10,
+        "content_item_bytes": 1048576,
+        "content_run_bytes": 8388608,
+        "max_json_depth": 16,
+        "max_media_refs": 200,
+        "max_tags": 100,
+        "max_topics": 100,
+        "max_url_bytes": 8192,
+        "metrics_batch_bytes": 524288,
+        "run_rows": 100
+      },
+      "metrics_refresh_platforms": [],
+      "operations": [
+        "platform.account.sync.request",
+        "platform.metrics.refresh.request",
+        "platform.sync.operation.resume"
+      ],
+      "platform_capabilities": {
+        "wechat_mp": {
+          "catalog": "unknown",
+          "content": "unknown",
+          "metrics": "unknown",
+          "profile": "unknown"
+        },
+        "xhs": {
+          "catalog": "unknown",
+          "content": "unknown",
+          "metrics": "unknown",
+          "profile": "unknown"
+        }
+      },
+      "protocol_version": 2,
+      "result_types": [
+        "account_snapshot",
+        "work_catalog",
+        "work_content",
+        "metrics",
+        "control"
+      ],
+      "task_kinds": [
+        "account_sync",
+        "content",
+        "collect"
+      ]
+    }
+  },
+  "platforms": [
+    "windows-x64"
+  ],
+  "protocol_version": 1
+}

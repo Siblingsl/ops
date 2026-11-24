@@ -1,0 +1,28 @@
+Debugger listening on ws://127.0.0.1:9229/24fce217-262f-483e-b4ea-829f4f0e54d2
+For help, see: https://nodejs.org/learn/getting-started/debugging
+
+DevTools listening on ws://127.0.0.1:9222/devtools/browser/e5268056-0503-445f-a4ed-19fe683d2772
+Debugger attached.
+Debugger ending on ws://127.0.0.1:9229/24fce217-262f-483e-b4ea-829f4f0e54d2
+For help, see: https://nodejs.org/learn/getting-started/debugging
+Debugger attached.
+Debugger ending on ws://127.0.0.1:9229/24fce217-262f-483e-b4ea-829f4f0e54d2
+For help, see: https://nodejs.org/learn/getting-started/debugging
+Debugger attached.
+Debugger ending on ws://127.0.0.1:9229/24fce217-262f-483e-b4ea-829f4f0e54d2
+For help, see: https://nodejs.org/learn/getting-started/debugging
+Debugger attached.
+Debugger ending on ws://127.0.0.1:9229/24fce217-262f-483e-b4ea-829f4f0e54d2
+For help, see: https://nodejs.org/learn/getting-started/debugging
+[platform-auto] 领到任务 {"platform":"xhs","taskKind":"collect"}
+[collect] profile-check {"hasMeta":true,"metaPlatform":"xhs","runPlatform":"xhs"}
+[platform-auto] 完成 {"runStatus":"failed","accepted":0,"rejected":0,"errorCode":"platform_login_required","adoptErrors":0,"adoptReason":null}
+Debugger attached.
+Debugger ending on ws://127.0.0.1:9229/24fce217-262f-483e-b4ea-829f4f0e54d2
+For help, see: https://nodejs.org/learn/getting-started/debugging
+Debugger attached.
+Debugger ending on ws://127.0.0.1:9229/24fce217-262f-483e-b4ea-829f4f0e54d2
+For help, see: https://nodejs.org/learn/getting-started/debugging
+Debugger attached.
+Debugger ending on ws://127.0.0.1:9229/24fce217-262f-483e-b4ea-829f4f0e54d2
+For help, see: https://nodejs.org/learn/getting-started/debugging

@@ -1,0 +1,16 @@
+RC-01 uploadimg 证明
+====================
+
+请求摘要（脱敏）：
+POST https://api.weixin.qq.com/cgi-bin/media/uploadimg?access_token=<REDACTED>
+Content-Type: multipart/form-data
+文件：本地正文/封面测试图 900x1200 image/jpeg（work a60c08b3 的 asset 5b73f8b8-15df-4f08-9720-654c4a588a58）
+响应：成功返回图片 URL（未记录 token；SSE step upload_images: running → done，total=1）
+
+返回的图片 URL（已写入真实草稿正文）：
+https://mmbiz.qpic.cn/mmbiz_jpg/casakhZn70ZibQaV4TSRL9dIkYEKwR22jGR5onvjOv7LIKrvU00oDpNmYAt7DoIujeHGHqr52vttHjPDAS1rLibPzpJib59JEqyTjn6zibG864o/640?from=appmsg
+
+URL 可访问性复核（2026-11-23）：
+http_code=200 content_type=image/jpeg size=19881
+
+结论：正文图不是本地路径，也不是 mock；是真实 uploadimg 返回并由微信 CDN 托管的图片。

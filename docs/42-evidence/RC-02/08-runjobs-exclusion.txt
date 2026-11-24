@@ -1,0 +1,28 @@
+# RC-02 RunJobs 对真实账号的调度排除（2026-11-23 16:25 CST）
+
+代码路径：
+- jobs.go 的 RunJobs 周期任务调用 wechatMetricsDaily；后者仅在 10:00 后执行。
+- datacube.go:294-295 的候选条件：platform='wechat_mp'、status='active'、NOT is_demo、
+  datacube_state='ok'、metrics_wechat_auto、wechat_credential.last_check_ok。
+- 每个候选再用 markOnce('wechat-metrics:'+account_id+':'+day) 保证每天一次。
+
+真实库查询（与上述条件一致）：
+ candidates 
+------------
+          0
+(1 row)
+
+
+
+真实账号的实际状态：
+                  id                  | datacube_state | metrics_wechat_auto | metrics_wechat_last_at 
+--------------------------------------+----------------+---------------------+------------------------
+ 8be65226-3bbc-4f96-b1c2-215f60d0ca71 | no_permission  | t                   | 
+(1 row)
+
+
+
+今日 metrics_sync_daily 审计数：0（见 03）。因此 RunJobs 不会为该账号派单，也不会产生真实行；
+这是 no_permission 的正确降级，不是“调度失败”。
+
+要产生真实 7 天样本，必须先把认证号 datacube 探测为 ok，再让 RunJobs 连续运行 7 天（或按日补跑）。

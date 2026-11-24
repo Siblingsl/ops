@@ -1,0 +1,38 @@
+# RC-02 数据库状态与真实行计数（2026-11-23 16:25 CST）
+
+库：ops_ref41；账号：8be65226-3bbc-4f96-b1c2-215f60d0ca71（REF41 真实公众号）。
+
+1) 账号能力状态
+ datacube_state |      datacube_checked_at      | metrics_wechat_auto | metrics_wechat_fails | metrics_wechat_note 
+----------------+-------------------------------+---------------------+----------------------+---------------------
+ no_permission  | 2026-11-23 08:25:50.224917+00 | t                   |                    0 | 
+(1 row)
+
+
+
+2) account_metric_daily 行数（真实账号）
+ account_metric_daily_rows | wechat_api_rows 
+---------------------------+-----------------
+                         0 |               0
+(1 row)
+
+
+
+3) 审计（每日同步/手动同步均无成功记录）
+ daily_audits | manual_audits 
+--------------+---------------
+            0 |             0
+(1 row)
+
+
+
+4) RunJobs 候选查询（与 datacube.go:294-295 的 WHERE 条件一致）
+ candidates 
+------------
+          0
+(1 row)
+
+
+
+结论：真实账号 datacube_state=no_permission；account_metric_daily 0 行；没有把空行、0 值或 mock 行写入真实账号。
+datacube_checked_at 为 UTC 08:25:50（CST 16:25:50），由真实 48001 触发更新。

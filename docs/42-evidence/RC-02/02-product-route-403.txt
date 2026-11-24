@@ -1,0 +1,19 @@
+# RC-02 产品同步路由真实 403（2026-11-23 16:25 CST）
+
+请求：POST http://127.0.0.1:18081/api/v1/accounts/8be65226-3bbc-4f96-b1c2-215f60d0ca71/metrics/sync-wechat
+认证：owner 临时会话（cookie + X-CSRF-Token；收口后会话已删除）
+请求体：{}
+
+响应状态：HTTP 403
+响应体（格式化，保留原始 request_id）：
+
+{
+  "error": {
+    "code": "wechat_capability",
+    "message": "当前公众号无权使用数据统计接口（通常需要微信认证）。请改用截图识别或手动录入。",
+    "request_id": "ASUS/TMC5LKmPW2-000004"
+  }
+}
+
+说明：该路由调用 syncDatacube（与每日任务 wechatMetricsOnce 同一函数），真实上游返回 48001 后被映射为
+403 wechat_capability；不是客户端伪造，也不是空列表。

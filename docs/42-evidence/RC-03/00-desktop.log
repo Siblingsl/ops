@@ -1,0 +1,4 @@
+
+[bridge] log: listening on 127.0.0.1:8765
+[bridge] log: verification control on 127.0.0.1:8766
+[mcp-executor] poll failed: 该工作台功能尚未开放

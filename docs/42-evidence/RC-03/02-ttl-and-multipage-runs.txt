@@ -1,0 +1,6 @@
+                  id                  | trigger | task_kind | status  |       error_code        |  stop_reason   |          started_at           |          finished_at          |                                                      counters                                                      
+--------------------------------------+---------+-----------+---------+-------------------------+----------------+-------------------------------+-------------------------------+--------------------------------------------------------------------------------------------------------------------
+ 5df84196-8894-44c6-a05d-3cd4ad32b497 | daily   | collect   | partial |                         | budget         | 2026-11-19 09:13:43.616194+00 | 2026-11-19 09:14:06.823592+00 | {"coverage": {"has_more": true, "pages_read": 3, "incomplete_reason": "page_budget"}, "stop_reason_raw": "budget"}
+ 4545c3b5-d040-420d-85cf-c59ea12853a1 | daily   | collect   | failed  | platform_login_required | login_required | 2026-11-23 09:50:08.24017+00  | 2026-11-23 09:50:15.838056+00 | {"stop_reason_raw": "login_required"}
+(2 rows)
+

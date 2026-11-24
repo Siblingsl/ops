@@ -1,0 +1,31 @@
+# RC-02 人工录入链路与 RunJobs 功能测试（2026-11-23 16:28 CST）
+
+命令（server 目录，OPS_DEV=1 测试库）：
+go test ./internal/app -run '^(TestDR09Followers|TestDR09FollowerFailureIsNonFatal|TestI6Followers.*|TestRunJobsDispatchesWechatDailySync)$' -count=1 -v
+
+结果：EXIT=0
+--- PASS: TestRunJobsDispatchesWechatDailySync (1.32s)
+--- PASS: TestDR09Followers (0.17s)
+--- PASS: TestDR09FollowerFailureIsNonFatal (0.09s)
+PASS
+ok  	ops/internal/app	8.664s
+
+说明：
+- TestDR09Followers 覆盖：POST /accounts/{id}/followers 人工录入一天 → GET 读回 source=manual；接口同步 7 天；
+  同日 wechat_api 优先于 manual；重复同步 upsert 不重复；未来日期/负数/缺项/格式错均 422。使用 mock 微信与测试库，
+  只证明人工录入与来源优先级链路可执行，不作为真实微信样本。
+- TestDR09FollowerFailureIsNonFatal 覆盖：粉丝接口失败不阻断文章同步。
+- TestRunJobsDispatchesWechatDailySync 覆盖：RunJobs 在测试库中调度每日公众号同步（mock 微信），
+  只证明调度/持久化代码路径，不是真实认证号调度。
+- 真实账号的 RunJobs 候选为 0，见 03/08 文件；没有真实粉丝行，也没有真实 7 天样本。
+
+补充（datacube/每日同步回归）：
+命令：go test ./internal/app -run '^(TestDR03WechatDatacubeSync|TestDR06WechatDailySync)$' -count=1 -v
+结果：EXIT=0
+--- PASS: TestDR06WechatDailySync (0.39s)
+--- PASS: TestDR03WechatDatacubeSync (0.43s)
+PASS
+ok  	ops/internal/app	7.667s
+
+说明：以上均为测试库 + mock 微信的功能回归，证明 datacube 三端点解析、no_permission 映射、
+每日同步/失败关闭自动同步逻辑无回归；不代表真实认证号已产生数据。

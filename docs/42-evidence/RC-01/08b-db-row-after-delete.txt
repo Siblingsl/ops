@@ -1,0 +1,8 @@
+-[ RECORD 1 ]---------+-----------------------------------------------------------------
+id                    | a60c08b3-2815-47e6-b7f0-0ea137d3083e
+title                 | RC-01 真实草稿闭环 2026-11-23
+status                | pushed
+revision              | 7
+wechat_draft_media_id | EKrmuYPOPNcu1A6jcfSuJtdTXzHJmYJIXPNHAy-rYS9mz5jaXCnPyRXMktHidm08
+draft_maybe_published | t
+

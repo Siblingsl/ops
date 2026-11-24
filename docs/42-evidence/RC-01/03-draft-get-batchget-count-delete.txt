@@ -1,0 +1,17 @@
+app_id_masked=<REDACTED> cipher_len=60
+master_key_source=env
+secret_decrypted=true secret_len=<REDACTED>
+token_ok=true token_len=137 expires_in=7200 elapsed_ms=405
+flow_media_id=EKrmuYPOPNcu1A6jcfSuJtdTXzHJmYJIXPNHAy-rYS9mz5jaXCnPyRXMktHidm08
+draft_get_ok=true title="RC-01 真实草稿闭环 2026-11-23" content_chars=651 content_sha256=48f7f000410b4cfbf8a2c500eea3dcd31c40dc416ea909401268c76b24dbea31
+draft_get_contains_rc01=true draft_get_contains_batchget=true image_url_count=1
+draft_image_url=https://mmbiz.qpic.cn/mmbiz_jpg/casakhZn70ZibQaV4TSRL9dIkYEKwR22jGR5onvjOv7LIKrvU00oDpNmYAt7DoIujeHGHqr52vttHjPDAS1rLibPzpJib59JEqyTjn6zibG864o/640?from=appmsg
+draft_batchget_ok=true total_count=3 item_count=3
+draft_batchget_item media_id=EKrmuYPOPNcu1A6jcfSuJtdTXzHJmYJIXPNHAy-rYS9mz5jaXCnPyRXMktHidm08 update_time=1795417480 title="RC-01 真实草稿闭环 2026-11-23"
+draft_batchget_item media_id=EKrmuYPOPNcu1A6jcfSuJrOhf7wKemfl3VNWA2ACc4BjdAdOOrSpA8BcKeBwIJO7 update_time=1795189005 title="REF41 方案A 真实草稿回执验收"
+draft_batchget_item media_id=EKrmuYPOPNcu1A6jcfSuJsH1FqYgyoPa5fXgxTn4BAbXQBGmBnjBObZjYy9h8SIW update_time=1795187295 title="REF41 真实公众号草稿验收"
+draft_batchget_has_target=true
+draft_count_before_delete_ok=true total_count=3
+draft_delete_ok=true
+draft_get_after_delete_ok=true errcode=40007
+draft_count_after_delete_ok=true total_count=2

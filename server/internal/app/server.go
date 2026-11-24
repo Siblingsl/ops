@@ -267,6 +267,10 @@ func (s *Server) buildRouter() http.Handler {
 			r.Delete("/accounts/{accountId}", s.h(s.deleteAccount))
 			r.Put("/accounts/{accountId}/wechat-credential", s.h(s.saveWechatCredential))
 			r.Post("/accounts/{accountId}/wechat-credential/test", s.h(s.testWechatCredential))
+			// RC-01 / D-221：草稿箱巡检与逐篇删除；list/count 只读，delete 仅 owner 且必须逐张确认。
+			r.Get("/accounts/{accountId}/wechat/drafts", s.h(s.listWechatDrafts))
+			r.Get("/accounts/{accountId}/wechat/drafts/count", s.h(s.countWechatDrafts))
+			r.Delete("/accounts/{accountId}/wechat/drafts/{mediaId}", s.h(s.deleteWechatDraft))
 
 			r.Get("/accounts/{accountId}/profile", s.h(s.getProfile))
 			r.Put("/accounts/{accountId}/profile", s.h(s.putProfile))
