@@ -364,12 +364,20 @@ export class DesktopClient extends ConfigMixin(PlatformMixin(ModelsMixin(Channel
    * 守卫仍要求 work_publish_state=submitted，不能让桌面证明绕过里程碑。
    * 已 submitted/scheduled/public 时幂等跳过；版本冲突时重读一次再试。
    */
-  async recordWorkSubmitted(workID: string, handoffNote: string): Promise<void> {
+  async recordWorkSubmitted(workID: string, handoffNote: string, manualPublished?: { noteID: string; url: string; publishedAt: string }): Promise<void> {
     const base = `/works/${encodeURIComponent(workID)}/publish-state`;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const current = await this.request<{ state?: string; version?: number }>(base);
       const state = current.state ?? '';
       if (state === 'submitted' || state === 'scheduled' || state === 'public') return;
+      const submittedRef: Record<string, unknown> = { handoff_note: handoffNote.slice(0, 200) };
+      if (manualPublished) {
+        submittedRef.manual_published = {
+          note_id: manualPublished.noteID,
+          url: manualPublished.url,
+          published_at: manualPublished.publishedAt
+        };
+      }
       try {
         await this.request(`${base}/transition`, {
           method: 'POST',
@@ -377,7 +385,7 @@ export class DesktopClient extends ConfigMixin(PlatformMixin(ModelsMixin(Channel
             base_version: current.version ?? 0,
             idempotency_key: randomUUID(),
             to: 'submitted',
-            submitted_ref: { handoff_note: handoffNote.slice(0, 200) }
+            submitted_ref: submittedRef
           })
         });
         return;

@@ -10,6 +10,8 @@ package app
 // 守卫要求发布里程碑已由既有发布进度服务登记——人工兜底不绕过里程碑纪律。
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -52,6 +54,80 @@ func stringOrEmpty(v any) string {
 	return ""
 }
 
+// ensureXhsManualSubmittedForAdopt 在小红书填写任务仍为 filled 时，先用用户
+// 输入的真实公开链接建立 xhs_manual_published 里程碑，再让 adopt 走既有
+// transitionPublishTask。这样人工发布不需要事后补发布包；ready 任务的外部
+// 登记仍保留原有“先有里程碑”的纪律。
+func (s *Server) ensureXhsManualSubmittedForAdopt(ctx context.Context, task *PublishTask, rawURL string,
+	publishedAt *time.Time, note, idempotencyKey string) error {
+	if task.Platform != "xhs" || task.State != "filled" {
+		return nil
+	}
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		state, err := loadPublishState(ctx, tx, task.WorkID, true)
+		if err != nil {
+			return err
+		}
+		if state != nil {
+			switch state.State {
+			case "submitted", "scheduled", "public":
+				return nil
+			default:
+				return stateInvalid("当前发布进度不能登记人工发布")
+			}
+		}
+		var revision, publishRevision int
+		if err := tx.QueryRow(ctx, `SELECT w.revision,w.publish_revision FROM work w
+			JOIN platform_account a ON a.id=w.account_id
+			WHERE w.id=$1 AND a.workspace_id=$2 AND w.deleted_at IS NULL FOR UPDATE OF w`,
+			task.WorkID, task.WorkspaceID).Scan(&revision, &publishRevision); err != nil {
+			return err
+		}
+		noteID, err := parseXhsNoteURL(rawURL)
+		if err != nil {
+			return err
+		}
+		at := s.now()
+		if publishedAt != nil {
+			at = *publishedAt
+		}
+		ref, err := s.buildXhsManualSubmittedRef(ctx, tx, task.WorkID, task.WorkspaceID, revision, &submittedRefInput{
+			HandoffNote: note,
+			ManualPublished: &manualPublishedRefInput{
+				NoteID: noteID, URL: strings.TrimSpace(rawURL), PublishedAt: &at,
+			},
+		})
+		if err != nil {
+			return err
+		}
+		rawRef, err := json.Marshal(ref)
+		if err != nil {
+			return err
+		}
+		actor := publishActorID(ctx)
+		res, err := tx.Exec(ctx, `INSERT INTO work_publish_state(work_id,state,version,submitted_ref,publication_revision,since,updated_by)
+			VALUES($1,'submitted',1,$2,$3,now(),$4) ON CONFLICT (work_id) DO NOTHING`,
+			task.WorkID, rawRef, publishRevision, actor)
+		if err != nil {
+			return err
+		}
+		if res.RowsAffected() == 0 {
+			state, err := loadPublishState(ctx, tx, task.WorkID, true)
+			if err != nil {
+				return err
+			}
+			if state != nil && (state.State == "submitted" || state.State == "scheduled" || state.State == "public") {
+				return nil
+			}
+			return stateInvalid("发布进度已变化，请重新读取后重试")
+		}
+		key := "adopt-manual:" + idempotencyKey
+		hash := sha256Hex([]byte("adopt-manual:" + task.ID.String() + ":" + rawURL))
+		return publishStateEventInsert(ctx, tx, task.WorkID, "transition", nil, "submitted", 1,
+			map[string]any{"submitted_ref": json.RawMessage(rawRef)}, note, key, hash, actor)
+	})
+}
+
 // publishTaskAdopt：不填写，直接登记为 submitted。事件 kind=adopt、evidence.source=user，
 // 不伪造填写历史（filled_at 保持空）。
 func (s *Server) publishTaskAdopt(w http.ResponseWriter, r *http.Request) error {
@@ -92,6 +168,9 @@ func (s *Server) publishTaskAdopt(w http.ResponseWriter, r *http.Request) error 
 	if task.State == "published" || task.State == "submitted" {
 		w.Header().Set("Cache-Control", "no-store")
 		return ok(w, map[string]any{"task": task, "adopted": false, "reason": "already_recorded"})
+	}
+	if err := s.ensureXhsManualSubmittedForAdopt(r.Context(), task, urlText, in.PublishedAt, note, idempotencyKey); err != nil {
+		return err
 	}
 	evidence := map[string]any{
 		"source":      "user",

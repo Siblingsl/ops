@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -30,7 +31,17 @@ type publishStateInput struct {
 }
 
 type submittedRefInput struct {
-	HandoffNote string `json:"handoff_note"`
+	HandoffNote     string                   `json:"handoff_note"`
+	ManualPublished *manualPublishedRefInput `json:"manual_published,omitempty"`
+}
+
+// manualPublishedRefInput 是小红书人工发布后的真实回读凭证。小红书没有
+// 发布包交接：用户在草稿箱点发布后，OPS 只能根据平台回读登记 submitted，
+// 不能为了通过旧守卫再补生成一个从未用于发布的包。
+type manualPublishedRefInput struct {
+	NoteID      string     `json:"note_id"`
+	URL         string     `json:"url"`
+	PublishedAt *time.Time `json:"published_at"`
 }
 
 type scheduleEvidence struct {
@@ -295,7 +306,7 @@ func (s *Server) transitionPublishState(w http.ResponseWriter, r *http.Request) 
 				}
 			}
 			if currentState == "" {
-				ref, err := s.buildSubmittedRef(r.Context(), tx, m.ID, platform, workStatus, revision, draftMediaID, in.SubmittedRef)
+				ref, err := s.buildSubmittedRef(r.Context(), tx, m.ID, actor.WorkspaceID, platform, workStatus, revision, draftMediaID, in.SubmittedRef)
 				if err != nil {
 					return err
 				}
@@ -437,10 +448,13 @@ type derivedSubmittedRef struct {
 	ReceiptID    *uuid.UUID `json:"receipt_id,omitempty"`
 	DraftMediaID string     `json:"draft_media_id,omitempty"`
 	Format       string     `json:"format,omitempty"`
+	NoteID       string     `json:"note_id,omitempty"`
+	PublishedURL string     `json:"url,omitempty"`
+	PublishedAt  *time.Time `json:"published_at,omitempty"`
 	RecordedAt   time.Time  `json:"recorded_at"`
 }
 
-func (s *Server) buildSubmittedRef(ctx context.Context, tx pgx.Tx, workID uuid.UUID, platform, status string, revision int,
+func (s *Server) buildSubmittedRef(ctx context.Context, tx pgx.Tx, workID, workspaceID uuid.UUID, platform, status string, revision int,
 	draftMediaID *string, in *submittedRefInput) (derivedSubmittedRef, error) {
 	ref := derivedSubmittedRef{Platform: platform, WorkRevision: revision, HandoffNote: strings.TrimSpace(in.HandoffNote), RecordedAt: s.now()}
 	switch platform {
@@ -459,38 +473,129 @@ func (s *Server) buildSubmittedRef(ctx context.Context, tx pgx.Tx, workID uuid.U
 			return ref, err
 		}
 		ref.Kind, ref.ReceiptID, ref.DraftMediaID = "wechat_draft_receipt", &receiptID, receipt
-	case "xhs", "toutiao":
+	case "xhs":
+		if in.ManualPublished != nil {
+			return s.buildXhsManualSubmittedRef(ctx, tx, workID, workspaceID, revision, in)
+		}
+		if err := s.fillXhsPackSubmittedRef(ctx, tx, workID, &ref, status); err != nil {
+			return ref, err
+		}
+	case "toutiao":
 		if status != "packed" {
 			return ref, stateInvalid("交接需要当前有效的发布包；生成发布包本身不代表已在平台提交")
 		}
 		if err := s.checkLatestMaterialBasis(ctx, tx, workID); err != nil {
 			return ref, err
 		}
-		if platform == "xhs" {
-			var format string
-			if err := tx.QueryRow(ctx, `SELECT content_format FROM work WHERE id=$1`, workID).Scan(&format); err != nil {
-				return ref, err
-			}
-			assets, err := readXhsPackAssets(ctx, tx, workID, format)
-			if err != nil {
-				return ref, err
-			}
-			for _, asset := range assets {
-				if _, err := s.readVerifiedPackAsset(asset); err != nil {
-					return ref, err
-				}
-			}
-			ref.Format = format
-		} else {
-			if err := tx.QueryRow(ctx, `SELECT content_format FROM work WHERE id=$1`, workID).Scan(&ref.Format); err != nil {
-				return ref, err
-			}
+		if err := tx.QueryRow(ctx, `SELECT content_format FROM work WHERE id=$1`, workID).Scan(&ref.Format); err != nil {
+			return ref, err
 		}
 		ref.Kind = "current_pack_handoff"
 	default:
 		return ref, validation("该平台不支持记录交接")
 	}
 	return ref, nil
+}
+
+// fillXhsPackSubmittedRef 保留原有“有发布包时按包交接”的路径；人工发布
+// 没有发布包时走 buildXhsManualSubmittedRef，不伪造一个事后包。
+func (s *Server) fillXhsPackSubmittedRef(ctx context.Context, tx pgx.Tx, workID uuid.UUID, ref *derivedSubmittedRef, status string) error {
+	if status != "packed" {
+		return stateInvalid("交接需要当前有效的发布包；生成发布包本身不代表已在平台提交")
+	}
+	if err := s.checkLatestMaterialBasis(ctx, tx, workID); err != nil {
+		return err
+	}
+	var format string
+	if err := tx.QueryRow(ctx, `SELECT content_format FROM work WHERE id=$1`, workID).Scan(&format); err != nil {
+		return err
+	}
+	assets, err := readXhsPackAssets(ctx, tx, workID, format)
+	if err != nil {
+		return err
+	}
+	for _, asset := range assets {
+		if _, err := s.readVerifiedPackAsset(asset); err != nil {
+			return err
+		}
+	}
+	ref.Format = format
+	ref.Kind = "current_pack_handoff"
+	return nil
+}
+
+// buildXhsManualSubmittedRef 只接受真实小红书笔记回读：note_id 与公开链接中的
+// note id 必须一致，发布时间不能早于作品创建、晚于当前时间；同时要求本作品
+// 确有一个已保存草稿的 xhs 填写任务，防止把任意链接登记成 OPS 的填写成果。
+func (s *Server) buildXhsManualSubmittedRef(ctx context.Context, tx pgx.Tx, workID, workspaceID uuid.UUID,
+	revision int, in *submittedRefInput) (derivedSubmittedRef, error) {
+	ref := derivedSubmittedRef{Platform: "xhs", WorkRevision: revision, HandoffNote: strings.TrimSpace(in.HandoffNote), RecordedAt: s.now()}
+	manual := in.ManualPublished
+	noteID := strings.ToLower(strings.TrimSpace(manual.NoteID))
+	if !xhsManualNoteIDPattern.MatchString(noteID) {
+		return ref, validationFields("小红书笔记编号格式不正确", map[string]string{"submitted_ref.manual_published.note_id": "需要 24 位十六进制笔记编号"})
+	}
+	urlNoteID, err := parseXhsNoteURL(manual.URL)
+	if err != nil {
+		return ref, err
+	}
+	if urlNoteID != noteID {
+		return ref, validationFields("小红书公开链接与笔记编号不一致", map[string]string{"submitted_ref.manual_published.url": "链接中的 note id 必须与 note_id 一致"})
+	}
+	if manual.PublishedAt == nil || manual.PublishedAt.IsZero() {
+		return ref, validationFields("人工发布回读需要发布时间", map[string]string{"submitted_ref.manual_published.published_at": "请填写平台显示的发布时间"})
+	}
+	if manual.PublishedAt.After(s.now().Add(time.Minute)) {
+		return ref, validationFields("发布时间不能晚于当前时间", map[string]string{"submitted_ref.manual_published.published_at": "请填写平台显示的发布时间"})
+	}
+	var workCreated time.Time
+	if err := tx.QueryRow(ctx, `SELECT w.created_at FROM work w JOIN platform_account a ON a.id=w.account_id
+		WHERE w.id=$1 AND a.workspace_id=$2 AND w.deleted_at IS NULL`, workID, workspaceID).Scan(&workCreated); err != nil {
+		return ref, err
+	}
+	if manual.PublishedAt.Before(workCreated.Add(-time.Minute)) {
+		return ref, validationFields("发布时间早于本作品创建时间", map[string]string{"submitted_ref.manual_published.published_at": "请核对平台发布时间或作品记录"})
+	}
+	var draftSavedCount int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM publish_task
+		WHERE work_id=$1 AND platform='xhs' AND state IN ('filled','submitted','published')
+		  AND evidence->>'draft_saved'='true'`, workID).Scan(&draftSavedCount); err != nil {
+		return ref, err
+	}
+	if draftSavedCount == 0 {
+		return ref, stateInvalid("小红书人工发布交接需要本作品已保存草稿的真实填写任务")
+	}
+	ref.Kind = "xhs_manual_published"
+	ref.NoteID = noteID
+	ref.PublishedURL = strings.TrimSpace(manual.URL)
+	ref.PublishedAt = manual.PublishedAt
+	return ref, nil
+}
+
+var (
+	xhsManualNoteIDPattern = regexp.MustCompile(`^[0-9a-f]{24}$`)
+	xhsNotePathPattern     = regexp.MustCompile(`^/explore/([0-9a-f]{24})/?$`)
+)
+
+func parseXhsNoteURL(raw string) (string, error) {
+	text := strings.TrimSpace(raw)
+	if text == "" || len(text) > 1024 {
+		return "", validationFields("请填写小红书公开链接", map[string]string{"submitted_ref.manual_published.url": "链接不能为空且不能超过 1024 字符"})
+	}
+	parsed, err := url.ParseRequestURI(text)
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Hostname() == "" {
+		return "", validationFields("小红书公开链接无效", map[string]string{"submitted_ref.manual_published.url": "请输入 https://www.xiaohongshu.com/explore/<note_id> 形式的链接"})
+	}
+	switch strings.ToLower(parsed.Hostname()) {
+	case "xiaohongshu.com", "www.xiaohongshu.com":
+	default:
+		return "", validationFields("小红书公开链接域名不正确", map[string]string{"submitted_ref.manual_published.url": "只接受 xiaohongshu.com 的公开笔记链接"})
+	}
+	matches := xhsNotePathPattern.FindStringSubmatch(parsed.Path)
+	if len(matches) != 2 {
+		return "", validationFields("小红书公开链接路径不正确", map[string]string{"submitted_ref.manual_published.url": "链接必须是 /explore/<24 位 note_id>"})
+	}
+	return strings.ToLower(matches[1]), nil
 }
 
 func (s *Server) validateScheduleEvidence(ctx context.Context, tx pgx.Tx, workID, workspaceID uuid.UUID, platform string,

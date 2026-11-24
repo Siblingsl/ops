@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -208,7 +209,13 @@ func (s *Server) markInitialOrLegacyReplay(w http.ResponseWriter, r *http.Reques
 			return nil
 		}
 		if current.Status != "pushed" && current.Status != "packed" {
-			return stateInvalid("作品还没有进入草稿箱或生成发布包")
+			allowed, err := s.xhsManualPublishReady(r.Context(), tx, workID, urlText)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				return stateInvalid("作品还没有进入草稿箱或生成发布包")
+			}
 		}
 		at := s.now()
 		if in.PublishedAt != nil {
@@ -401,6 +408,41 @@ func correctionMsgID(current publicationState, nextURL *string) *string {
 		return nil
 	}
 	return &parsed
+}
+
+func (s *Server) xhsManualPublishReady(ctx context.Context, tx pgx.Tx, workID uuid.UUID, rawURL string) (bool, error) {
+	var platform string
+	err := tx.QueryRow(ctx, `SELECT a.platform FROM work w JOIN platform_account a ON a.id=w.account_id
+		WHERE w.id=$1 AND w.deleted_at IS NULL`, workID).Scan(&platform)
+	if err != nil {
+		return false, err
+	}
+	if platform != "xhs" || strings.TrimSpace(rawURL) == "" {
+		return false, nil
+	}
+	urlNoteID, err := parseXhsNoteURL(rawURL)
+	if err != nil {
+		return false, nil
+	}
+	state, err := loadPublishState(ctx, tx, workID, false)
+	if err != nil {
+		return false, err
+	}
+	if state == nil || state.State != "submitted" || len(state.SubmittedRef) == 0 {
+		return false, nil
+	}
+	var ref struct {
+		Kind        string     `json:"kind"`
+		NoteID      string     `json:"note_id"`
+		PublishedAt *time.Time `json:"published_at"`
+	}
+	if err := json.Unmarshal(state.SubmittedRef, &ref); err != nil {
+		return false, nil
+	}
+	if ref.Kind != "xhs_manual_published" || ref.NoteID == "" || ref.NoteID != urlNoteID {
+		return false, nil
+	}
+	return true, nil
 }
 
 func validatePublishedValues(rawURL string, publishedAt *time.Time, now time.Time) error {

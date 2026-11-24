@@ -13,8 +13,11 @@ type cxPublishStateView struct {
 	State        *string `json:"state"`
 	Version      int     `json:"version"`
 	SubmittedRef struct {
-		Kind        string `json:"kind"`
-		HandoffNote string `json:"handoff_note"`
+		Kind        string     `json:"kind"`
+		HandoffNote string     `json:"handoff_note"`
+		NoteID      string     `json:"note_id"`
+		URL         string     `json:"url"`
+		PublishedAt *time.Time `json:"published_at"`
 	} `json:"submitted_ref"`
 	ScheduledAt  *time.Time `json:"scheduled_at"`
 	Registration struct {
