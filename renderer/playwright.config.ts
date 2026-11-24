@@ -105,6 +105,8 @@ const desktopOnly = [
   'st08-sensitive-word-undo.spec.ts',
   'toutiao-preview.spec.ts',
   'toutiao-ui.spec.ts',
+  // OPT-W05：新建作品流桌面防回归（原 Web nw-p0..p5 的核心断言浓缩）。
+  'nw-create-work-desktop.spec.ts',
 ]
 
 const sharedScenarios = [
@@ -123,6 +125,11 @@ const sharedScenarios = [
   'd122-ui-layout.spec.ts',
   'd123-ui-alignment.spec.ts',
   'skills-boundaries.spec.ts',
+  // OPT-W05：技能库 CRUD/完整性/并发/回执，按桌面设置窗形态迁入。
+  'skills.spec.ts',
+  'skills-completion.spec.ts',
+  'skills-concurrency.spec.ts',
+  'skills-history.spec.ts',
   'toutiao-completion.spec.ts',
   'sec-rr7-navigation.spec.ts',
   'sec-tiptap3-bubble-menu.spec.ts',
