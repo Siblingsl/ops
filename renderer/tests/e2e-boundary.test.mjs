@@ -1,4 +1,4 @@
-// 桌面 renderer 的 E2E 边界守卫：用例目录只服务桌面形态，不得反向依赖 web/。
+// 桌面 renderer 的 E2E 边界守卫：用例目录只服务桌面形态，不得引用已废弃的 web/ 路径或 Web 端口。
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import test from 'node:test'
@@ -9,12 +9,12 @@ const root = resolve(import.meta.dirname, '..')
 const e2eDir = join(root, 'e2e')
 
 const FORBIDDEN = [
-  { pattern: /\/web\/e2e/, name: '引用 web/e2e 路径' },
-  { pattern: /\.\.\/(?:\.\.\/)*web\//, name: '相对路径穿越到 web/' },
-  { pattern: /127\.0\.0\.1:5179/, name: 'Web dev 端口 5179' },
-  { pattern: /127\.0\.0\.1:8180/, name: 'Web e2e API 端口 8180' },
-  { pattern: /127\.0\.0\.1:8191/, name: 'Web mock 端口 8191' },
-  { pattern: /OPS_E2E_MOCK_BASE_URL\s*=\s*'http:\/\/127\.0\.0\.1:8191/, name: 'Web mock 端口' },
+  { pattern: /\/web\/e2e/, name: '引用已废弃的 web/e2e 路径' },
+  { pattern: /\.\.\/(?:\.\.\/)*web\//, name: '相对路径穿越到已废弃的 web/' },
+  { pattern: /127\.0\.0\.1:5179/, name: '已废弃的 Web dev 端口 5179' },
+  { pattern: /127\.0\.0\.1:8180/, name: '已废弃的 Web e2e API 端口 8180' },
+  { pattern: /127\.0\.0\.1:8191/, name: '已废弃的 Web mock 端口 8191' },
+  { pattern: /OPS_E2E_MOCK_BASE_URL\s*=\s*'http:\/\/127\.0\.0\.1:8191/, name: '已废弃的 Web mock 端口' },
 ]
 
 function files(dir) {
@@ -26,7 +26,7 @@ function stripComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 }
 
-test('桌面 e2e 不依赖 web 目录或 Web 端口', () => {
+test('桌面 e2e 不引用已废弃的 web/ 目录或 Web 端口', () => {
   const offenders = []
   for (const file of files(e2eDir)) {
     const text = stripComments(readFileSync(file, 'utf8'))
@@ -40,11 +40,11 @@ test('桌面 e2e 不依赖 web 目录或 Web 端口', () => {
 test('桌面 Playwright 配置的 testDir 指向自身 e2e', () => {
   const config = stripComments(readFileSync(join(root, 'playwright.config.ts'), 'utf8'))
   assert.match(config, /testDir:\s*'\.\/e2e'/)
-  assert.equal(/web\/e2e/.test(config), false, '桌面配置不应再指向 web/e2e')
+  assert.equal(/web\/e2e/.test(config), false, '桌面配置不应再指向已废弃的 web/e2e')
 })
 
 // 桌面 runner 的 process.cwd() 是仓库根 renderer/，到仓库根只需一级 ..
-// 沿用 Web 的 ../ 深度（两级）会越出仓库根，产物落到 F:\code\project\.playwright-results
+// 历史写法沿用旧的 ../ 深度（两级）会越出仓库根，产物落到 F:\code\project\.playwright-results
 // 这类仓库外路径，CI 收集不到，本地还会静默污染上层目录。
 const WRONG_DEPTH = [
   { pattern: /['"`]\.\.\/\.\.(?:['"`]|\/)/, name: '相对路径上溯两级（已越出仓库根）' },
@@ -90,8 +90,8 @@ test('桌面 e2e 目录保留完整用例集与独立辅助文件', () => {
   assert.equal(/web\/e2e\/support/.test(helper), false)
 })
 
-// 产物目录按端分树：仓库根 output/ 的根层文件属于 Web，桌面只写 output/ 下的子树
-// （目前是 output/playwright/）。这样两端同时跑也不会互相覆盖截图。
+// 产物目录按端分树：仓库根 output/ 的根层留给其他端产物，桌面只写 output/ 下的子树
+// （目前是 output/playwright/），避免不同端的截图互相覆盖。
 test('桌面 e2e 只写 output/ 下自己的子树', () => {
   const offenders = []
   for (const file of files(e2eDir)) {
@@ -99,18 +99,18 @@ test('桌面 e2e 只写 output/ 下自己的子树', () => {
     for (const match of text.matchAll(/'\.\.\/output\/([^']*)'/g)) {
       const rest = match[1]
       if (rest === '' || !rest.includes('/')) {
-        offenders.push(`${relative(root, file)}: output/${rest} 落在 Web 的根层`)
+        offenders.push(`${relative(root, file)}: output/${rest} 落在仓库根 output 根层`)
       }
     }
   }
-  assert.deepEqual(offenders, [], `桌面 e2e 写到了 Web 的 output 根层：\n${offenders.join('\n')}`)
+  assert.deepEqual(offenders, [], `桌面 e2e 写到了仓库根 output 根层：\n${offenders.join('\n')}`)
 })
 
-test('桌面 e2e 不写入 Web 的报告目录', () => {
+test('桌面 e2e 不写入其他端的报告目录', () => {
   const offenders = []
   for (const file of files(e2eDir)) {
     const text = stripComments(readFileSync(file, 'utf8'))
     if (/\.playwright-results\/(?:web|web-report|report)\b/.test(text)) offenders.push(relative(root, file))
   }
-  assert.deepEqual(offenders, [], `桌面 e2e 写到 Web 的 .playwright-results 目录：\n${offenders.join('\n')}`)
+  assert.deepEqual(offenders, [], `桌面 e2e 写到其他端的 .playwright-results 目录：\n${offenders.join('\n')}`)
 })

@@ -81,41 +81,6 @@ jobs:
             "ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-server-a" \
             "ops-parser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-server-b" || true
 
-  web:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.14.0
-          run_install: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: pnpm
-          cache-dependency-path: |
-            web/pnpm-lock.yaml
-            renderer/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run typecheck
-      # 输入法回车保护：此前只有脚本、没有 CI 步骤，导致 4 处不合规长期无人发现。
-      - run: pnpm run check:ime-enter
-      # AGENTS.md 声明 Web/桌面边界守卫由 test:unit 强制，此前 CI 未执行该脚本。
-      - run: pnpm run test:unit
-      - run: pnpm run build
-      # Web 构建可指定跨源 API 基址；默认构建（上一行）仍使用相对路径。
-      - name: Build (cross-origin)
-        env:
-          OPS_API_BASE: https://ops.example.invalid
-        run: |
-          pnpm exec vite build --outDir dist-crossorigin
-          # apiUrl() 运行时拼接 `${base}/api/v1${path}`，产物里只需出现 base 本身
-          grep -rlq 'ops\.example\.invalid' dist-crossorigin \
-            || { echo "::error::OPS_API_BASE 没有被注入构建产物，检查 vite.config.ts 的 define"; exit 1; }
-
   desktop:
     runs-on: windows-latest
     timeout-minutes: 30
@@ -169,7 +134,7 @@ jobs:
 
   # desktop/test/*.e2e.cjs 此前没有任何 CI 步骤执行：desktop job 只跑 test/*.test.cjs，
   # e2e job 只跑 renderer 的 Playwright 用例。这套真实 Electron 端到端用例（主进程、
-  # utility process、生产 Service Worker、下载、退出确认）因此长期只有本地能覆盖。
+  # utility process、生产静态构建、下载、退出确认）因此长期只有本地能覆盖。
   desktop-e2e:
     runs-on: windows-latest
     timeout-minutes: 25
@@ -188,12 +153,12 @@ jobs:
           cache: pnpm
           cache-dependency-path: |
             desktop/pnpm-lock.yaml
-            web/pnpm-lock.yaml
+            renderer/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      # test/production-service-worker.e2e.cjs:11 直接读 web/dist，而 `pnpm test:e2e`
-      # 只执行 `pnpm build`（tsc 编译主进程），不会构建 web，必须先产出生产包。
-      - name: Build web production bundle
-        working-directory: web
+      # test/production-service-worker.e2e.cjs:11 直接读 renderer/dist，而 `pnpm test:e2e`
+      # 只执行 `pnpm build`（tsc 编译主进程），不会构建 renderer，必须先产出生产包。
+      - name: Build renderer static bundle
+        working-directory: renderer
         run: |
           pnpm install --frozen-lockfile
           pnpm run build
@@ -223,7 +188,7 @@ jobs:
           --health-retries 10
     defaults:
       run:
-        working-directory: web
+        working-directory: renderer
     env:
       OPS_E2E_ADMIN_URL: postgres://ops:ops_ci@127.0.0.1:5432/ops?sslmode=disable
     steps:
@@ -274,36 +239,19 @@ jobs:
         with:
           node-version: "22"
           cache: pnpm
-          cache-dependency-path: |
-            web/pnpm-lock.yaml
-            renderer/pnpm-lock.yaml
+          cache-dependency-path: renderer/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
-      - name: E2E 同名用例守卫
-        working-directory: .
-        run: node scripts/check-e2e-pairs.mjs
       - name: BE-03 权限矩阵清单守卫
         working-directory: .
         run: node scripts/check-route-permissions.mjs --check
-      - name: Install desktop renderer for UI tests
-        if: matrix.shard == 1
-        run: pnpm --dir ../renderer install --frozen-lockfile
-      - name: Desktop renderer UI tests
-        if: matrix.shard == 1
-        working-directory: desktop
-        run: pnpm test:e2e:renderer
-      - name: OPT08 Profiler budget
-        if: matrix.shard == 2
-        run: pnpm exec playwright test e2e/opt08.spec.ts --grep @ci-isolated
       - name: Playwright
-        run: pnpm exec playwright test --shard=${{ matrix.shard }}/3 --grep-invert @ci-isolated
+        run: pnpm exec playwright test --project=desktop-renderer --project=desktop-renderer-shared-scenarios --shard=${{ matrix.shard }}/3
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: playwright-failure-${{ matrix.shard }}
           path: |
-            .playwright-results/web/
-            .playwright-results/web-report/
             .playwright-results/desktop-renderer/
             .playwright-results/desktop-renderer-report/
       - name: Stop bounded document parser workers

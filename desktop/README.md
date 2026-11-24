@@ -9,7 +9,7 @@ Windows x64 Electron 客户端。发行版从安装包本地资源加载桌面�
 
 设置页的“清除此账号本机数据”只删除当前登录账号在本机保存的 AI 配置，并清理当前业务站点的 Cookie、站点存储与缓存后退出登录；不删除线上数据，也不撤销线上设备。多个账号需分别登录清理。Windows 卸载后可能保留用户目录中的应用数据。
 
-桌面业务界面源码与依赖位于仓库根的 `renderer/`（与 `desktop/` 平级），独立于仓库的 `web/`；共用功能的修改需要分别维护。
+桌面业务界面源码与依赖位于仓库根的 `renderer/`（与 `desktop/` 平级），是唯一的前端源码；共用功能直接在 `renderer/` 内维护。
 
 ## 开发
 
@@ -27,7 +27,7 @@ pnpm test:e2e:renderer
 pnpm start
 ```
 
-renderer 单测位于 `../renderer/tests/`，Playwright 配置与用例分别位于 `../renderer/playwright.config.ts` 与 `../renderer/e2e/`。桌面用例使用 5287 / 8287 / 8297 三组端口，不读取 `web/e2e/`，也不依赖 Web 的测试依赖；运行前只需安装 renderer 自身依赖（见上）。`web/` 侧另有独立的 Web 浏览器用例集，两端分别维护。
+renderer 单测位于 `../renderer/tests/`，Playwright 配置与用例分别位于 `../renderer/playwright.config.ts` 与 `../renderer/e2e/`。桌面用例使用 5287 / 8287 / 8297 三组端口，不读取其他前端的用例目录，也不依赖其他前端的测试依赖；运行前只需安装 renderer 自身依赖（见上）。
 
 `pnpm start` 会读取 Windows 当前系统代理，在可用的回环端口启动一份全新的 Vite 前端，让未打包 Electron 加载当前源码中的桌面 UI，并将业务 API 与 WebSocket 默认代理到 `https://ops-api.88813888.xyz`。普通 Web 开发仍默认使用 `localhost:5173` 并代理到 `http://localhost:8080`。需要隔离本地数据时，可在启动 Electron 前设置 `OPS_API_TARGET=http://localhost:8080` 并按仓库根目录说明启动本地 API 和数据库。确需使用其他本地前端服务时，可显式设置 `OPS_DESKTOP_DEV_URL`，地址只接受 localhost、127.0.0.1 或 ::1。打包发行版忽略该变量并固定使用 HTTPS API。已打开的旧客户端不会热切换页面；切换到这套启动方式前需完整退出旧实例，再启动一次。
 
@@ -46,7 +46,7 @@ pnpm start
 
 本地映射先保存为草稿，用户确认应用模式时才提交服务端。仅任务映射变化时保留已连接通道：新请求使用新版本；后台 Job 在入队时固定完整映射快照，继续使用原路由。供应商配置版本变化、通道断开、设备撤销或工作区授权收紧会使本机调用失败，不会静默改用服务器模型。通道确需重建且仍有模型请求时，客户端会提示等待，避免切换中断调用。
 
-`pnpm test:e2e` 会启动真实 Electron 主进程与 utility process：用本机 mock 业务页验证远程页面无 Node/IPC 暴露，主帧、iframe、Service Worker 伪造的桌面特权头不会转发；以本机 OpenAI 兼容 mock 验证 AI worker 的回环请求、无鉴权、401、重定向拒绝、跨块密钥回显拦截和响应流；并用 `web` 的生产构建（先执行 `pnpm --dir ../web build`，产物 `web/dist`）验证 Service Worker 的 API 不缓存、静态资源缓存和页面头隔离。另有可选的 `OPS_DESKTOP_REAL_ELECTRON_E2E=1 go test ./internal/app -run '^TestDesktopChannelWithRealElectron$' -count=1 -v`，通过隔离 `ops_test` 验证真实 Electron Session 与 Go 鉴权/WSS handler 的集成。以上均为本机测试，不证明生产 HTTPS/WSS、真实公网/本机模型、签名安装或干净 Windows 覆盖升级；当前 Squirrel 制品未签名，自动更新保持关闭。
+`pnpm test:e2e` 会启动真实 Electron 主进程与 utility process：用本机 mock 业务页验证远程页面无 Node/IPC 暴露，主帧、iframe、Service Worker 伪造的桌面特权头不会转发；以本机 OpenAI 兼容 mock 验证 AI worker 的回环请求、无鉴权、401、重定向拒绝、跨块密钥回显拦截和响应流；并用 `renderer` 的生产静态构建（先执行 `pnpm --dir ../renderer run build`，产物 `renderer/dist`）验证页面正常加载、无意外 Service Worker 接管、API 请求不缓存和页面头隔离。另有可选的 `OPS_DESKTOP_REAL_ELECTRON_E2E=1 go test ./internal/app -run '^TestDesktopChannelWithRealElectron$' -count=1 -v`，通过隔离 `ops_test` 验证真实 Electron Session 与 Go 鉴权/WSS handler 的集成。以上均为本机测试，不证明生产 HTTPS/WSS、真实公网/本机模型、签名安装或干净 Windows 覆盖升级；当前 Squirrel 制品未签名，自动更新保持关闭。
 
 文件上传 E2E 在真实 Electron 业务窗口通过 CDP 为 `input[type=file]` 设置本机测试文件，并校验 multipart 请求中的文件名与字节内容。它验证文件选择后的上传链路，不替代操作系统原生文件选择对话框的 GUI 验收。
 

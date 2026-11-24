@@ -24,6 +24,7 @@ test('packaged client stays on production even if a development URL is present',
   assert.equal(resolveServiceNamespace(true, PRODUCTION_BUSINESS_UI_ORIGIN), PRODUCTION_SERVICE_NAMESPACE);
 });
 
+// 5179 仅作为任意回环端口样例；Web 端已废弃，这里不再代表 Web dev 端口。
 test('unpackaged client keeps an explicitly configured loopback origin', () => {
   assert.equal(resolveBusinessOrigin(false, 'http://localhost:5179/path'), 'http://localhost:5179');
   assert.equal(resolveApiOrigin(false, 'http://localhost:5179'), 'http://localhost:5179');

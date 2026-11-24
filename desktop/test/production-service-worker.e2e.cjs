@@ -8,12 +8,11 @@ const path = require('node:path');
 const test = require('node:test');
 
 const desktopRoot = path.resolve(__dirname, '..');
-const webDist = path.resolve(desktopRoot, '..', 'web', 'dist');
+const rendererDist = path.resolve(desktopRoot, '..', 'renderer', 'dist');
 const desktopBinary = require('electron');
 
-test('Electron loads the production Web build and its Service Worker keeps API traffic network-only', { timeout: 45_000 }, async (t) => {
+test('Electron loads the production renderer build without a Service Worker and keeps API traffic network-only', { timeout: 45_000 }, async (t) => {
   const apiRequests = [];
-  let assetRequestCount = 0;
   let report;
   let resolveReport;
   const reportReady = new Promise((resolve) => { resolveReport = resolve; });
@@ -34,12 +33,6 @@ test('Electron loads the production Web build and its Service Worker keeps API t
       response.end(JSON.stringify({ count }));
       return;
     }
-    if (url.pathname === '/assets/__e2e-cache-probe.js') {
-      assetRequestCount++;
-      response.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'X-Asset-Counter': String(assetRequestCount) });
-      response.end(`window.__assetProbe=${assetRequestCount};`);
-      return;
-    }
     if (url.pathname === '/report' && request.method === 'POST') {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
@@ -53,12 +46,12 @@ test('Electron loads the production Web build and its Service Worker keeps API t
     let filePath;
     try {
       const decodedPath = decodeURIComponent(url.pathname);
-      filePath = path.resolve(webDist, `.${decodedPath === '/' ? '/index.html' : decodedPath}`);
+      filePath = path.resolve(rendererDist, `.${decodedPath === '/' ? '/index.html' : decodedPath}`);
     } catch {
       response.writeHead(400).end();
       return;
     }
-    if (filePath !== webDist && !filePath.startsWith(`${webDist}${path.sep}`)) {
+    if (filePath !== rendererDist && !filePath.startsWith(`${rendererDist}${path.sep}`)) {
       response.writeHead(403).end();
       return;
     }
@@ -67,22 +60,19 @@ test('Electron loads the production Web build and its Service Worker keeps API t
       if (url.pathname === '/') {
         const probeScript = `<script>
           window.addEventListener('load', () => { void (async () => {
-            const timer = (message) => new Promise((_, reject) => setTimeout(() => reject(new Error(message)), 10000));
-            await Promise.race([navigator.serviceWorker.ready, timer('production service worker did not become ready')]);
-            if (!navigator.serviceWorker.controller) await Promise.race([
-              new Promise((resolve) => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true })),
-              timer('production service worker did not control the business page')
-            ]);
+            if (navigator.serviceWorker.controller) throw new Error('production renderer must not be controlled by a service worker');
             const probe = (source) => fetch('/api/v1/e2e-probe?source=' + source, {
               headers: { 'X-OPS-Desktop-Device': 'renderer-spoof', 'X-OPS-Desktop-Policy': '999' },
               cache: 'no-store'
-            }).then((response) => response.headers.get('X-Probe-Counter'));
-            const apiCounters = [await probe('production-sw-1'), await probe('production-sw-2')];
-            const firstAsset = await fetch('/assets/__e2e-cache-probe.js').then((response) => response.headers.get('X-Asset-Counter'));
-            await new Promise((resolve) => setTimeout(resolve, 150));
-            const secondAsset = await fetch('/assets/__e2e-cache-probe.js').then((response) => response.headers.get('X-Asset-Counter'));
+            }).then((response) => {
+              if (!response.ok) throw new Error('probe failed with status ' + response.status);
+              return response.headers.get('X-Probe-Counter');
+            });
+            const apiCounters = [await probe('production-renderer-1'), await probe('production-renderer-2')];
             await fetch('/report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-              controlled: Boolean(navigator.serviceWorker.controller), apiCounters, firstAsset, secondAsset,
+              loaded: true,
+              controlled: Boolean(navigator.serviceWorker.controller),
+              apiCounters,
               requireType: typeof require, processType: typeof process, bridgeType: typeof window.opsDesktop
             }) });
           })().catch(async (error) => {
@@ -95,7 +85,7 @@ test('Electron loads the production Web build and its Service Worker keeps API t
       const contentType = ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
         '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml',
         '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.woff2': 'font/woff2' })[extension] ?? 'application/octet-stream';
-      response.writeHead(200, { 'Content-Type': contentType, ...(url.pathname === '/sw.js' ? { 'Service-Worker-Allowed': '/' } : {}) });
+      response.writeHead(200, { 'Content-Type': contentType });
       response.end(body);
     } catch {
       response.writeHead(404).end();
@@ -132,18 +122,17 @@ test('Electron loads the production Web build and its Service Worker keeps API t
   await Promise.race([
     reportReady,
     new Promise((_, reject) => {
-      const timer = setTimeout(() => reject(new Error(`production Service Worker probe timed out; output=${output.join('').slice(-3000)}`)), 20_000);
+      const timer = setTimeout(() => reject(new Error(`production renderer probe timed out; output=${output.join('').slice(-3000)}`)), 20_000);
       timer.unref();
       child.once('exit', (code, signal) => reject(new Error(`Electron exited before probe report (code=${code}, signal=${signal}); output=${output.join('').slice(-3000)}`)));
     })
   ]);
 
   assert.equal(report.error, undefined, report.error);
-  assert.equal(report.controlled, true);
-  assert.deepEqual(report.apiCounters, ['1', '2'], 'production Service Worker must not cache API responses');
-  assert.equal(report.firstAsset, report.secondAsset, 'production Service Worker should reuse cached app assets');
-  assert.equal(assetRequestCount, 1);
-  assert.deepEqual(apiRequests.map((entry) => entry.source), ['production-sw-1', 'production-sw-2']);
+  assert.equal(report.loaded, true);
+  assert.equal(report.controlled, false, 'production renderer must not be controlled by a Service Worker');
+  assert.deepEqual(report.apiCounters, ['1', '2'], 'production renderer must not cache API responses');
+  assert.deepEqual(apiRequests.map((entry) => entry.source), ['production-renderer-1', 'production-renderer-2']);
   for (const { headers } of apiRequests) {
     assert.equal(headers['x-ops-desktop-device'], undefined, 'renderer supplied device headers must be stripped');
     assert.equal(headers['x-ops-desktop-policy'], undefined, 'renderer supplied policy headers must be stripped');

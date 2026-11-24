@@ -103,7 +103,7 @@ func (s *Server) backendURL() string {
 var htmlPolicy = func() *bluemonday.Policy {
 	p := bluemonday.UGCPolicy()
 	p.AllowAttrs("style").Globally()
-	// 这份 CSS 属性清单与前端 `web/src/lib/render-policy.ts` 的 allowedStyleProps 保持一致（ED-08）：
+	// 这份 CSS 属性清单与前端 `renderer/lib/render-policy.ts` 的 allowedStyleProps 保持一致（ED-08）：
 	// 前端合并主题样式时会先丢掉服务端不认的属性，避免「预览有样式、推送被洗掉」。
 	p.AllowStyles("color", "background-color", "font-size", "font-weight", "font-style", "line-height", "letter-spacing",
 		"text-align", "text-decoration", "margin", "margin-top", "margin-bottom", "margin-left", "margin-right",

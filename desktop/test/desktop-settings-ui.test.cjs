@@ -77,7 +77,7 @@ test('离线页保留重试、设置和登录入口', () => {
 test('D-123/DC12：账号内容类型只在统一的当前账号设置中呈现', () => {
   assert.doesNotMatch(settingsHtml, /account-type-target|account-type-choice|apply-account-type/);
   assert.doesNotMatch(settingsScript, /changeAccountType|getBusinessAccounts/);
-  const accountSettings = fs.readFileSync(path.join(__dirname, '..', '..', 'web', 'src', 'pages', 'settings', 'Accounts.tsx'), 'utf8');
+  const accountSettings = fs.readFileSync(path.join(__dirname, '..', '..', 'renderer', 'pages', 'settings', 'Accounts.tsx'), 'utf8');
   assert.match(accountSettings, /默认创作形态|账号类型/);
   assert.match(accountSettings, /同平台内可以更换类型/);
   assert.doesNotMatch(settingsScript, /confirm_type_change/);
@@ -110,7 +110,7 @@ test('D-123：客户端类型清单与后端 formatMatrix 一致', () => {
   for (const value of ['image_note', 'list_note', 'card_post', 'script', 'comic']) {
     assert.match(xhs, new RegExp(`"${value}"`), `xhs matrix missing ${value}`);
   }
-  const script = fs.readFileSync(path.join(__dirname, '..', '..', 'web', 'src', 'components', 'ui.tsx'), 'utf8');
+  const script = fs.readFileSync(path.join(__dirname, '..', '..', 'renderer', 'components', 'ui.tsx'), 'utf8');
   for (const value of ['long_article', 'qa_article', 'briefing', 'card_post', 'script', 'comic', 'image_note', 'list_note']) {
     assert.match(script, new RegExp(`'${value}'`), `unified settings account-type list missing ${value}`);
   }

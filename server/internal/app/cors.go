@@ -16,7 +16,7 @@ const (
 	corsMaxAge       = "600"
 )
 
-// corsExposeHeaders 是前端真正读取的响应头（web/src/lib/api.ts 与打包页）。
+// corsExposeHeaders 是前端真正读取的响应头（renderer/lib/api.ts 与打包页）。
 var corsExposeHeaders = strings.Join([]string{
 	"X-Request-ID",
 	"X-Total-Count",
