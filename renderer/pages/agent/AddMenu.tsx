@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Activity, AtSign, Bot, Bot as GoalIcon, CalendarClock, CircleDashed, Cpu, Library, ListChecks, MessageSquarePlus, Paperclip, Plug, Plus, Sparkles, Users } from 'lucide-react'
+import { Activity, AtSign, Bot, Cpu, Library, ListChecks, MessageSquarePlus, Paperclip, Plug, Plus, Sparkles, Users } from 'lucide-react'
 import { IconButton } from '@/components/ui'
 
 // DEV-AI27-07（W07）：统一添加菜单（27 §5.5/§5.10）。
-// 只有一个添加入口；未交付能力在此如实显示"未开放"并禁用，
-// 不在输入台平铺常驻，也不伪造可用状态（红线：UI 不得伪造状态；语音按钮在 W16 前不展示）。
+// D-224（OPT-S02）：冻结能力不再以灰色禁用占位常驻；对应后端开关显式为 true 时才出现入口，
+// 默认关闭时整个入口不渲染，也不伪造可用状态（红线：UI 不得伪造状态）。
 
 export type AddMenuAction =
   | 'attachment'
@@ -81,13 +81,10 @@ export function AddMenu({
     // REF41 A7：工作流模板（启动只建计划，逐步确认执行）。
     ...(workflowTemplatesEnabled ? [{ id: 'workflow_templates' as const, label: '工作流模板', hint: '内置三模板；启动只建计划', icon: ListChecks }] : []),
     { id: 'goal', label: '任务目标与整理', hint: '长任务与预算', icon: Bot },
-    { id: 'routine', label: '例行任务', hint: '受限只读定时', icon: CalendarClock },
-    { id: 'plugins', label: '插件与工具', hint: pluginsEnabled ? '外部 MCP 连接与工具' : '未开放', disabled: !pluginsEnabled, icon: Plug },
-    // 以下能力按 27 文档 §11 分包交付；入口先如实占位，不显示为可用。
-    { id: 'browser', label: 'Google Chrome 标签', hint: '未开放', disabled: true, icon: CircleDashed },
-    { id: 'memory', label: '记忆', hint: '未开放', disabled: true, icon: GoalIcon },
-    { id: 'subagents', label: '并行协作', hint: subagentsEnabled ? '本次任务允许拆成 2 个只读子任务' : '未开放', disabled: !subagentsEnabled, icon: Users },
-    { id: 'computer', label: '应用选择', hint: computerEnabled ? '选择本机窗口' : '未开放', disabled: !computerEnabled, icon: Cpu },
+    // D-224（OPT-S02）：冻结能力仅在对应后端开关显式为 true 时展示；默认关闭时不出入口，不渲染灰色禁用占位。
+    ...(pluginsEnabled ? [{ id: 'plugins' as const, label: '插件与工具', hint: '外部 MCP 连接与工具', icon: Plug }] : []),
+    ...(subagentsEnabled ? [{ id: 'subagents' as const, label: '并行协作', hint: '本次任务允许拆成 2 个只读子任务', icon: Users }] : []),
+    ...(computerEnabled ? [{ id: 'computer' as const, label: '应用选择', hint: '选择本机窗口', icon: Cpu }] : []),
     // FN-06：只读能力清单入口（38 卡片：输入台 + 菜单“能力”；只读，不新增一级导航）。
     { id: 'capabilities', label: '能力', hint: '这个智能体能做什么', icon: ListChecks },
   ]

@@ -72,15 +72,15 @@ test('DEV-AI27-07 工作视图、添加菜单与分隔条键盘操作', async ({
     await expect(browserBlock.locator('.desktop-agent-browser-status-note').first()).toContainText('配对完成后')
     }
 
-    // 统一添加菜单：收敛入口；TL-05 插件入口与 TL-06 并行协作在能力开启时可用，其余未开放项如实禁用
+    // 统一添加菜单：收敛入口；TL-05 插件入口与 TL-06 并行协作在能力开启时可用，其余冻结项按 D-224 软冻结不再渲染
     const addTrigger = page.getByTestId('desktop-agent-add-menu-trigger')
     await expect(addTrigger).toBeVisible()
     const menu = page.getByTestId('desktop-agent-add-menu-list')
-    await expect(menu.getByRole('menuitem', { name: /Google Chrome 标签/ })).toBeDisabled()
-    await expect(menu.getByRole('menuitem', { name: /^记忆/ })).toBeDisabled()
+    await expect(menu.getByRole('menuitem', { name: /Google Chrome 标签/ })).toHaveCount(0)
+    await expect(menu.getByRole('menuitem', { name: /^记忆/ })).toHaveCount(0)
     await expect(menu.getByRole('menuitem', { name: /插件与工具/ })).toBeEnabled()
     await expect(menu.getByRole('menuitem', { name: /并行协作/ })).toBeEnabled()
-    await expect(menu.getByRole('menuitem', { name: /应用选择/ })).toBeDisabled()
+    await expect(menu.getByRole('menuitem', { name: /应用选择/ })).toHaveCount(0)
     // 可用项：引用资料打开既有引用选择器
     // ESC/外点关闭已由组件处理；这里验证菜单关闭后筹码区无残留
 

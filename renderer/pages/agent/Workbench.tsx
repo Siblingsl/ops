@@ -26,11 +26,11 @@ import { SourcePanel } from '@/pages/agent/SourcePanel'
 export type WorkbenchTab = 'task' | 'context' | 'artifact' | 'browser'
 
 export function WorkbenchSidePanel({
-  tab, setTab, close, width, browserWorkspaceEnabled, conversation, activeRun, busy, pendingActions, pendingQuestions, actionCount, artifactCount, selectedAccountName, selectedModelName, attachmentCount,
+  tab, setTab, close, width, browserWorkspaceEnabled, subagentsEnabled, conversation, activeRun, busy, pendingActions, pendingQuestions, actionCount, artifactCount, selectedAccountName, selectedModelName, attachmentCount,
   contextRefs, skillRequests, latestSkillUsage, artifactsEnabled, goalsEnabled, compactEnabled, canManageGoals, models, goal, onCompact, actions, questions, inputs, inputQueuePaused, onUpdateInput, onCancelInput, onRestoreInput, onResumeInputs, onQuoteArtifact, memoryFeaturesEnabled, onEmptyGoal, onEmptyContext, onOpenEvidence, messages,
   browserGrant, browserPaused, onBrowserTakeOver, onBrowserHandBack, onStopRun,
 }: {
-  tab: WorkbenchTab; setTab: (tab: WorkbenchTab) => void; close: () => void; width?: number; browserWorkspaceEnabled: boolean
+  tab: WorkbenchTab; setTab: (tab: WorkbenchTab) => void; close: () => void; width?: number; browserWorkspaceEnabled: boolean; subagentsEnabled?: boolean
   conversation?: AgentConversation; activeRun?: AgentConversationDetail['active_run']; busy: boolean; pendingActions: number; pendingQuestions: number; actionCount: number
   artifactCount: number
   selectedAccountName: string; selectedModelName: string; attachmentCount: number
@@ -87,6 +87,11 @@ export function WorkbenchSidePanel({
   const [focusArtifactID, setFocusArtifactID] = useState('')
   useEffect(() => setFocusArtifactID(''), [conversation?.id])
   const browserConnectState = useBrowserConnectState(browserWorkspaceEnabled)
+  // D-224（OPT-S02）：浏览器工作视图随 browser_workspace 开关软冻结；默认关闭时不出现页签。
+  const showBrowserTab = browserWorkspaceEnabled
+  useEffect(() => {
+    if (!showBrowserTab && tab === 'browser') setTab('task')
+  }, [showBrowserTab, tab, setTab])
   const browserSummary = browserModeSummary(browserMode, {
     paired: browserConnectState.kind === 'paired' ? browserConnectState.bindings.length : 0,
     authorizing: false,
@@ -95,8 +100,8 @@ export function WorkbenchSidePanel({
     { id: 'task' as const, label: '任务', count: pendingActions + pendingQuestions },
     { id: 'context' as const, label: '上下文', count: contextRefs.length + skillRequests.length },
     ...(artifactsEnabled ? [{ id: 'artifact' as const, label: '产物', count: artifactCount }] : []),
-    // DEV-AI27-07：浏览器页签始终可见，连接状态由 BrowserStatusBlock 如实表达（不伪造已连接）。
-    { id: 'browser' as const, label: '浏览器', count: browserMode === 'chrome' && browserConnectState.kind === 'paired' ? browserConnectState.bindings.length : inappTabs },
+    // D-224（OPT-S02）：浏览器页签仅在 browser_workspace 开启时出现；连接状态仍由 BrowserStatusBlock 如实表达（不伪造已连接）。
+    ...(showBrowserTab ? [{ id: 'browser' as const, label: '浏览器', count: browserMode === 'chrome' && browserConnectState.kind === 'paired' ? browserConnectState.bindings.length : inappTabs }] : []),
   ] as const
   const taskStatus = busy ? '正在运行' : pendingActions ? `等待你逐张处理 ${pendingActions} 项` : conversation ? '当前没有运行中的任务' : '发送第一条消息后，这里会显示对话任务状态'
   return <aside id="agent-workbench-panel" className="desktop-agent-side-panel" style={width ? { width, flexBasis: width } : undefined} data-testid="desktop-agent-side-panel" aria-label="任务面板">
@@ -107,11 +112,11 @@ export function WorkbenchSidePanel({
     <div role="tabpanel" id={`agent-panel-${tab}`} aria-labelledby={`agent-panel-tab-${tab}`} className="desktop-agent-side-content">
       {tab === 'task' && <section aria-labelledby="workbench-task-heading">
         {!conversation && <div className="desktop-agent-panel-empty" role="group" aria-label="任务面板空态">
-          <p>这个对话还没有任务。先定一个目标、引用资料，或查看浏览器说明。</p>
+          <p>{showBrowserTab ? '这个对话还没有任务。先定一个目标、引用资料，或查看浏览器说明。' : '这个对话还没有任务。先定一个目标或引用资料。'}</p>
           <div>
             <Button type="button" size="sm" variant="secondary" onClick={() => { setTab('task'); onEmptyGoal() }}>设一个目标</Button>
             <Button type="button" size="sm" variant="secondary" onClick={onEmptyContext}>引用资料</Button>
-            <Button type="button" size="sm" variant="secondary" onClick={() => setTab('browser')}>打开浏览器说明</Button>
+            {showBrowserTab && <Button type="button" size="sm" variant="secondary" onClick={() => setTab('browser')}>打开浏览器说明</Button>}
           </div>
         </div>}
         <h3 id="workbench-task-heading">当前任务</h3>
@@ -119,8 +124,8 @@ export function WorkbenchSidePanel({
         <PendingList entries={collectPendingEntries(actions, questions ?? [])} />
         <p className="desktop-agent-side-status" role="status">{busy && <LoaderCircle className="size-4 animate-spin" />}{taskStatus}</p>
         {activeRun && <p className="desktop-agent-side-detail">运行状态：{activeRun.status === 'queued' ? '排队中' : '执行中'}</p>}
-        {/* DEV-AI27-15（W15b UI）：协作任务折叠/展开/单项停止（有委派组时才渲染）。 */}
-        {conversation && <DelegationPanel conversationId={conversation.id} onNavigateArtifact={(artifactId) => { setFocusArtifactID(artifactId); setTab('artifact') }} />}
+        {/* DEV-AI27-15（W15b UI）：协作任务折叠/展开/单项停止（D-224 软冻结：subagents 关闭时不挂载，也不轮询已冻结接口）。 */}
+        {conversation && subagentsEnabled && <DelegationPanel conversationId={conversation.id} onNavigateArtifact={(artifactId) => { setFocusArtifactID(artifactId); setTab('artifact') }} />}
         {conversation && <p className="desktop-agent-side-detail">本对话操作卡片：{actionCount} 项</p>}
         <GoalPanel conversationID={conversation?.id} conversation={conversation} goal={goal} models={models} goalsEnabled={goalsEnabled} compactEnabled={compactEnabled} canManage={canManageGoals} busy={busy} onCompact={onCompact} onOpenEvidence={onOpenEvidence} />
         {pendingActions > 0 && <p className="desktop-agent-side-note">请在对应消息下逐张审阅操作卡片。</p>}
@@ -170,7 +175,7 @@ export function WorkbenchSidePanel({
           {conversation && <SourcePanel conversationId={conversation.id} />}
         </div>
       </section>}
-      {tab === 'browser' && <section aria-labelledby="workbench-browser-heading" className="desktop-agent-browser-pane">
+      {tab === 'browser' && showBrowserTab && <section aria-labelledby="workbench-browser-heading" className="desktop-agent-browser-pane">
         <div className="desktop-agent-browser-head">
           <div role="group" aria-label="浏览方式" className="desktop-agent-segmented">
             <button type="button" aria-pressed={browserMode === 'inapp'} onClick={() => setBrowserMode('inapp')}>应用内</button>

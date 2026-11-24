@@ -7,12 +7,13 @@ import { resolve } from 'node:path'
 // 行为/数据由 Go TestTL06ExplicitSubagentsAndRunContextInjection 与真实 Electron E2E 覆盖。
 const read = (path) => readFileSync(resolve(process.cwd(), path), 'utf8')
 
-test('TL-06：添加菜单“并行协作”仅在 subagents 开启时可用，提示 2 个只读子任务', () => {
+test('TL-06：添加菜单“并行协作”仅在 subagents 开启时条件渲染，提示 2 个只读子任务（D-224）', () => {
   const addMenu = read('pages/agent/AddMenu.tsx')
   assert.match(addMenu, /subagentsEnabled/)
-  assert.match(addMenu, /id: 'subagents'/)
-  assert.match(addMenu, /本次任务允许拆成 2 个只读子任务/)
-  assert.match(addMenu, /disabled: !subagentsEnabled/)
+  // D-224（OPT-S02）：冻结能力不再以“未开放”灰色占位常驻，仅在开关显式为 true 时条件渲染。
+  assert.match(addMenu, /\.\.\.\(subagentsEnabled \? \[\{ id: 'subagents' as const, label: '并行协作', hint: '本次任务允许拆成 2 个只读子任务'/)
+  assert.doesNotMatch(addMenu, /未开放/)
+  assert.doesNotMatch(addMenu, /disabled: !subagentsEnabled/)
 })
 
 test('TL-06：开启后显示 chip、发送 allow_subagents 并打开任务面板，切换会话重置', () => {

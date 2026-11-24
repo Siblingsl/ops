@@ -1568,18 +1568,18 @@ ${draft.text}` : draft.text))
           {!busy && memoryCandidates.length > 0 && <MemoryCandidateCard candidates={memoryCandidates} {...memoryCandidateHandlers} />}
           {/* A9：本会话实际注入/省略了哪些记忆；只读服务端记录，不推断。 */}
           {conversation && <MemoryUsagePanel conversationId={conversation.id} enabled={bootstrapData.features.personal_memories === true} />}
-          {/* P5-4：电脑租约存在时常驻控制条；接管/停止/返回聊天三个人工入口。 */}
-          <ComputerControlBar
-            enabled={bootstrapData.features.computer_use === true}
+          {/* P5-4：电脑租约存在时常驻控制条；D-224 软冻结：computer_use 关闭时彻底不挂载（不留灰条占位）。 */}
+          {bootstrapData.features.computer_use === true && <ComputerControlBar
+            enabled
             conversationId={conversationId}
             runId={runID || undefined}
             onReturnChat={() => {
               setComputerPickerOpen(false)
               window.setTimeout(() => inputRef.current?.focus(), 0)
             }}
-          />
-          {/* A12：模型请求前台时在本机选窗，选定后即时建 30 秒租约（不做发消息前预授权）。 */}
-          <ComputerWindowPicker
+          />}
+          {/* A12：模型请求前台时在本机选窗，选定后即时建 30 秒租约（不做发消息前预授权）；D-224 随 computer_use 门控。 */}
+          {bootstrapData.features.computer_use === true && <ComputerWindowPicker
             open={computerPickerOpen}
             conversationId={conversationId}
             runId={runID || undefined}
@@ -1588,9 +1588,9 @@ ${draft.text}` : draft.text))
               setText((old) => old ? `${old}\n已选择窗口「${summary}」，请继续。` : `已选择窗口「${summary}」，请继续。`)
               window.setTimeout(() => inputRef.current?.focus(), 0)
             }}
-          />
-          {/* A30：模型请求浏览器标签时授权；选定后即时建 30 秒标签租约（origins 只含顶层页面源）。 */}
-          <BrowserTabAuthorizeDialog
+          />}
+          {/* A30：模型请求浏览器标签时授权；D-224 软冻结：chrome_connect / browser_workspace 均关闭时不挂载。 */}
+          {(bootstrapData.features.chrome_connect === true || bootstrapData.features.browser_workspace === true) && <BrowserTabAuthorizeDialog
             open={browserPickerOpen}
             conversationId={conversationId}
             runId={runID || undefined}
@@ -1601,9 +1601,9 @@ ${draft.text}` : draft.text))
               setText((old) => old ? `${old}\n已选择标签「${summary}」，请继续。` : `已选择标签「${summary}」，请继续。`)
               window.setTimeout(() => inputRef.current?.focus(), 0)
             }}
-          />
-          {/* DEV-A13：协作任务（子任务进度、单项停止、汇总结果）；按会话取组，父 run 已结束也能汇总。 */}
-          {conversation && bootstrapData.features.subagents && <div className="mx-auto max-w-3xl px-3">
+          />}
+          {/* DEV-A13：协作任务（子任务进度、单项停止、汇总结果）；D-224 软冻结：subagents 关闭时彻底不挂载。 */}
+          {conversation && bootstrapData.features.subagents === true && <div className="mx-auto max-w-3xl px-3">
             <DelegationPanel conversationId={conversation.id}
               onNavigateArtifact={bootstrapData.features.artifacts === true ? () => setArtifactsOpen(true) : undefined} />
           </div>}
@@ -1653,9 +1653,9 @@ ${draft.text}` : draft.text))
             {desktopPresentation ? <>
               <div className={`desktop-agent-compose ${workbenchUI ? 'desktop-agent-workbench-compose' : ''}`} ref={composerRootRef}>
                 {renderAttachmentQueue(true)}
-                {/* DEV-AI27-16（W16c）：语音输入完整链路（录音→转写→编辑→插入输入框）。 */}
-                {conversationId && <VoiceBar conversationId={conversationId} voiceDictationEnabled={bootstrapData.features.voice_dictation === true} onInsert={(voiceText) => { setText((old) => old ? `${old}${voiceText}` : voiceText); window.setTimeout(() => inputRef.current?.focus(), 0) }} />}
-                {conversationId && <RealtimeVoiceBar conversationId={conversationId} enabled={bootstrapData.features.voice_realtime === true} onInsert={(voiceText) => { setText((old) => old ? `${old}${voiceText}` : voiceText); window.setTimeout(() => inputRef.current?.focus(), 0) }} />}
+                {/* DEV-AI27-16（W16c）：语音输入完整链路；D-224 软冻结：voice_dictation 关闭时不挂载。 */}
+                {conversationId && bootstrapData.features.voice_dictation === true && <VoiceBar conversationId={conversationId} voiceDictationEnabled onInsert={(voiceText) => { setText((old) => old ? `${old}${voiceText}` : voiceText); window.setTimeout(() => inputRef.current?.focus(), 0) }} />}
+                {conversationId && bootstrapData.features.voice_realtime === true && <RealtimeVoiceBar conversationId={conversationId} enabled onInsert={(voiceText) => { setText((old) => old ? `${old}${voiceText}` : voiceText); window.setTimeout(() => inputRef.current?.focus(), 0) }} />}
                 {workbenchUI && composerTrigger && !inputDisabled && <ComposerCandidates trigger={composerTrigger} accountID={selectedAccount} contextRefs={contextRefs} skillRequests={skillRequests}
                   onAddContext={addContextSelection} onAddSkill={addSkillSelection} onCommand={runComposerCommand}
                   onClose={() => { setComposerTrigger(null); focusComposer() }} />}
@@ -1762,6 +1762,7 @@ ${draft.text}` : draft.text))
         setTab={setWorkbenchPanelTab}
         close={() => setWorkbenchPanelOpen(false)}
         browserWorkspaceEnabled={bootstrapData.features.browser_workspace === true}
+        subagentsEnabled={bootstrapData.features.subagents === true}
         conversation={conversation}
         activeRun={activeRun}
         busy={busy}

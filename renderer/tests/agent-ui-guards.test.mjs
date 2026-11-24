@@ -152,7 +152,10 @@ test('UI-08 / BR-01：应用内与 Chrome 协作分段，不叠加两个视图',
   assert.match(workbench, /useState<'inapp' \| 'chrome'>\('inapp'\)/)
   assert.match(workbench, /latestBrowserActivity\(messages\)/)
   assert.match(workbench, /setBrowserMode\('chrome'\)/)
-  assert.match(workbench, /浏览器页签始终可见/)
+  // D-224（OPT-S02）：浏览器页签随 browser_workspace 软冻结，仅在 showBrowserTab 为真时挂载。
+  assert.match(workbench, /const showBrowserTab = browserWorkspaceEnabled/)
+  assert.match(workbench, /showBrowserTab \? \[\{ id: 'browser' as const/)
+  assert.match(workbench, /tab === 'browser' && showBrowserTab/)
   const browserTab = workbench.slice(workbench.indexOf("tab === 'browser'"), workbench.indexOf('</aside>'))
   assert.equal((browserTab.match(/<InBrowsePanel/g) || []).length, 1)
 })
