@@ -61,6 +61,9 @@ export interface XhsIdentity {
 export interface XhsListCapabilities {
   listReadable: boolean;
   perNoteMetricsReadable: boolean;
+  // 能力核验顺带取到的一条已发布笔记 ID，仅用于紧接着的单篇正文探测。
+  // 不进入日志/证据时也保持空值，取不到就不探测，绝不猜一个 ID。
+  firstPublishedNoteId: string | null;
 }
 
 // CF-PS-07：单篇正文事实。列表接口不含正文，正文必须走详情读取。
@@ -76,6 +79,8 @@ export type XhsNoteBodyReason =
 
 export interface XhsNoteBodyFact {
   noteId: string;
+  // 详情页/详情响应同时给出的标题；读不到时为 null，不拿列表标题冒充详情标题。
+  title: string | null;
   present: boolean;
   text: string | null;
   reason: XhsNoteBodyReason | null;
@@ -318,7 +323,7 @@ function normalizeNote(raw: unknown): XhsNoteFact | null {
     comments: count(n.comments_count),
     shares: count(n.shared_count),
     // 列表阶段没有正文：显式「尚未读详情」，不是空串，也不是空正文。
-    body: { noteId, present: false, text: null, reason: 'detail_not_read' }
+    body: { noteId, title: null, present: false, text: null, reason: 'detail_not_read' }
   };
 }
 
@@ -396,7 +401,8 @@ export async function probePostedNotesCapabilities(source: ReadOnlyResponseSourc
   }
   const perNoteMetricsReadable = parsed.notes.some((note) => note.status === 'published'
     && [note.viewTimes, note.likes, note.favorites, note.comments, note.shares].some((value) => value !== null));
-  return { listReadable: true, perNoteMetricsReadable };
+  const firstPublishedNoteId = parsed.notes.find((note) => note.status === 'published')?.noteId ?? null;
+  return { listReadable: true, perNoteMetricsReadable, firstPublishedNoteId };
 }
 
 // collectPostedNotes 跨页收集并按 note_id 去重；到达页数上限或没有下一页时停止，
@@ -529,7 +535,12 @@ export async function collectPostedNotes(
 const XHS_NOTE_BODY_KEYS: ReadonlyArray<string> = Object.freeze(['desc', 'content', 'body', 'text']);
 
 function absentBody(noteId: string, reason: XhsNoteBodyReason): XhsNoteBodyFact {
-  return { noteId, present: false, text: null, reason };
+  return { noteId, title: null, present: false, text: null, reason };
+}
+
+function detailTitle(data: Record<string, unknown>): string | null {
+  const raw = data.title;
+  return typeof raw === 'string' && raw.trim() !== '' ? raw : null;
 }
 
 // 详情响应常见包装：envelope.data / data.note / data.note_detail / data.items[0]。
@@ -570,7 +581,7 @@ export function parseNoteBody(noteId: string, payload: unknown): XhsNoteBodyFact
     if (typeof raw !== 'string') return absentBody(noteId, 'parse_failed');
     // 空串是「明确给了空正文」，不是「字段缺失」；两者都保持 present:false，但原因码不同。
     if (raw.trim() === '') return absentBody(noteId, 'empty_body');
-    return { noteId, present: true, text: raw, reason: null };
+    return { noteId, title: detailTitle(data), present: true, text: raw, reason: null };
   }
   // 详情结构可解析但根本没有正文键：如实报缺失，绝不回一个空串冒充正文。
   return absentBody(noteId, 'body_absent');
@@ -610,8 +621,7 @@ export async function attachNoteBodies(
   const out: XhsNoteFact[] = [];
   for (let i = 0; i < notes.length; i += 1) {
     const note = notes[i];
-    out.push(i < limit ? { ...note, body: await readNoteBody(source, note.noteId) } : note);
-  }
+    out.push(i < limit ? { ...note, body: await readNoteBody(source, note.noteId) } : note);  }
   return out;
 }
 
@@ -682,6 +692,8 @@ function firstNonEmptyString(row: Record<string, unknown>, keys: ReadonlyArray<s
 function commentAuthor(row: Record<string, unknown>): string | null {
   const container = row.user_info && typeof row.user_info === 'object' ? row.user_info as Record<string, unknown>
     : row.user && typeof row.user === 'object' ? row.user as Record<string, unknown> : row;
+  // 昵称只在内存事实层用于字段 presence 判定；上送/落库路径由服务端强制
+  // author_alias 恒空（迁移 00082），不会持久化真实昵称。
   return firstNonEmptyString(container, ['nickname']);
 }
 

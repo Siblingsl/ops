@@ -106,9 +106,13 @@ test('CF-PS-04 xhs 能力快照显式上报 noteContent 且不冒充已支持', 
   assert.match(go, /case "content":[\s\S]{0,240}?key = "noteContent"/,
     '服务端 content 键映射必须仍是 noteContent，改一处不改另一处等于永远判不可用');
 
-  // 登录核验链路只覆盖身份/列表/指标，不得把未核验的正文能力带成 supported。
+  // 登录核验链路必须来自真实详情探测，不得硬写 supported；也不得继续把键钉成 unknown
+  // 而让已实现的正文源永远不可用（CF-PS-07 真账号核验后由 probeNoteContent 决定）。
   const runtime = fs.readFileSync(path.join(__dirname, '../src/platform-login-runtime.ts'), 'utf8');
-  assert.match(runtime, /noteContent:\s*'unknown'/, '登录核验链路必须显式钉住 unknown');
+  assert.match(runtime, /probeNoteContent\(source, probe\.firstPublishedNoteId\)/,
+    '登录核验必须对列表返回的已发布作品做真实正文探测');
+  assert.ok(!/noteContent:\s*'unknown'/.test(runtime), '不得把已核验的正文能力硬钉为 unknown');
+  assert.ok(!/noteContent:\s*'supported'/.test(runtime), '不得绕过 probeNoteContent 硬写 supported');
 
   // 适配器本身没有正文事实字段；这条断言防止「报了 supported 但根本没采正文」。
   const adapter = fs.readFileSync(path.join(__dirname, '../src/platforms/xhs.ts'), 'utf8');

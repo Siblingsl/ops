@@ -107,6 +107,7 @@ import { failedPublicNote } from './benchmark-observe';
 import { buildPlatformCatalogCompletion, platformV1CoverageStopReason, PlatformClient, type PlatformObservationDraft, type PlatformClaimedRun, type PlatformV2ResultType } from './platform-client';
 import { PublishTaskClient } from './publish-task-client';
 import { runDesktopPublishTask } from './publish/executor';
+import { PublishLoopLock } from './publish-loop-lock';
 import { createDefaultDesktopPublishAdapterRegistry } from './publish/registry';
 import type { BrowserPolicyGate } from './publish/types';
 import type { DesktopPublishAdapterRegistry } from './publish/registry';
@@ -1695,21 +1696,19 @@ function pacedPlatformSource(source: ReturnType<typeof createPageResponseSource>
     fetchSigned: (path) => paced(() => source.fetchSigned(path)),
     // 滚动续读同样要串行 + 相邻请求至少 5 秒（docs/21 §安全修复：串行并至少间隔 5 秒）。
     fetchSignedNextPage: (path) => paced(() => source.fetchSignedNextPage(path)),
-    observeResponse: (path, trigger, timeout) => paced(() => source.observeResponse(path, trigger, timeout))
+    observeResponse: (path, trigger, timeout) => paced(() => source.observeResponse(path, trigger, timeout)),
+    // 单篇详情与评论读取也共享同一节奏窗口：详情页导航/评论接口之间保持 ≥5 秒。
+    fetchNoteDetail: source.fetchNoteDetail
+      ? (noteId) => paced(() => source.fetchNoteDetail!(noteId))
+      : undefined,
+    fetchComments: source.fetchComments
+      ? (noteId) => paced(() => source.fetchComments!(noteId))
+      : undefined
   };
 }
 
-// pacedPlatformSourceDetail 让单篇详情读取与其它采集请求共享同一个节奏窗口。
-// 闭包共享 lastRequestAt：详情请求插进列表请求之间时也保持 ≥5 秒间隔。
-function pacedPlatformSourceDetail(
-  source: ReturnType<typeof createPageResponseSource>,
-  noteId: string
-): Promise<unknown | null> {
-  // 详情走宿主的 fetchNoteDetail（未登记契约时返回 null → detail_source_missing）。
-  const read = source.fetchNoteDetail?.(noteId) ?? Promise.resolve(null);
-  // 触发前等待与最近一次请求的间隔；读完后由下一次调用继续按窗口排。
-  return read;
-}
+// pacedPlatformSourceDetail 已由 pacedPlatformSource 内统一包装；
+// 不再单独提供未节流的详情闭包，避免“看起来节流、实际直发”。
 
 interface PlatformV2TargetSnapshot {
   externalID: string;
@@ -2045,13 +2044,7 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
           state: 'unsupported', reason: 'content_capability_unverified', observed_at: observedAt
         }, 'succeeded');
       }
-      const sourceWithDetail: typeof source = {
-        ...source,
-        // 详情读取与列表同节奏：相邻请求至少 5 秒（21 §安全修复）。
-        fetchNoteDetail: source.fetchNoteDetail
-          ? (noteId) => pacedPlatformSourceDetail(source, noteId)
-          : undefined
-      };
+      const sourceWithDetail: typeof source = source;
       let failedRows = 0;
       let commentSourceMissing = false;
       for (let offset = 0; offset < contentTargets.length; offset += 10) {
@@ -2064,7 +2057,7 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
             body = await readNoteBody(sourceWithDetail, target.externalID);
           } catch (error) {
             console.error('[collect-v2] note detail failed', target.externalID, describeError(error));
-            body = { noteId: target.externalID, present: false, text: null, reason: 'read_failed' };
+            body = { noteId: target.externalID, title: null, present: false, text: null, reason: 'read_failed' };
           }
           // CF-P2-CXEF-06：评论授权读取。宿主评论源未登记契约时如实 comment_source_missing
           // 并整 run 跳过（不逐篇重复探测）；读到事实时逐条上报（每条一次 HTTP，单条幂等），
@@ -2090,7 +2083,7 @@ async function runPlatformV2Collect(accountId: string, run: PlatformClaimedRun, 
             externalID: target.externalID, accountKey: externalAccountKey,
             contentRevision: target.contentRevision ?? null,
             contentType: target.remoteContentType ?? 'unknown',
-            note: { title: '', body: { present: body.present, text: body.text, reason: body.reason } },
+            note: { title: body.title ?? '', body: { present: body.present, text: body.text, reason: body.reason } },
             observedAt
           });
           if (item) {
@@ -2476,15 +2469,34 @@ function stopPlatformPresence(): void {
 const PLATFORM_CLAIM_INTERVAL_MS = 30_000;
 
 let claimTimer: NodeJS.Timeout | null = null;
+let claimRetryTimer: NodeJS.Timeout | null = null;
 let collectInFlight = false;
 // 发布任务与采集共用同一个平台 profile，必须互斥；否则两个浏览器会争用 profile 锁。
-let publishInFlight = false;
+// 锁带超时：发布页面/心跳/回执任一挂起时，下一轮 tick 能强制释放并关闭旧页面，
+// 不让采集被一个卡死的发布任务永久挡住。
+const publishLock = new PublishLoopLock();
+let publishPageSession: Awaited<ReturnType<typeof openDesktopPublishPage>> | null = null;
 
 // startPlatformClaimLoop 启动后台领取循环。重复调用幂等。
 function startPlatformClaimLoop(): void {
   if (claimTimer) return;
+  // 发布循环先注册，且与采集循环同为 30 秒。两个定时器在同一时刻唤醒时，
+  // 发布 tick 会先持锁；采集 tick 若直接 return，就会每个周期都撞上发布锁，
+  // 表现为“服务在线但永远没有任务”。这里在锁被占用时短延迟重试，而不是等下一轮。
+  const scheduleClaimRetry = () => {
+    if (claimRetryTimer) return;
+    claimRetryTimer = setTimeout(() => {
+      claimRetryTimer = null;
+      void tick();
+    }, 3_000);
+    claimRetryTimer.unref?.();
+  };
   const tick = async () => {
-    if (collectInFlight || publishInFlight || !desktopClient) return;
+    if (collectInFlight || !desktopClient) return;
+    if (publishLock.isHeld()) {
+      scheduleClaimRetry();
+      return;
+    }
     if (activeLogin || platformLoginFlow.active) return; // 登录中不抢 profile
     collectInFlight = true;
     try {
@@ -2538,13 +2550,17 @@ function startPlatformClaimLoop(): void {
 }
 
 function stopPlatformClaimLoop(): void {
+  if (claimRetryTimer) {
+    clearTimeout(claimRetryTimer);
+    claimRetryTimer = null;
+  }
   if (!claimTimer) return;
   clearInterval(claimTimer);
   claimTimer = null;
 }
 
 // REF41 P2：发布任务领取循环。与采集分开 schedule，但共用 profile，所以用
-// collectInFlight/publishInFlight 互斥；同一时刻只有一个浏览器能打开该账号目录。
+// collectInFlight/publishLock 互斥；同一时刻只有一个浏览器能打开该账号目录。
 // 这里只做真实 claim → heartbeat → 页面身份核对 → result，不填内容、不点发布。
 const PUBLISH_CLAIM_INTERVAL_MS = 30_000;
 let publishTimer: NodeJS.Timeout | null = null;
@@ -2555,20 +2571,40 @@ function errorCodeOf(error: unknown): string {
   return 'desktop_publish_failed';
 }
 
+function stopStuckPublishSession(): boolean {
+  if (!publishLock.isExpired()) return false;
+  const releasedToken = publishLock.forceRelease();
+  const stuck = publishPageSession;
+  publishPageSession = null;
+  safeConsoleError('[publish-auto] 发布互斥锁超时，强制释放', JSON.stringify({ releasedToken }));
+  if (stuck) {
+    // 先杀浏览器子进程，再关闭页面；这样即使 close() 自身挂起，profile 也能释放。
+    if (stuck.browser.child.exitCode === null) stuck.browser.child.kill();
+    void stuck.close().catch(() => undefined);
+  }
+  return true;
+}
+
 function startPlatformPublishLoop(): void {
   if (publishTimer) return;
   const tick = async () => {
-    if (publishInFlight || collectInFlight || !desktopClient) return;
+    // 上一轮发布卡在页面/网络调用里时，下一轮 tick 负责收尸；不能永久占着互斥锁。
+    // 本轮只收尸，不再立即 claim，给旧浏览器进程留出退出时间。
+    if (stopStuckPublishSession()) return;
+    if (collectInFlight || publishLock.isHeld() || !desktopClient) return;
     if (activeLogin || platformLoginFlow.active) return;
-    publishInFlight = true;
+    const token = publishLock.acquire();
+    if (token === null) return;
     let pageSession: Awaited<ReturnType<typeof openDesktopPublishPage>> | null = null;
     let client: PublishTaskClient | null = null;
     try {
       const capability = await desktopClient.getPlatformCollectionCapability();
+      if (!publishLock.owns(token)) return;
       if (!capability.enabled) return;
       client = new PublishTaskClient(capability, async (operation, method, path, body) =>
         desktopClient!.platformSignedCall(operation, method, path, body));
       const claimed = await client.claim();
+      if (!publishLock.owns(token)) return;
       if (!claimed) return;
       client.adopt(claimed);
       safeConsoleError('[publish-auto] 领到任务', JSON.stringify({
@@ -2581,6 +2617,7 @@ function startPlatformPublishLoop(): void {
       let registry: DesktopPublishAdapterRegistry;
       if (claimed.platform === 'xhs' || claimed.platform === 'toutiao') {
         const auth = await desktopClient.getAuthContext();
+        if (!publishLock.owns(token)) return;
         pageSession = await openDesktopPublishPage({
           userDataDir: app.getPath('userData'),
           scope: {
@@ -2597,6 +2634,13 @@ function startPlatformPublishLoop(): void {
           taskId: claimed.taskId,
           assets: claimed.assets
         });
+        if (!publishLock.owns(token)) {
+          if (pageSession.browser.child.exitCode === null) pageSession.browser.child.kill();
+          void pageSession.close().catch(() => undefined);
+          pageSession = null;
+          return;
+        }
+        publishPageSession = pageSession;
         const policy: BrowserPolicyGate = {
           check: (input) => client!.checkBrowserPolicy(input),
         };
@@ -2639,8 +2683,20 @@ function startPlatformPublishLoop(): void {
         }).catch(() => undefined);
       }
     } finally {
-      if (pageSession) await pageSession.close().catch(() => undefined);
-      publishInFlight = false;
+      // 正常路径先等页面关闭（最多 5 秒），再释放锁；close 卡住则杀进程后释放。
+      if (pageSession) {
+        await Promise.race([
+          pageSession.close().catch(() => undefined),
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, 5_000);
+            timer.unref?.();
+          })
+        ]);
+        if (pageSession.browser.child.exitCode === null) pageSession.browser.child.kill();
+      }
+      if (publishLock.release(token) && publishPageSession === pageSession) {
+        publishPageSession = null;
+      }
     }
   };
   publishTimer = setInterval(() => void tick(), PUBLISH_CLAIM_INTERVAL_MS);

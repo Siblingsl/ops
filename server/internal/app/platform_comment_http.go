@@ -34,11 +34,15 @@ func (s *Server) desktopIngestPlatformComment(w http.ResponseWriter, r *http.Req
 	}
 	var accountID, workspaceID uuid.UUID
 	var accountPlatform, externalKey string
+	// 同一工作区可能同时存在同平台多个连接（例如巡检号与验收号）。优先选择与
+	// 上报 external_account_key 精确匹配的活动连接；若没有匹配连接，仍取一条活动
+	// 连接交给下面的身份核对返回 409，而不是把“账号不一致”误报成 404。
 	if err := s.db.QueryRow(r.Context(), `
 		SELECT c.account_id::text, c.workspace_id::text, c.platform, c.external_account_key
 		FROM platform_connection c
 		WHERE c.user_id=$1 AND c.workspace_id=$2 AND c.platform=$3 AND c.state='active'
-		LIMIT 1`, id.UserID, id.WorkspaceID, result.Platform).Scan(
+		ORDER BY (c.external_account_key=$4) DESC, c.created_at
+		LIMIT 1`, id.UserID, id.WorkspaceID, result.Platform, result.ExternalAccountKey).Scan(
 		&accountID, &workspaceID, &accountPlatform, &externalKey); err != nil {
 		if err == pgx.ErrNoRows {
 			return apiErr(404, "not_found", "当前会话没有该平台的活动连接，评论上报缺少账号归属")

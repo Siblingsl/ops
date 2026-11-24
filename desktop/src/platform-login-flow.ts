@@ -36,6 +36,8 @@ export interface LoginHandle {
   supported: boolean;
   show(): Promise<void>;
   probe(): Promise<LoginIdentity | null>;
+  // 确认前只复核当前主体，避免把一次（可能失败的）正文探测当成降级能力写回连接。
+  probeIdentityOnly?(): Promise<LoginIdentity | null>;
   close(): Promise<void>;
   onClosed(callback: () => void): void;
 }
@@ -123,15 +125,20 @@ export class PlatformLoginFlow {
       if (action === 'confirm' || action === 'recover') {
         if (!op.identity || (action === 'confirm' ? op.view.stage !== 'review' : op.view.stage !== 'recovering')) throw fail('platform_login_stale');
         // review 是快照，确认前本人触发一次有界复核，防止官方窗口已切号。
+        // 复核只读当前主体；正文能力沿用刚刚完成的 review 探测，避免第二次连续详情点击失败
+        // 把已经真实读到的 noteContent=supported 降级成 unknown。
         const reviewed = op.identity;
-        const currentIdentity = await op.handle.probe();
+        const currentIdentity = op.handle.probeIdentityOnly ? await op.handle.probeIdentityOnly() : await op.handle.probe();
         if (op.abort.signal.aborted || this.current !== op) return { ...op.view };
         if (!currentIdentity || currentIdentity.externalAccountKey !== reviewed.externalAccountKey) {
           op.identity = undefined;
           Object.assign(op.view, { stage: currentIdentity ? 'mismatch' : 'waiting', expectedKey: reviewed.externalAccountKey, externalAccountKey: currentIdentity?.externalAccountKey ?? null, displayName: currentIdentity?.displayName ?? null, errorCode: 'platform_identity_mismatch' });
           return { ...op.view };
         }
-        op.identity = currentIdentity;
+        const currentCapabilities = currentIdentity.capabilities && Object.keys(currentIdentity.capabilities).length > 0
+          ? currentIdentity.capabilities
+          : reviewed.capabilities;
+        op.identity = { ...currentIdentity, capabilities: currentCapabilities };
         op.view.stage = 'saving';
         // 身份核对以后最多使用活动总预算210秒，不重新给180秒。
         clearTimeout(op.timer);

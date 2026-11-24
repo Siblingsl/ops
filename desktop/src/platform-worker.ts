@@ -14,7 +14,10 @@ import path from 'node:path';
 // 平台站点的允许域名表随适配器版本发布，不接受服务端下发的放行域名（§13.1）。
 // PS05/06 在适配器里引用这里的常量，新增域名必须改客户端版本。
 export const PLATFORM_ALLOWED_ORIGINS: Readonly<Record<string, ReadonlyArray<string>>> = Object.freeze({
-  xhs: ['https://creator.xiaohongshu.com'],
+  // 创作中心用于登录、列表与详情卡片定位；www 公开站用于本人作品详情页与其页面
+  // 自发的评论读取（2026-11-23 真账号实测）。两者都是小红书官方 https 域名，
+  // 不接受任意子域或外部重定向。
+  xhs: ['https://creator.xiaohongshu.com', 'https://www.xiaohongshu.com'],
   wechat_mp: ['https://mp.weixin.qq.com'],
   toutiao: ['https://mp.toutiao.com']
 });

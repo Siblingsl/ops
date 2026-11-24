@@ -6,7 +6,7 @@ import { accountProfileSlot, buildProfileMeta, checkQuota, readAccountProfile, s
 import { selectLoginBrowser, trustedLoginBrowsers, type LoginBrowserFamily } from './platform-browser-trust';
 import { createCDPClient, launchPlatformBrowser, PLATFORM_BROWSER_NAMES, PlatformBrowserError, isAllowedPlatformUrl } from './platform-worker';
 import { installLoginNavigationPolicy } from './platform-login-policy';
-import { parseIdentity as parseXhsIdentity, probeCapabilities as xhsCapabilities, probePostedNotesCapabilities } from './platforms/xhs';
+import { parseIdentity as parseXhsIdentity, probeCapabilities as xhsCapabilities, probeNoteContent, probePostedNotesCapabilities } from './platforms/xhs';
 import { parseIdentity as parseWechatIdentity, probeCapabilities as wechatCapabilities, probePublishedListReadable } from './platforms/wechat-mp';
 import type { LoginHandle, LoginIdentity } from './platform-login-flow';
 import type { DesktopClient } from './desktop-client';
@@ -14,19 +14,37 @@ import type { DesktopClient } from './desktop-client';
 const locks = new Set<string>();
 interface RuntimeHandle extends LoginHandle { profileDir: string; meta: AccountProfileMeta }
 
+export async function probeXhsIdentityOnly(session: PlatformLoginSession, expectedKey: string | null, browserVersion: string, now: string): Promise<LoginIdentity | null> {
+  const result = await probeIdentity(session);
+  if (!result.loggedIn || !result.payload) return null;
+  const identity = parseXhsIdentity(JSON.parse(result.payload));
+  if (!identity.externalAccountKey) return null;
+  return {
+    externalAccountKey: identity.externalAccountKey,
+    displayName: identity.redId || identity.externalAccountKey,
+    capabilities: {}
+  };
+}
+
 export async function probeXhsLoginIdentity(session: PlatformLoginSession, expectedKey: string | null, browserVersion: string, now: string): Promise<LoginIdentity | null> {
   const result = await probeIdentity(session);
   if (!result.loggedIn || !result.payload) return null;
   const identity = parseXhsIdentity(JSON.parse(result.payload));
   let listReadable = false;
   let perNoteMetricsReadable = false;
+  let noteContent: Awaited<ReturnType<typeof probeNoteContent>> | null = null;
   // A recheck must never read the works of an account different from the existing connection.
   if (!expectedKey || expectedKey === identity.externalAccountKey) {
     try {
       // 一次签名请求同时核验目录与单篇指标：指标本来就随列表返回，分两次会连发签名 GET。
-      const probe = await probePostedNotesCapabilities(createPageResponseSource(session));
+      const source = createPageResponseSource(session);
+      const probe = await probePostedNotesCapabilities(source);
       listReadable = probe.listReadable;
       perNoteMetricsReadable = probe.perNoteMetricsReadable;
+      // CF-PS-07：列表可读后紧接着对同一账号的一条已发布作品做真实正文探测。
+      // 只有确实读到非空正文，xhsCapabilities 才会把 noteContent 置 supported；
+      // 读不到时保留原因码并维持 unknown，绝不硬写 supported。
+      if (probe.firstPublishedNoteId) noteContent = await probeNoteContent(source, probe.firstPublishedNoteId);
     } catch {
       // Identity can still be reviewed while an unverified catalog remains closed.
     }
@@ -35,14 +53,11 @@ export async function probeXhsLoginIdentity(session: PlatformLoginSession, expec
     externalAccountKey: identity.externalAccountKey,
     displayName: identity.redId || identity.externalAccountKey,
     capabilities: {
-      ...xhsCapabilities({ mainSiteLoggedIn: true, identity, postedNotesReadable: listReadable, followerInfoReadable: false, now }),
+      ...xhsCapabilities({ mainSiteLoggedIn: true, identity, postedNotesReadable: listReadable, followerInfoReadable: false, now, noteContent }),
       workList: listReadable ? 'supported' : 'unknown',
       // 只有真正在列表响应里读到过计数才声称可读；读不到就保持 unknown，
       // 否则 v2 同步会在 catalog 之后跳过整个 metrics 阶段（metrics_capability_unverified）。
       perNoteMetrics: listReadable && perNoteMetricsReadable ? 'supported' : 'unknown',
-      // CF-PS-04：登录核验只覆盖身份 / 列表 / 指标，不核验单篇正文；
-      // 显式钉住 unknown，避免将来 probeCapabilities 升级时被误带成 supported。
-      noteContent: 'unknown',
       followerTotal: 'unknown',
       browserVersion
     }
@@ -136,6 +151,14 @@ export async function startPlatformLogin(client: DesktopClient, userData: string
       close,
       onClosed(callback) { browser.child.once('exit', callback); if (browser.child.exitCode !== null) callback(); },
       async show() { await cdp.request('Page.bringToFront'); },
+      async probeIdentityOnly() {
+        if (!supported) throw new PlatformBrowserError('platform_capability_denied', '身份能力尚未验证，请继续人工回填');
+        const frame = await cdp.request('Page.getFrameTree') as { frameTree?: { frame?: { url?: string } } };
+        if (!isAllowedPlatformUrl(frame.frameTree?.frame?.url ?? '', scope.platform)) throw new PlatformBrowserError('platform_login_required', '请先完成官方登录');
+        if (scope.platform !== 'xhs') return this.probe();
+        const session: PlatformLoginSession = { platform: 'xhs', profileDir: stored.profileDir, browser, cdp };
+        return probeXhsIdentityOnly(session, expectedKey, browserVersion, new Date().toISOString());
+      },
       async probe() {
         if (!supported) throw new PlatformBrowserError('platform_capability_denied', '身份能力尚未验证，请继续人工回填');
         const frame = await cdp.request('Page.getFrameTree') as { frameTree?: { frame?: { url?: string } } };
@@ -162,11 +185,14 @@ export async function startPlatformLogin(client: DesktopClient, userData: string
 }
 
 export async function findOwnedConnection(client: DesktopClient, scope: AccountProfileScope): Promise<Record<string, unknown> | null> {
-  const rows = (await client.listPlatformConnections()).filter((row) => row.account_id === scope.accountId && row.workspace_id === scope.workspaceId && row.state !== 'revoked');
+  // 服务端摘要只回 is_holder，不回 workspace_id/user_id/device_id（避免把设备归属外泄）。
+  // 列表本身已按当前用户过滤，因此以 account_id + is_holder 判定归属；不要再要求摘要里没有的字段，
+  // 否则已有连接会被当作“没有”，走到 create 后被 409 拒绝。
+  const rows = (await client.listPlatformConnections()).filter((row) => row.account_id === scope.accountId && row.platform === scope.platform && row.state !== 'revoked');
   if (rows.length > 1) throw new PlatformBrowserError('platform_connection_conflict', '该账号存在连接冲突');
   const row = rows[0];
   if (!row) return null;
-  if (row.user_id !== scope.userId || row.device_id !== scope.deviceId || row.platform !== scope.platform) throw new PlatformBrowserError('platform_connection_conflict', '该连接属于其他用户或设备');
+  if (row.is_holder !== true) throw new PlatformBrowserError('platform_connection_conflict', '该连接属于其他用户或设备');
   return row;
 }
 

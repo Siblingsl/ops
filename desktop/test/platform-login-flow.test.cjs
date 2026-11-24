@@ -152,12 +152,12 @@ test('回执丢失先查询同主体同设备连接，verify成功才回报连�
   const { profileDir } = await readAccountProfile(root, scope);
   const handle = { profileDir, meta: { ...buildProfileMeta({ ...scope, connectionId: accountProfileSlot(scope), externalAccountKey: '' }), slotId: accountProfileSlot(scope), accountId: scope.accountId, browserFamily: 'chrome' } };
   let created = 0, verified = 0;
-  const row = { id: id(5), account_id: scope.accountId, workspace_id: scope.workspaceId, user_id: scope.userId, device_id: scope.deviceId, platform: 'xhs', external_account_key: identity.externalAccountKey, state: 'active', availability: 'verifying' };
+  const row = { id: id(5), account_id: scope.accountId, workspace_id: scope.workspaceId, user_id: scope.userId, device_id: scope.deviceId, platform: 'xhs', external_account_key: identity.externalAccountKey, state: 'active', availability: 'verifying', is_holder: true };
   const client = { getAuthContext: async () => scope, listPlatformConnections: async () => [row], createPlatformConnection: async () => { created++; return row; }, verifyPlatformConnection: async () => { verified++; return { ...row, availability: 'ready', auto_collect: false, auto_adopt: false }; } };
   assert.equal((await savePlatformLogin(client, root, scope, identity, handle, true, new AbortController().signal)).id, row.id);
   assert.equal(created, 0); assert.equal(verified, 1);
   assert.equal((await readAccountProfile(root, scope)).meta.connectionId, row.id);
-  client.listPlatformConnections = async () => [{ ...row, device_id: id(20) }];
+  client.listPlatformConnections = async () => [{ ...row, is_holder: false }];
   await assert.rejects(() => savePlatformLogin(client, root, scope, identity, handle, true, new AbortController().signal), (error) => error.code === 'platform_connection_conflict');
   client.listPlatformConnections = async () => [];
   await assert.rejects(() => savePlatformLogin(client, root, scope, identity, handle, true, new AbortController().signal), (error) => error.code === 'platform_connection_unconfirmed');

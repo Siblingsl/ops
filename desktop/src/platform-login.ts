@@ -232,8 +232,222 @@ export function buildReadOnlyFetchScript(path: string): string {
 })()`;
 }
 
-// createPageResponseSource 把 CDP 页面会话包装成适配器需要的只读响应源。
-// 适配器只调用 fetchJSON(path)，不接触 CDP、不自己发请求。
+const XHS_NOTE_MANAGER_URL = 'https://creator.xiaohongshu.com/new/note-manager';
+const XHS_COMMENT_PATH = '/api/sns/web/v2/comment/page';
+const NOTE_PAGE_NAV_TIMEOUT_MS = 30_000;
+const NOTE_PAGE_POLL_MS = 500;
+const xhsWindowOpenUrls: string[] = [];
+const xhsWindowOpenRegistered = new WeakSet<object>();
+// 同一采集轮内详情页地址可复用：地址来自页面点击产生的 Page.windowOpen，
+// 不是拼接；缓存只作用于当前页面会话，不跨轮、不持久化 token。
+const xhsNoteUrlCache = new Map<string, string>();
+
+
+async function evaluateValue(cdp: CDPPageClient, expression: string, timeoutMs = 10_000): Promise<unknown> {
+  const result = await cdp.request('Runtime.evaluate', {
+    expression,
+    returnByValue: true,
+    awaitPromise: true
+  }, timeoutMs) as { result?: { value?: unknown } };
+  return result?.result?.value ?? null;
+}
+
+// navigateAndWait 只导航到调用方给出的官方地址；等待目标文档就绪，避免在旧页面上
+// 读到上一轮的卡片/详情状态。登录跳转直接返回，由上层按 permission_denied 收口。
+async function navigateAndWait(cdp: CDPPageClient, url: string, expectedPath: string): Promise<string> {
+  await cdp.request('Page.navigate', { url }, NOTE_PAGE_NAV_TIMEOUT_MS);
+  const deadline = Date.now() + NOTE_PAGE_NAV_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    let state: unknown = null;
+    try {
+      state = await evaluateValue(cdp, `({ ready: document.readyState, href: location.href })`, 5_000);
+    } catch {
+      // 导航切换时执行上下文会短暂销毁；继续轮询即可。
+    }
+    const ready = state && typeof state === 'object' ? (state as { ready?: unknown }).ready : null;
+    const href = state && typeof state === 'object' ? (state as { href?: unknown }).href : null;
+    if (typeof href === 'string') {
+      if (href.includes('/login')) return href;
+      if (ready === 'complete' && href.includes(expectedPath)) return href;
+    }
+    await delay(NOTE_PAGE_POLL_MS);
+  }
+  throw new PlatformBrowserError('platform_navigation_failed', '详情页没有在时限内就绪');
+}
+
+// resolveXhsNoteUrl 从创作中心列表的**页面动作**取得详情页地址。
+// 平台卡片没有 a[href]，封面是 Vue 点击处理器；这里只做一次真实鼠标点击，
+// 监听 Page.windowOpen 由页面自己给出的 /explore/ 地址（含 xsec_token），
+// 再关闭该临时标签。绝不拼接 noteId、不猜 xsec_token。
+async function resolveXhsNoteUrl(cdp: CDPPageClient, noteId: string): Promise<string> {
+  const current = await evaluateValue(cdp, 'location.href', 10_000).catch(() => null);
+  if (typeof current !== 'string' || !current.includes('/new/note-manager')) {
+    await navigateAndWait(cdp, XHS_NOTE_MANAGER_URL, '/new/note-manager');
+  }
+  await cdp.request('Page.enable', {}, 10_000).catch(() => undefined);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const rect = await evaluateValue(cdp, `(() => {
+      const target = ${JSON.stringify(noteId)};
+      for (const card of Array.from(document.querySelectorAll('.note-card'))) {
+        let id = '';
+        try {
+          const impression = JSON.parse(card.getAttribute('data-impression') || '{}');
+          id = String(impression?.noteTarget?.value?.noteId || '');
+        } catch { /* 结构变化时继续找下一张 */ }
+        if (id !== target) continue;
+        const cover = card.querySelector('.note-card__cover') || card.querySelector('.note-card__media');
+        if (!cover) continue;
+        cover.scrollIntoView({ block: 'center' });
+        const box = cover.getBoundingClientRect();
+        return { x: box.x, y: box.y, width: box.width, height: box.height };
+      }
+      return null;
+    })()`, 10_000).catch(() => null);
+    if (rect && typeof rect === 'object') {
+      const box = rect as { x: number; y: number; width: number; height: number };
+      if (box.width > 20 && box.height > 20) {
+        const before = xhsWindowOpenUrls.length;
+        const x = box.x + Math.min(40, box.width / 3);
+        const y = box.y + box.height / 2;
+        await cdp.request('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, 10_000);
+        await cdp.request('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }, 10_000);
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          if (xhsWindowOpenUrls.length > before) {
+            const url = xhsWindowOpenUrls[xhsWindowOpenUrls.length - 1];
+            if (typeof url === 'string' && url.includes(`/explore/${noteId}`)) {
+              if (!isAllowedPlatformUrl(url, 'xhs')) throw new PlatformBrowserError('platform_network_unavailable', '详情页地址不在允许的官方域名内');
+              xhsNoteUrlCache.set(noteId, url);
+              await closeTemporaryXhsNoteTab(cdp, noteId);
+              return url;
+            }
+          }
+          const href = await evaluateValue(cdp, 'location.href', 5_000).catch(() => null);
+          if (typeof href === 'string' && href.includes(`/explore/${noteId}`)) return href;
+          await delay(500);
+        }
+      }
+    }
+    await evaluateValue(cdp, SCROLL_LIST_TO_END_SCRIPT, 10_000).catch(() => null);
+    await delay(2_000);
+  }
+  throw new PlatformBrowserError('platform_network_unavailable', '没有在创作中心页面找到目标笔记的详情入口');
+}
+
+// closeTemporaryXhsNoteTab 关闭 click 打开的快照标签，避免每次核验累积标签页。
+async function closeTemporaryXhsNoteTab(cdp: CDPPageClient, noteId: string): Promise<void> {
+  try {
+    const targets = await cdp.request('Target.getTargets', {}, 10_000) as { targetInfos?: Array<{ targetId?: string; type?: string; url?: string }> };
+    for (const target of targets?.targetInfos ?? []) {
+      if (target.type === 'page' && typeof target.url === 'string'
+        && target.url.includes(`/explore/${noteId}`) && typeof target.targetId === 'string') {
+        await cdp.request('Target.closeTarget', { targetId: target.targetId }, 10_000);
+      }
+    }
+  } catch {
+    // 关闭快照标签失败不影响只读详情；下次导航会复用原页面。
+  }
+}
+
+// 从公开详情页的页面状态提取单篇正文。平台对本人作品的管理入口给的是 SSR 页面，
+// 页面自身不发 /api/sns/web/v1/feed；这里只读 window.__INITIAL_STATE__ 中与目标
+// noteId 对应、且带 desc 的 noteCard，不把标题/正文从别的卡片或 URL 推断出来。
+function xhsDetailExtractScript(noteId: string): string {
+  return `(() => {
+    const target = ${JSON.stringify(noteId)};
+    let state = window.__INITIAL_STATE__;
+    if (typeof state === 'string') {
+      try { state = JSON.parse(state); } catch { return null; }
+    }
+    if (!state || typeof state !== 'object') return null;
+    const seen = new Set();
+    const idOf = (value) => value && typeof value === 'object'
+      ? (value.noteId || value.note_id || value.id || '') : '';
+    const cardOf = (value) => value && typeof value === 'object'
+      ? (value.noteCard || value.note_card || null) : null;
+    const walk = (node, depth) => {
+      if (!node || typeof node !== 'object' || depth > 12 || seen.has(node)) return null;
+      seen.add(node);
+      const card = cardOf(node);
+      if (card && typeof card === 'object' && typeof card.desc === 'string' && String(idOf(node)) === target) return card;
+      if (typeof node.desc === 'string' && String(idOf(node)) === target) return node;
+      for (const key of Object.keys(node)) {
+        const found = walk(node[key], depth + 1);
+        if (found) return found;
+      }
+      return null;
+    };
+    const card = walk(state, 0);
+    if (!card) return null;
+    return {
+      note_id: target,
+      title: typeof card.title === 'string' ? card.title : '',
+      desc: card.desc
+    };
+  })()`;
+}
+
+async function readXhsNoteDetail(cdp: CDPPageClient, noteId: string): Promise<unknown | null> {
+  const url = await resolveXhsNoteUrl(cdp, noteId);
+  const original = await evaluateValue(cdp, 'location.href', 10_000).catch(() => null);
+  try {
+    const href = await navigateAndWait(cdp, url, `/explore/${noteId}`);
+    if (href.includes('/login')) throw new PlatformBrowserError('platform_login_required', '公开详情页要求重新登录');
+    const state = await evaluateValue(cdp, xhsDetailExtractScript(noteId), 15_000).catch(() => null);
+    if (!state || typeof state !== 'object') {
+      throw new PlatformBrowserError('platform_network_unavailable', '详情页没有给出目标笔记的正文状态');
+    }
+    return { success: true, data: { note: state } };
+  } finally {
+    // 详情读取会离开创作中心；同一会话立即回到原页，保证随后的身份复核
+    // 仍在 creator 域执行（公开页没有 /api/galaxy/user/info）。
+    if (typeof original === 'string' && original.includes('/new/note-manager')) {
+      await navigateAndWait(cdp, original, '/new/note-manager').catch(() => undefined);
+    }
+  }
+}
+
+// 评论读取只让**本人作品公开页自己**发出 /api/sns/web/v2/comment/page；宿主监听响应，
+// 不构造请求、不复制签名头、不读取非本人作品。页面未发请求时明确失败。
+async function readXhsComments(cdp: CDPPageClient, noteId: string): Promise<unknown | null> {
+  // 详情阶段已经拿到页面自己给出的同一作品地址；评论阶段优先复用，避免在
+  // 详情读取返回后再次点击卡片时列表尚未恢复导致“找不到详情入口”。
+  const url = xhsNoteUrlCache.get(noteId) ?? await resolveXhsNoteUrl(cdp, noteId);
+  if (!cdp.collectResponses) throw new PlatformBrowserError('platform_capability_denied', '当前调试会话不支持响应监听');
+  const collected = cdp.collectResponses(XHS_COMMENT_PATH, 30_000);
+  const href = await navigateAndWait(cdp, url, `/explore/${noteId}`);
+  if (href.includes('/login')) throw new PlatformBrowserError('platform_login_required', '公开详情页要求重新登录');
+  // 本人作品详情页会把评论直接渲染进 .comments-container；主页面导航不会像
+  // 卡片新开标签那样稳定触发 /comment/page 请求。优先从页面已渲染的真实评论
+  // 读数，只取 id/content/note_id，不读取头像、昵称或用户主页链接。
+  const rendered = await evaluateValue(cdp, `new Promise((resolve) => {
+    const noteId = ${JSON.stringify(noteId)};
+    const collect = () => Array.from(document.querySelectorAll('.comment-item[id^="comment-"]'))
+      .map((el) => {
+        const id = (el.id || '').replace(/^comment-/, '');
+        const body = el.querySelector('.note-text')?.textContent?.trim() || '';
+        return { id, note_id: noteId, content: body };
+      })
+      .filter((row) => row.id && row.content);
+    const started = Date.now();
+    const tick = () => {
+      const rows = collect();
+      if (rows.length > 0) return resolve(rows);
+      if (Date.now() - started > 8_000) return resolve([]);
+      setTimeout(tick, 100);
+    };
+    tick();
+  })`, 12_000).catch(() => null);
+  if (Array.isArray(rendered) && rendered.length > 0) {
+    return { data: { comments: rendered } };
+  }
+  // 兜底：少数页面版本可能懒加载评论接口；保留只读响应监听。
+  const body = await collected;
+  if (body === null) throw new PlatformBrowserError('platform_network_unavailable', '没有捕获到本人作品的评论响应');
+  return body;
+}
+
+// createPageResponseSource 把 CDP 页面会话包装成适配器需要的只读响应源。// 适配器只调用 fetchJSON(path)，不接触 CDP、不自己发请求。
 //
 // 签名接口走 observeResponse：让页面自己发起该请求（导航到对应页面或用页面内只读
 // 触发），我们只从 Network 域取回响应 body。这里不构造、不复制任何签名头。
@@ -264,6 +478,17 @@ export function createPageResponseSource(session: PlatformLoginSession): {
     }
     return body;
   };
+  if (session.platform === 'xhs' && session.cdp.onEvent && !xhsWindowOpenRegistered.has(session.cdp)) {
+    xhsWindowOpenRegistered.add(session.cdp);
+    session.cdp.onEvent((method: string, params: unknown) => {
+      if (method !== 'Page.windowOpen') return;
+      const url = params && typeof params === 'object' ? (params as { url?: unknown }).url : null;
+      if (typeof url === 'string' && url !== '' && url !== 'about:blank') {
+        xhsWindowOpenUrls.push(url);
+        if (xhsWindowOpenUrls.length > 20) xhsWindowOpenUrls.shift();
+      }
+    });
+  }
   const baseSource = {
     probeChallenge: async () => {
       const result = await session.cdp.request('Runtime.evaluate', {
@@ -365,43 +590,40 @@ export function createPageResponseSource(session: PlatformLoginSession): {
   // CF-PS-07 / CF-P2-CXEF-06：单篇详情与评论只读源。
   // 请求形状由 NOTE_DETAIL_TRIGGERS 登记表给出——只监听页面自己发出的请求，
   // 不构造平台 URL、不复制签名（与 fetchSigned 同构）。endpoint 只有在真账号
-  // 现场核验并登记后才会生效；未登记时返回 null，适配器按 detail_source_missing
-  // 处理，noteContent 能力保持 unknown，绝不臆造请求冒充可读（21 §十七点六十七）。
-  const readByTrigger = async (noteId: string): Promise<unknown | null> => {
+  // 现场核验并登记后才会生效；未登记时返回 null，适配器按 detail_source_missing /
+  // comment_source_missing 处理，能力保持 unknown，绝不臆造请求冒充可读（21 §十七点六十七）。
+  const readByTrigger = async (kind: 'detail' | 'comments', noteId: string): Promise<unknown | null> => {
     const trigger = NOTE_DETAIL_TRIGGERS[session.platform];
     if (!trigger) return null;
     const id = noteId.trim();
-    // note_id 只允许平台 ID 的安全字符，拼进监听前缀前先拦掉意外输入。
+    // note_id 只允许平台 ID 的安全字符，拼进选择器前先拦掉意外输入。
     if (id === '' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return null;
     try {
-      return await observe(trigger.observe, async () => {
-        await trigger.navigate(session.cdp, id);
-      }, trigger.timeoutMs ?? 20_000);
+      return await trigger[kind](session.cdp, id);
     } catch (error) {
-      // 触发页面没打开或监听超时：交回 null 让适配器记 read_failed，
-      // 不把偶发导航失败升级成整次采集失败。
+      // 单篇读取失败只影响该篇；交回 null 让适配器记 read_failed，不升级成整次采集失败。
       if (error instanceof PlatformBrowserError && error.code === 'platform_navigation_failed') return null;
       throw error;
     }
   };
   return {
     ...baseSource,
-    fetchNoteDetail: readByTrigger,
-    fetchComments: readByTrigger
+    fetchNoteDetail: (noteId: string) => readByTrigger('detail', noteId),
+    fetchComments: (noteId: string) => readByTrigger('comments', noteId)
   };
 }
 
-// NOTE_DETAIL_TRIGGERS 登记“平台 → 单篇详情/评论的只读监听方式”。
-// navigate 只允许两类动作：导航到登记过的官方页面，或只读 DOM 滚动/点击由页面
-// 自己发起请求；禁止构造带 noteId 的平台 URL（该 endpoint 形态未经真账号抓包
-// 实测，臆造 URL 违反 21 文档「凭空宣称能力」红线）。当前两个平台都还没有
-// 已实测的详情 endpoint，因此整表为空——这就是生产链路 noteContent 恒 unknown
-// 的直接原因，登记真契约后由宿主版本更新补上。
+// NOTE_DETAIL_TRIGGERS 登记“平台 → 单篇详情/评论的只读读取方式”。
+// 小红书（2026-11-23 真账号实测）：创作中心卡片 href 由页面自身给出，公开详情页
+// 用 SSR __INITIAL_STATE__ 提供 noteCard.title/desc；评论由同一公开页自发请求
+// /api/sns/web/v2/comment/page。两者都只读，不构造带 noteId/xsec_token 的 URL。
+// 公众号/头条尚无实测契约，保持空表，能力保持 unknown。
 const NOTE_DETAIL_TRIGGERS: Readonly<Record<string, {
-  observe: string;
-  navigate: (cdp: CDPPageClient, noteId: string) => Promise<void>;
-  timeoutMs?: number;
-}>> = Object.freeze({});
+  detail: (cdp: CDPPageClient, noteId: string) => Promise<unknown | null>;
+  comments: (cdp: CDPPageClient, noteId: string) => Promise<unknown | null>;
+}>> = Object.freeze({
+  xhs: { detail: readXhsNoteDetail, comments: readXhsComments }
+});
 
 // SCROLL_LIST_TO_END_SCRIPT 把页面里“真正可滚动的那个列表容器”滚到底部。
 // 只读：只改 scrollTop，不发请求、不读数据。
