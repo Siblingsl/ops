@@ -23,7 +23,7 @@
 5. 在一台干净 Windows x64 试点设备上完成线上服务器 AI、本机无鉴权/有鉴权 API、公网 HTTPS API、错误证书拒绝、代理、超时与取消验证。按发布所承诺的能力逐项测试文本、JSON、工具调用、识图和图片生成；未通过的能力不得开放。
 6. 试点期观察权限拒绝、WSS 断线、上游错误、取消和客户端版本分布。只有试点验收记录通过并由负责人确认后，才逐步开放其他工作区；每次只扩大一批，保留关闭全局开关的能力。
 
-TLS/WSS 与 HTTPS 站点操作细节参见 [`../deploy/https-setup.md`](../deploy/https-setup.md)；完整部署顺序、开关约束及验收矩阵参见 [`../docs/17-Electron客户端改造方案.md`](../docs/17-Electron客户端改造方案.md)。
+TLS/WSS 与 HTTPS 站点操作细节参见 [`../deploy/https-setup.md`](../deploy/https-setup.md)；完整部署顺序、开关约束及验收矩阵参见 [`../docs/archive/17-Electron客户端改造方案.md`](../docs/archive/17-Electron客户端改造方案.md)。
 
 ## 安装包与升级
 
@@ -42,4 +42,4 @@ Get-AuthenticodeSignature -LiteralPath '.\OPS Desktop-0.1.0 Setup.exe' |
 2. 保留仍能识别 `execution_location`、desktop 模型 `NULL` 字段和当前迁移结构的新后端版本，使普通 Web 继续运行。回退期间不要恢复不认识 desktop 数据的旧二进制。
 3. 如需恢复旧后端，先停止 desktop 写入并备份/导出桌面元数据，停用并移除 desktop 路由与供应商引用，按专用兼容步骤处理会话模型引用，验证旧版查询后再切换。此类数据兼容回退须单独演练和审批；不能把直接执行 Down 迁移当作常规回退，也不得删除作品或对话历史。
 
-具体回退约束见 [`../docs/17-Electron客户端改造方案.md`](../docs/17-Electron客户端改造方案.md) 第 14.4 节。
+具体回退约束见 [`../docs/archive/17-Electron客户端改造方案.md`](../docs/archive/17-Electron客户端改造方案.md) 第 14.4 节。
