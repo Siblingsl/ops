@@ -14,6 +14,7 @@ import {
   type AccountProfileScope
 } from './platform-profile';
 import { selectLoginBrowser, trustedLoginBrowsers } from './platform-browser-trust';
+import { getXhsRulePack } from './platforms/rules/loader';
 import {
   createCDPClient,
   launchPlatformBrowser,
@@ -81,9 +82,7 @@ const TAG_INPUT_SELECTORS = [
 
 const PUBLISH_BUTTON_TEXTS = ['发布笔记', '发布', '预览并发布', '确认发布'];
 // 小红书发布页的草稿保存入口叫“暂存离开”（页面 bundle 的 saveText 默认值）。
-// 只允许精确命中这些文本，且任何一条都不能包含发布字样。
-const DRAFT_SAVE_TEXTS = ['暂存离开', '保存草稿', '存草稿'];
-const XHS_IMAGE_TAB_TEXTS = ['上传图文'];
+// 只允许精确命中 RulePack 给出的草稿保存文案，且 loader 已保证任何一条都不含发布字样。
 const XHS_IMAGE_ACCEPT = /image|jpg|jpeg|png|webp|gif|heic/i;
 const XHS_VIDEO_ACCEPT = /video|mp4|mov|flv|mkv|m4v|mpeg|ts/i;
 const XHS_IMAGE_ACCEPT_SOURCE = XHS_IMAGE_ACCEPT.source;
@@ -92,7 +91,8 @@ const XHS_VIDEO_ACCEPT_SOURCE = XHS_VIDEO_ACCEPT.source;
 const XHS_VIDEO_ACCEPT_FLAGS = XHS_VIDEO_ACCEPT.flags;
 
 export function isXhsImageTabText(text: string): boolean {
-  return XHS_IMAGE_TAB_TEXTS.includes(text.replace(/\s+/g, ' ').trim());
+  const imageTabTexts = getXhsRulePack().selectors.image_tab_texts;
+  return imageTabTexts.includes(text.replace(/\s+/g, ' ').trim());
 }
 
 export function isXhsImageAccept(accept: string): boolean {
@@ -159,13 +159,24 @@ function selectors(platform: string): { title: string[]; editor: string[]; tag: 
       tag: ['input[placeholder*="标签"]', 'input[placeholder*="话题"]']
     };
   }
+  if (platform === 'xhs') {
+    // OPT-E01：小红书选择器由 RulePack 驱动；头条保持既有硬编码不变。
+    const rulePack = getXhsRulePack();
+    return {
+      title: [...rulePack.selectors.title],
+      editor: [...rulePack.selectors.editor],
+      tag: [...rulePack.selectors.tag_input]
+    };
+  }
   return { title: TITLE_SELECTORS, editor: EDITOR_SELECTORS, tag: TAG_INPUT_SELECTORS };
 }
 
 async function readXhsIdentity(cdp: CDPPageClient): Promise<{ userId: string; userName: string } | null> {
+  // OPT-E01：账号信息接口路径由 RulePack 提供（loader 已保证是 /api/ 同源路径）。
+  const userInfoPath = getXhsRulePack().api_paths.user_info;
   const body = await evaluate<string>(cdp, `(async () => {
     try {
-      const response = await fetch('/api/galaxy/user/info', { credentials: 'include' });
+      const response = await fetch(${json(userInfoPath)}, { credentials: 'include' });
       return await response.text();
     } catch (error) {
       return JSON.stringify({ error: String(error) });
@@ -255,12 +266,16 @@ export async function openDesktopPublishPage(input: OpenDesktopPublishPageInput)
   async function selectXhsImageTab(): Promise<void> {
     // 当前小红书创作页默认停在“上传视频”；图片上传控件只有切到“上传图文”后
     // 才存在。不能把封面图塞进视频 input，否则平台侧不会进入标题/正文编辑器。
+    // OPT-E01：容器选择器与入口文案由 RulePack 提供。
+    const rulePack = getXhsRulePack();
+    const tabContainer = rulePack.selectors.image_tab_container;
+    const imageTabTexts = rulePack.selectors.image_tab_texts;
     const clicked = await evaluate<boolean>(cdp, `(() => {
-      const nodes = Array.from(document.querySelectorAll('.creator-tab, [role="tab"], button, [role="button"]'));
+      const nodes = Array.from(document.querySelectorAll(${json(tabContainer)}));
       const target = nodes.find((el) => {
         if (!(el instanceof HTMLElement)) return false;
         const text = String(el.innerText ?? '').replace(/\\s+/g, ' ').trim();
-        if (!${json(XHS_IMAGE_TAB_TEXTS)}.includes(text)) return false;
+        if (!${json(imageTabTexts)}.includes(text)) return false;
         const rect = el.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0;
       });
@@ -421,12 +436,17 @@ export async function openDesktopPublishPage(input: OpenDesktopPublishPageInput)
     // 闭合 shadow root 里：document.querySelectorAll 看不到“暂存离开”，但组件属性
     // save-text="暂存离开" / submit-text="发布" 与 CDP 扁平化 DOM 能精确区分两个
     // 原生 button。这里只点 shadow 内文本恰为草稿保存词的 BUTTON，绝不按坐标盲点。
+    // OPT-E01：host 选择器、按钮 class 与草稿文案由 RulePack 提供。
+    const rulePackSelectors = getXhsRulePack().selectors;
+    const shadowSaveHost = rulePackSelectors.shadow_save_host;
+    const shadowSaveButtonClass = rulePackSelectors.shadow_save_button_class;
+    const draftSaveTexts = rulePackSelectors.draft_save_texts;
     const hostOK = await evaluate<boolean>(cdp, `(() => {
-      const host = document.querySelector('xhs-publish-btn[is-save-draft="true"]');
+      const host = document.querySelector(${json(shadowSaveHost)});
       if (!(host instanceof HTMLElement)) return false;
       const saveText = String(host.getAttribute('save-text') ?? '').replace(/\\s+/g, ' ').trim();
       const submitText = String(host.getAttribute('submit-text') ?? '');
-      if (!${json(DRAFT_SAVE_TEXTS)}.includes(saveText)) return false;
+      if (!${json(draftSaveTexts)}.includes(saveText)) return false;
       if (!submitText.includes('发布')) return false;
       if (host.getAttribute('save-disabled') === 'true') return false;
       const rect = host.getBoundingClientRect();
@@ -440,7 +460,7 @@ export async function openDesktopPublishPage(input: OpenDesktopPublishPageInput)
     };
     const nodes = flat.nodes ?? [];
     const textNode = nodes.find((node) => node.nodeName === '#text'
-      && DRAFT_SAVE_TEXTS.includes(String(node.nodeValue ?? '').replace(/\s+/g, ' ').trim())
+      && draftSaveTexts.includes(String(node.nodeValue ?? '').replace(/\s+/g, ' ').trim())
       && node.parentId);
     if (!textNode || !textNode.parentId) return { ok: false, reason: 'draft_save_button_missing' };
     const button = nodes.find((node) => node.nodeId === textNode.parentId);
@@ -448,7 +468,7 @@ export async function openDesktopPublishPage(input: OpenDesktopPublishPageInput)
     const attributes = button.attributes ?? [];
     const classIndex = attributes.indexOf('class');
     const className = classIndex >= 0 ? String(attributes[classIndex + 1] ?? '') : '';
-    if (!className.includes('ce-btn')) return { ok: false, reason: 'draft_save_button_not_ce_btn' };
+    if (!className.includes(shadowSaveButtonClass)) return { ok: false, reason: 'draft_save_button_not_ce_btn' };
 
     const box = await cdp.request('DOM.getBoxModel', { nodeId: button.nodeId }) as {
       model?: { content?: number[] };
@@ -479,8 +499,10 @@ export async function openDesktopPublishPage(input: OpenDesktopPublishPageInput)
       throw errorWithCode('draft_save_not_supported', `平台 ${input.platform} 不支持桌面保存草稿`);
     }
     await verifyIdentity();
+    // OPT-E01：草稿保存文案由 RulePack 提供；PUBLISH_BUTTON_TEXTS 禁止词守卫保持硬编码。
+    const draftSaveTexts = getXhsRulePack().selectors.draft_save_texts;
     let clicked = await evaluate<{ ok: boolean; label?: string; reason?: string }>(cdp, `(() => {
-      const wanted = ${json(DRAFT_SAVE_TEXTS)};
+      const wanted = ${json(draftSaveTexts)};
       const forbidden = ${json(PUBLISH_BUTTON_TEXTS)};
       const text = (el) => String(el.innerText ?? el.textContent ?? '').replace(/\\s+/g, ' ').trim();
       const visible = (el) => {
@@ -571,7 +593,13 @@ export async function openDesktopPublishPage(input: OpenDesktopPublishPageInput)
       await verifyIdentity();
       if (anchor === 'xhs-account' || anchor === 'toutiao-account') return true;
       if (anchor === 'xhs-upload') {
-        return await evaluate<boolean>(cdp, `document.body.innerText.includes('上传图文')`);
+        // OPT-E01：上传图文入口文案由 RulePack 提供，不再硬编码单一文案。
+        const imageTabTexts = getXhsRulePack().selectors.image_tab_texts;
+        return await evaluate<boolean>(cdp, `(() => {
+          const texts = ${json(imageTabTexts)};
+          const body = String(document.body.innerText ?? '');
+          return texts.some((text) => body.includes(text));
+        })()`);
       }
       if (anchor === 'xhs-title' || anchor === 'toutiao-title') return await titleExists();
       if (anchor === 'xhs-editor' || anchor === 'toutiao-editor') return await editorExists();
@@ -609,6 +637,10 @@ export async function openDesktopPublishPage(input: OpenDesktopPublishPageInput)
 
     async readbackFields(): Promise<PublishReadbackActual> {
       await verifyIdentity();
+      // OPT-E01：小红书的标签芯片选择器由 RulePack 提供；头条保持既有选择器。
+      const tagChipsSelector = input.platform === 'xhs'
+        ? getXhsRulePack().selectors.tag_chips
+        : '[class*="topic"] span, [class*="tag"] span, [data-tag]';
       return await evaluate<PublishReadbackActual>(cdp, `(() => {
         const titleSelectors = ${json(spec.title)};
         const editorSelectors = ${json(spec.editor)};
@@ -616,7 +648,7 @@ export async function openDesktopPublishPage(input: OpenDesktopPublishPageInput)
         const editor = editorSelectors.map((s) => document.querySelector(s)).find(Boolean);
         const title = titleEl ? String(titleEl.value ?? titleEl.textContent ?? '') : '';
         const rawBody = editor ? String(editor.innerText ?? editor.textContent ?? '') : '';
-        const chips = Array.from(document.querySelectorAll('[class*="topic"] span, [class*="tag"] span, [data-tag]'))
+        const chips = Array.from(document.querySelectorAll(${json(tagChipsSelector)}))
           .map((el) => String(el.textContent ?? '').trim())
           .filter((text) => text.startsWith('#'));
         const hashes = Array.from(rawBody.matchAll(/#([^#\\s]{1,30})/g)).map((m) => m[1]).filter(Boolean);

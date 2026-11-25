@@ -16,6 +16,12 @@ const targets = [
     source: path.join(root, 'src', 'browser-bridge', 'diagnostics.html'),
     target: path.join(root, '.build', 'browser-bridge', 'diagnostics.html'),
   },
+  // OPT-E01：RulePack 是 JSON 资产，不参与 tsc（tsconfig 只 include src/**/*.ts），
+  // loader 运行期按 __dirname 读取 .build/platforms/rules/xhs.default.json。
+  {
+    source: path.join(root, 'src', 'platforms', 'rules', 'xhs.default.json'),
+    target: path.join(root, '.build', 'platforms', 'rules', 'xhs.default.json'),
+  },
 ];
 
 for (const { source, target, dir } of targets) {

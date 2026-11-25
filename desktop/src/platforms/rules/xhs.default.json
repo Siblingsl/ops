@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "platform": "xhs",
+  "adapter_version": "xhs-1",
+  "publish_adapter_version": "xhs-fill-v1",
+  "mapping_version": 1,
+  "updated_at": "2026-11-25T00:00:00Z",
+  "urls": {
+    "creator_origin": "https://creator.xiaohongshu.com",
+    "main_origin": "https://www.xiaohongshu.com",
+    "note_manager": "https://creator.xiaohongshu.com/new/note-manager",
+    "publish": "https://creator.xiaohongshu.com/publish/publish?source=official"
+  },
+  "api_paths": {
+    "user_info": "/api/galaxy/user/info",
+    "posted_notes": "/api/galaxy/v2/creator/note/user/posted",
+    "personal_info": "/api/galaxy/creator/home/personal_info",
+    "comment_page": "/api/sns/web/v2/comment/page"
+  },
+  "share_hosts": [
+    "xhslink.com",
+    "www.xiaohongshu.com",
+    "xiaohongshu.com"
+  ],
+  "anchors": {
+    "account": "xhs-account",
+    "title": "xhs-title",
+    "editor": "xhs-editor",
+    "prefill": [
+      "xhs-upload"
+    ]
+  },
+  "selectors": {
+    "note_card": ".note-card",
+    "note_card_covers": [
+      ".note-card__cover",
+      ".note-card__media"
+    ],
+    "title": [
+      "input[placeholder*=\"标题\"]",
+      "textarea[placeholder*=\"标题\"]",
+      "input[placeholder*=\"填写标题\"]",
+      "input[name=\"title\"]",
+      ".title-input input",
+      ".post-title input"
+    ],
+    "editor": [
+      ".ql-editor",
+      ".ProseMirror",
+      "[contenteditable=\"true\"]",
+      "[role=\"textbox\"][contenteditable=\"true\"]"
+    ],
+    "tag_input": [
+      "input[placeholder*=\"话题\"]",
+      "input[placeholder*=\"标签\"]",
+      "input[placeholder*=\"添加\"]"
+    ],
+    "image_tab_container": ".creator-tab, [role=\"tab\"], button, [role=\"button\"]",
+    "shadow_save_host": "xhs-publish-btn[is-save-draft=\"true\"]",
+    "shadow_save_button_class": "ce-btn",
+    "draft_save_texts": [
+      "暂存离开",
+      "保存草稿",
+      "存草稿"
+    ],
+    "image_tab_texts": [
+      "上传图文"
+    ],
+    "tag_chips": "[class*=\"topic\"] span, [class*=\"tag\"] span, [data-tag]"
+  },
+  "readback": {
+    "note_body_keys": [
+      "desc",
+      "content",
+      "body",
+      "text"
+    ],
+    "comment_id_keys": [
+      "id",
+      "comment_id"
+    ],
+    "comment_body_keys": [
+      "content",
+      "text"
+    ],
+    "comment_time_keys": [
+      "time",
+      "create_time",
+      "published_at"
+    ],
+    "observation_field_paths": {
+      "view_times": "fixture.note.view_count",
+      "like_count": "fixture.note.likes",
+      "favorite_count": "fixture.note.collected_count",
+      "comment_count": "fixture.note.comments_count",
+      "share_times": "fixture.note.shared_count"
+    }
+  }
+}

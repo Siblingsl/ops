@@ -14,12 +14,14 @@
 import type { CDPPageClient, PlatformBrowserProcess } from './platform-worker';
 import { isAllowedPlatformUrl, PlatformBrowserError } from './platform-worker';
 import { CHALLENGE_PROBE_SCRIPT, buildChallengeProbe, classifyChallenge, type ChallengeOutcome } from './platforms/challenge-detect';
+import { getXhsRulePack } from './platforms/rules/loader';
 
 export type PlatformLoginPlatform = 'xhs' | 'wechat_mp' | 'toutiao';
 
 // 每个平台的官方后台入口。路径取自 §17.1.1 的实测落点，不接受服务端下发。
+// OPT-E01：小红书入口由 RulePack 的 urls.note_manager 提供，默认值与实测落点一致。
 export const PLATFORM_LOGIN_URLS: Readonly<Record<PlatformLoginPlatform, string>> = Object.freeze({
-  xhs: 'https://creator.xiaohongshu.com/new/note-manager',
+  xhs: getXhsRulePack().urls.note_manager,
   wechat_mp: 'https://mp.weixin.qq.com/',
   toutiao: 'https://mp.toutiao.com/'
 });
@@ -232,8 +234,9 @@ export function buildReadOnlyFetchScript(path: string): string {
 })()`;
 }
 
-const XHS_NOTE_MANAGER_URL = 'https://creator.xiaohongshu.com/new/note-manager';
-const XHS_COMMENT_PATH = '/api/sns/web/v2/comment/page';
+// OPT-E01：详情入口、评论接口与列表卡片选择器由 RulePack 提供。
+const XHS_NOTE_MANAGER_URL = getXhsRulePack().urls.note_manager;
+const XHS_COMMENT_PATH = getXhsRulePack().api_paths.comment_page;
 const NOTE_PAGE_NAV_TIMEOUT_MS = 30_000;
 const NOTE_PAGE_POLL_MS = 500;
 const xhsWindowOpenUrls: string[] = [];
@@ -285,17 +288,22 @@ async function resolveXhsNoteUrl(cdp: CDPPageClient, noteId: string): Promise<st
     await navigateAndWait(cdp, XHS_NOTE_MANAGER_URL, '/new/note-manager');
   }
   await cdp.request('Page.enable', {}, 10_000).catch(() => undefined);
+  // OPT-E01：笔记卡片与封面选择器由 RulePack 提供，默认值与实测结构一致。
+  const noteCardSelector = getXhsRulePack().selectors.note_card;
+  const noteCardCovers = getXhsRulePack().selectors.note_card_covers;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const rect = await evaluateValue(cdp, `(() => {
       const target = ${JSON.stringify(noteId)};
-      for (const card of Array.from(document.querySelectorAll('.note-card'))) {
+      const cardSelector = ${JSON.stringify(noteCardSelector)};
+      const coverSelectors = ${JSON.stringify(noteCardCovers)};
+      for (const card of Array.from(document.querySelectorAll(cardSelector))) {
         let id = '';
         try {
           const impression = JSON.parse(card.getAttribute('data-impression') || '{}');
           id = String(impression?.noteTarget?.value?.noteId || '');
         } catch { /* 结构变化时继续找下一张 */ }
         if (id !== target) continue;
-        const cover = card.querySelector('.note-card__cover') || card.querySelector('.note-card__media');
+        const cover = coverSelectors.map((selector) => card.querySelector(selector)).find(Boolean);
         if (!cover) continue;
         cover.scrollIntoView({ block: 'center' });
         const box = cover.getBoundingClientRect();

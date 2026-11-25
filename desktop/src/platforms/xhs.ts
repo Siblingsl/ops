@@ -17,17 +17,22 @@ import { createHash } from 'node:crypto';
 import type { PlatformObservationDraft } from '../platform-client';
 import { isPrivateHost } from '../platform-worker';
 import { ensureNoChallenge, type ChallengeOutcome } from './challenge-detect';
+import { getXhsRulePack } from './rules/loader';
 
-export const XHS_ADAPTER_VERSION = 'xhs-1';
-export const XHS_MAPPING_VERSION = 1;
+// OPT-E01：版本、接口白名单与分享域名全部由 RulePack 驱动；默认规则逐项等于
+// 既有实测常量，缓存规则必须通过 loader 的安全校验才能生效。
+const XHS_RULE_PACK = getXhsRulePack();
+
+export const XHS_ADAPTER_VERSION = XHS_RULE_PACK.adapter_version;
+export const XHS_MAPPING_VERSION = XHS_RULE_PACK.mapping_version;
 export const XHS_API = Object.freeze({
-  userInfo: '/api/galaxy/user/info',
-  postedNotes: '/api/galaxy/v2/creator/note/user/posted',
-  personalInfo: '/api/galaxy/creator/home/personal_info'
+  userInfo: XHS_RULE_PACK.api_paths.user_info,
+  postedNotes: XHS_RULE_PACK.api_paths.posted_notes,
+  personalInfo: XHS_RULE_PACK.api_paths.personal_info
 });
 
 // 允许解析的分享链接域名；短链本身不持久化为作品身份（§6.2）。
-export const XHS_SHARE_HOSTS: ReadonlyArray<string> = Object.freeze(['xhslink.com', 'www.xiaohongshu.com', 'xiaohongshu.com']);
+export const XHS_SHARE_HOSTS: ReadonlyArray<string> = XHS_RULE_PACK.share_hosts;
 
 export type XhsCapabilityState = 'supported' | 'denied' | 'unknown' | 'temporarily_unavailable';
 
@@ -532,7 +537,8 @@ export async function collectPostedNotes(
 // 详情页可能把正文放在哪几个中性键里；这只是「拿到 JSON 后怎么找」的解析约定，
 // 不是对平台字段的实测声明。刻意不采用裸的正文原文字段名：CF-PS-04 守卫会锁住
 // 「适配器不得出现那种字段名」，本项用 present 标记的事实对象取代它。
-const XHS_NOTE_BODY_KEYS: ReadonlyArray<string> = Object.freeze(['desc', 'content', 'body', 'text']);
+// OPT-E01：键集合由 RulePack 的 readback.note_body_keys 驱动。
+const XHS_NOTE_BODY_KEYS: ReadonlyArray<string> = XHS_RULE_PACK.readback.note_body_keys;
 
 function absentBody(noteId: string, reason: XhsNoteBodyReason): XhsNoteBodyFact {
   return { noteId, title: null, present: false, text: null, reason };
@@ -675,9 +681,10 @@ export interface XhsCommentResult {
 }
 
 // 中性键约定，不是对平台字段的实测声明；真实契约须由 20/21 验证后由宿主提供。
-const XHS_COMMENT_ID_KEYS: ReadonlyArray<string> = Object.freeze(['id', 'comment_id']);
-const XHS_COMMENT_BODY_KEYS: ReadonlyArray<string> = Object.freeze(['content', 'text']);
-const XHS_COMMENT_TIME_KEYS: ReadonlyArray<string> = Object.freeze(['time', 'create_time', 'published_at']);
+// OPT-E01：评论字段键由 RulePack 的 readback 段驱动。
+const XHS_COMMENT_ID_KEYS: ReadonlyArray<string> = XHS_RULE_PACK.readback.comment_id_keys;
+const XHS_COMMENT_BODY_KEYS: ReadonlyArray<string> = XHS_RULE_PACK.readback.comment_body_keys;
+const XHS_COMMENT_TIME_KEYS: ReadonlyArray<string> = XHS_RULE_PACK.readback.comment_time_keys;
 
 function firstNonEmptyString(row: Record<string, unknown>, keys: ReadonlyArray<string>): string | null {
   for (const key of keys) {
@@ -811,15 +818,17 @@ export function noteToObservation(
     fieldPaths[key] = path;
   };
   // view_count 页面标签为“观看”，单位未确认前按 unknown 存观测，不投影 reads（D-129 v0.4）。
-  put('view_times', note.viewTimes, 'unknown', 'fixture.note.view_count');
-  put('like_count', note.likes, 'count', 'fixture.note.likes');
-  put('favorite_count', note.favorites, 'count', 'fixture.note.collected_count');
-  put('comment_count', note.comments, 'count', 'fixture.note.comments_count');
+  // OPT-E01：字段路径由 RulePack 的 readback.observation_field_paths 驱动。
+  const fieldPathsFromPack = XHS_RULE_PACK.readback.observation_field_paths;
+  put('view_times', note.viewTimes, 'unknown', fieldPathsFromPack.view_times);
+  put('like_count', note.likes, 'count', fieldPathsFromPack.like_count);
+  put('favorite_count', note.favorites, 'count', fieldPathsFromPack.favorite_count);
+  put('comment_count', note.comments, 'count', fieldPathsFromPack.comment_count);
   // share_times 是"分享次数"，单位必须是 times：`metric_snapshot.share_unit`
   // 的 CHECK 只接受 users/times/unknown，且服务端要求观测单位与映射登记一致。
   // 早期这里标成 count，导致逐条确认时投影 INSERT 抛 23514、整条事务回滚
   // （2026-10-22 实测：10 篇观测确认全部 500）。
-  put('share_times', note.shares, 'times', 'fixture.note.shared_count');
+  put('share_times', note.shares, 'times', fieldPathsFromPack.share_times);
   if (Object.keys(values).length === 0) return null;
   return {
     row_no: 0,
