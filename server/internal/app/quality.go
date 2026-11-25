@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -529,80 +530,191 @@ func (s *Server) postUXEvents(w http.ResponseWriter, r *http.Request) error {
 
 // ---------- EX-A-03 示例账号 ----------
 
+// 演示工作区的服务端硬闸门：示例账号只允许体验写作、检查与预览。
+// 写真实平台草稿/建发布任务、录粉丝数据一律 409，不依赖前端隐藏按钮。
+func demoAccountWriteError() *APIError {
+	return apiErr(http.StatusConflict, "demo_account_readonly", "示例账号仅供体验写作与预览，不能写入真实平台草稿，请先绑定真实账号")
+}
+
+func demoAccountMetricError() *APIError {
+	return apiErr(http.StatusConflict, "demo_account_readonly", "示例账号不记录真实账号统计数据，请先绑定真实账号")
+}
+
+// accountIsDemo 只查当前工作区，避免跨租户探测；账号不存在按 not_found 处理。
+func (s *Server) accountIsDemo(ctx context.Context, accountID uuid.UUID) (bool, error) {
+	var demo bool
+	err := s.db.QueryRow(ctx, `SELECT is_demo FROM platform_account WHERE id=$1 AND workspace_id=$2`,
+		accountID, ident(ctx).WorkspaceID).Scan(&demo)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, errNotFound
+	}
+	return demo, err
+}
+
 func (s *Server) importDemo(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	if err := s.requireOwner(ctx); err != nil {
 		return err
 	}
+	ws := ident(ctx).WorkspaceID
 	var exists bool
-	_ = s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM platform_account WHERE workspace_id=$1 AND is_demo)`, ident(ctx).WorkspaceID).Scan(&exists)
+	_ = s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM platform_account WHERE workspace_id=$1 AND is_demo)`, ws).Scan(&exists)
 	if exists {
 		return stateInvalid("示例账号已经导入过了")
 	}
-	ws := ident(ctx).WorkspaceID
-	var accountID uuid.UUID
+	type demoSample struct{ title, content string }
+	type demoMaterial struct{ kind, content, source string }
+	type demoTopic struct{ title, angle string }
+	type demoSection struct{ heading, content string }
+	var wechatAccountID, xhsAccountID uuid.UUID
 	err := s.withTx(ctx, func(q pgx.Tx) error {
+		insertProfile := func(accountID uuid.UUID, tags []string, audience, tone string, banned []string, style string) error {
+			_, err := q.Exec(ctx, `INSERT INTO account_profile (account_id, positioning_tags, target_audience, persona_tone, banned_words, style_summary)
+				VALUES ($1, $2, $3, $4, $5, $6)`, accountID, tags, audience, tone, banned, style)
+			return err
+		}
+		insertSamples := func(accountID uuid.UUID, list []demoSample) error {
+			for _, x := range list {
+				if _, err := q.Exec(ctx, `INSERT INTO style_sample (account_id, title, content_md, char_count) VALUES ($1,$2,$3,$4)`,
+					accountID, x.title, x.content, runeLen(x.content)); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		insertMaterials := func(accountID uuid.UUID, list []demoMaterial) error {
+			for _, m := range list {
+				if _, err := q.Exec(ctx, `INSERT INTO material (workspace_id, account_id, kind, content, source, tags) VALUES ($1,$2,$3,$4,$5,$6)`,
+					ws, accountID, m.kind, m.content, m.source, []string{"示例"}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		insertTopics := func(accountID uuid.UUID, list []demoTopic) error {
+			for _, t := range list {
+				if _, err := q.Exec(ctx, `INSERT INTO topic (account_id, title, angle, source) VALUES ($1,$2,$3,'manual')`,
+					accountID, t.title, t.angle); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		insertSections := func(workID uuid.UUID, list []demoSection) error {
+			for i, x := range list {
+				if _, err := q.Exec(ctx, `INSERT INTO work_section (work_id, position, heading, key_point, content_md) VALUES ($1,$2,$3,$4,$5)`,
+					workID, i, x.heading, x.heading, x.content); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		// 示例账号 1：个人公众号（长图文）——原有体验数据，选题补到 2 条。
 		if err := q.QueryRow(ctx, `INSERT INTO platform_account (workspace_id, platform, name, content_format, is_demo) VALUES ($1,'wechat_mp','示例 · 职场成长笔记','long_article',true) RETURNING id`,
-			ws).Scan(&accountID); err != nil {
+			ws).Scan(&wechatAccountID); err != nil {
 			return err
 		}
-		if _, err := q.Exec(ctx, `INSERT INTO account_profile (account_id, positioning_tags, target_audience, persona_tone, banned_words, style_summary)
-			VALUES ($1, $2, '工作 1–5 年、想提升效率和沟通能力的职场人', '像一位有经验的同事，真诚、具体、不说教', $3, '短段落，多用具体场景开头，结尾给一个可执行的小建议。')`,
-			accountID, []string{"职场成长", "效率方法", "沟通"}, []string{"颠覆", "躺赚"}); err != nil {
+		if err := insertProfile(wechatAccountID, []string{"职场成长", "效率方法", "沟通"},
+			"工作 1–5 年、想提升效率和沟通能力的职场人", "像一位有经验的同事，真诚、具体、不说教",
+			[]string{"颠覆", "躺赚"}, "短段落，多用具体场景开头，结尾给一个可执行的小建议。"); err != nil {
 			return err
 		}
-		samples := [][2]string{
+		if err := insertSamples(wechatAccountID, []demoSample{
 			{"我用一张表管住了一周的会议", "上周三下午，我连开了四个会。回到工位时，才发现上午答应同事的方案还没动。\n\n后来我做了一张很简单的表：会议名、我要带走的结论、下一步谁负责。只写这三列。\n\n一周下来，我推掉了两个和我关系不大的会，剩下的会平均缩短了十分钟。"},
 			{"写周报之前，先问自己三个问题", "很多人写周报像记流水账。其实读周报的人只关心三件事：做成了什么、卡在哪里、需要谁帮忙。\n\n先把这三个问题的答案写在最前面，再补细节。你会发现，周报从半小时缩短到了十分钟。"},
+		}); err != nil {
+			return err
 		}
-		for _, x := range samples {
-			if _, err := q.Exec(ctx, `INSERT INTO style_sample (account_id, title, content_md, char_count) VALUES ($1,$2,$3,$4)`, accountID, x[0], x[1], runeLen(x[1])); err != nil {
-				return err
-			}
-		}
-		mats := []struct{ kind, content, source string }{
+		if err := insertMaterials(wechatAccountID, []demoMaterial{
 			{"experience", "第一次带项目时，我每天晚上十点还在回消息，后来把沟通集中到上午十点和下午四点两个时段，加班明显少了。", "作者经历"},
 			{"opinion", "会议的价值不在于开了多久，而在于散会时每个人是否清楚自己的下一步。", "作者观点"},
 			{"case", "某团队把周会从 60 分钟改为 25 分钟站会，只同步阻塞事项，其余内容改为文档异步更新。", "示例案例（演示数据）"},
 			{"data", "【演示数据】一项内部问卷中，有 6 成受访者认为自己每周至少有 3 个会议可以不参加。", "示例数据（演示用，非真实统计）"},
 			{"opinion", "写给别人看的文字，先写结论，再写理由。", "作者观点"},
+		}); err != nil {
+			return err
 		}
-		for _, m := range mats {
-			if _, err := q.Exec(ctx, `INSERT INTO material (workspace_id, account_id, kind, content, source, tags) VALUES ($1,$2,$3,$4,$5,$6)`,
-				ws, accountID, m.kind, m.content, m.source, []string{"示例"}); err != nil {
-				return err
-			}
+		if err := insertTopics(wechatAccountID, []demoTopic{
+			{"写给新人的第一份周报模板", "用三个问题替代流水账"},
+			{"开会前，先想清楚这三件事", "从会前准备切入，减少无效会议"},
+		}); err != nil {
+			return err
 		}
-		outline, _ := json.Marshal([]map[string]string{
+		wechatOutline, _ := json.Marshal([]map[string]string{
 			{"heading": "为什么会议越开越多", "key_point": "会议是默认选项，取消它需要理由"},
 			{"heading": "一张表的三列", "key_point": "结论、下一步、负责人"},
 			{"heading": "从今天开始的小动作", "key_point": "散会前 2 分钟确认下一步"},
 		})
-		var workID uuid.UUID
+		var wechatWorkID uuid.UUID
 		if err := q.QueryRow(ctx, `INSERT INTO work (account_id, content_format, title, viewpoint, outline, outline_confirmed_at, theme, status)
 			VALUES ($1,'long_article','开会前，先想好散会时要带走什么','会议的价值在于散会后每个人都知道自己的下一步',$2,now(),'ink','drafting') RETURNING id`,
-			accountID, outline).Scan(&workID); err != nil {
+			wechatAccountID, wechatOutline).Scan(&wechatWorkID); err != nil {
 			return err
 		}
-		secs := [][2]string{
+		if err := insertSections(wechatWorkID, []demoSection{
 			{"为什么会议越开越多", "你有没有算过，自己一周有多少时间花在会议上？\n\n会议之所以越开越多，是因为\"开个会吧\"是最省事的默认选项，而取消一个会需要理由。"},
 			{"一张表的三列", "我现在每个会只记三列：结论、下一步、负责人。\n\n没有结论的会，下次就可以考虑改成文档沟通。"},
 			{"从今天开始的小动作", "下次开会，试试在散会前留 2 分钟，让每个人说一句自己的下一步。\n\n你会发现，会议真正开始有用了。"},
+		}); err != nil {
+			return err
 		}
-		for i, x := range secs {
-			if _, err := q.Exec(ctx, `INSERT INTO work_section (work_id, position, heading, key_point, content_md) VALUES ($1,$2,$3,$4,$5)`,
-				workID, i, x[0], x[0], x[1]); err != nil {
-				return err
-			}
+
+		// 示例账号 2：小红书（图文短笔记）——用于体验快写、检查与预览，带标题、观点、短正文与话题。
+		if err := q.QueryRow(ctx, `INSERT INTO platform_account (workspace_id, platform, name, content_format, is_demo) VALUES ($1,'xhs','示例 · 效率工具手账','image_note',true) RETURNING id`,
+			ws).Scan(&xhsAccountID); err != nil {
+			return err
 		}
-		_, err := q.Exec(ctx, `INSERT INTO topic (account_id, title, angle, source) VALUES ($1,'写给新人的第一份周报模板','用三个问题替代流水账','manual')`, accountID)
-		return err
+		if err := insertProfile(xhsAccountID, []string{"效率工具", "时间管理", "自我提升"},
+			"想把日子过得更顺手的职场新人和学生", "像朋友分享刚试过的小工具，口语化、不夸张",
+			[]string{"最牛", "绝对"}, "开头一句话给结论，中间写具体用法，结尾一句踩坑提醒；每段不超过 4 行。"); err != nil {
+			return err
+		}
+		if err := insertSamples(xhsAccountID, []demoSample{
+			{"我的桌面只留三样东西", "先说结论：桌面只放今天要用的东西，其他都收进抽屉。\n\n我试了两周，找东西的时间明显少了。具体做法是：左手边只放水杯和便签，右手边只放正在用的本子。\n\n如果你也总是找不到笔，先从一个抽屉开始收拾。"},
+			{"通勤 20 分钟能做完的三件小事", "把通勤时间固定成三件事：回一条该回的消息、列今天的三个重点、听一段有用的内容。\n\n不用全部做完，能做到一件，这一天就没白开始。"},
+		}); err != nil {
+			return err
+		}
+		if err := insertMaterials(xhsAccountID, []demoMaterial{
+			{"experience", "我常用的待办模板只有三列：今天必须做、今天可以推、今天不做。", "作者经验"},
+			{"experience", "早上最容易浪费时间的是找东西，把钥匙、工卡、耳机固定在门口一个小盘子里，出门速度快很多。", "作者经历"},
+			{"opinion", "工具不是越多越好，能坚持用两周的才值得留下。", "作者观点"},
+		}); err != nil {
+			return err
+		}
+		if err := insertTopics(xhsAccountID, []demoTopic{
+			{"3 个让早晨更顺手的桌面小习惯", "从每天都会碰到的小动作切入，给可立即照做的三步"},
+			{"我用了两周的待办清单模板", "只保留三列，减少选择成本"},
+		}); err != nil {
+			return err
+		}
+		xhsOutline, _ := json.Marshal([]map[string]string{
+			{"heading": "先把桌面清出一条直线", "key_point": "正前方只留今天要用的东西"},
+			{"heading": "常用的三样东西固定位置", "key_point": "钥匙、工卡、耳机各有一个家"},
+			{"heading": "给明天留一张便签", "key_point": "便签只写明天第一件事"},
+		})
+		var xhsWorkID uuid.UUID
+		if err := q.QueryRow(ctx, `INSERT INTO work (account_id, content_format, title, viewpoint, outline, outline_confirmed_at, topics, theme, status)
+			VALUES ($1,'image_note','3 个让早晨更顺手的桌面小习惯','把常用的东西固定放在同一个位置，比买新的收纳工具更有效。',$2,now(),$3,'ink','drafting') RETURNING id`,
+			xhsAccountID, xhsOutline, []string{"效率工具", "桌面整理", "打工人日常"}).Scan(&xhsWorkID); err != nil {
+			return err
+		}
+		return insertSections(xhsWorkID, []demoSection{
+			{"先把桌面清出一条直线", "早上坐下来，先把正前方清出一条能放下电脑和本子的空位。\n\n其他东西先推到一边，等晚上再收。"},
+			{"常用的三样东西固定位置", "钥匙、工卡、耳机，各给一个固定的位置。\n\n刚开始可以贴一张小标签，一周后就不用看了。"},
+			{"给明天留一张便签", "下班前写一句明天第一件事，早上坐下就知道从哪开始。\n\n便签只写一件，不要写清单。"},
+		})
 	})
 	if err != nil {
 		return err
 	}
-	s.audit(ctx, "demo_import", "platform_account", accountID.String(), "ok", nil)
-	return ok(w, map[string]any{"account_id": accountID})
+	s.audit(ctx, "demo_import", "platform_account", wechatAccountID.String(), "ok", map[string]any{"xhs_account_id": xhsAccountID.String()})
+	return ok(w, map[string]any{
+		"account_id":     wechatAccountID,
+		"xhs_account_id": xhsAccountID,
+		"account_ids":    []uuid.UUID{wechatAccountID, xhsAccountID},
+	})
 }
 
 func (s *Server) clearDemo(w http.ResponseWriter, r *http.Request) error {

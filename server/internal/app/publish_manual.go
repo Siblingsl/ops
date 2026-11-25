@@ -316,6 +316,12 @@ func (s *Server) publishTaskSubmitNow(w http.ResponseWriter, r *http.Request) er
 	if task.Platform == "xhs" {
 		return apiErr(http.StatusConflict, "direct_submit_not_supported", "小红书不允许由 OPS 直接点击发布；请在 OPS 填入后到小红书草稿箱人工发布")
 	}
+	// 示例账号任务不得进入真实提交通道（服务端硬闸门）。
+	if demo, err := s.accountIsDemo(r.Context(), task.AccountID); err != nil {
+		return err
+	} else if demo {
+		return demoAccountWriteError()
+	}
 	if task.State == "submitted" {
 		w.Header().Set("Cache-Control", "no-store")
 		return ok(w, map[string]any{"task": task, "intent": nil, "reason": "already_submitted"})

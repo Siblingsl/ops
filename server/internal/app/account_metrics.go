@@ -32,6 +32,10 @@ const followerSourcePrioritySQL = `(CASE source
 
 // syncFollowers reads the last 7 days of follows, unfollows and totals (two read-only datacube calls).
 func (s *Server) syncFollowers(ctx context.Context, a *Account, token string) (int, error) {
+	// 示例账号绝不写入 account_metric_daily。
+	if a.IsDemo {
+		return 0, demoAccountMetricError()
+	}
 	end := s.today().AddDate(0, 0, -1)
 	begin := end.AddDate(0, 0, -(followerLookbackDays - 1))
 	b, e := begin.Format("2006-01-02"), end.Format("2006-01-02")
@@ -145,6 +149,10 @@ func (s *Server) recordFollowers(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	// 示例账号不记录真实账号统计数据（服务端硬闸门）。
+	if a.IsDemo {
+		return demoAccountMetricError()
+	}
 	var in struct {
 		Date         string `json:"date"`
 		NewFollow    *int   `json:"new_follow"`
@@ -187,6 +195,9 @@ func (s *Server) importFollowers(w http.ResponseWriter, r *http.Request) error {
 	a, err := s.accountFromPath(r)
 	if err != nil {
 		return err
+	}
+	if a.IsDemo {
+		return demoAccountMetricError()
 	}
 	var in struct {
 		CSV string `json:"csv"`
@@ -422,6 +433,9 @@ func (s *Server) backfillFollowers(w http.ResponseWriter, r *http.Request) error
 	a, err := s.accountFromPath(r)
 	if err != nil {
 		return err
+	}
+	if a.IsDemo {
+		return demoAccountMetricError()
 	}
 	var in struct {
 		Platform string `json:"platform"`

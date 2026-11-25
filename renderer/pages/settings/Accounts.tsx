@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AccountCreateForm, credTone, CredentialPanel } from '@/components/account-forms'
 import { confirm, Dialog } from '@/components/dialog'
+import { useEnterDemoWorkspace } from '@/components/demo-onboarding'
 import { PlatformConnectionCard } from '@/components/platform-connection'
 import { WechatDraftPanel } from '@/components/wechat-drafts'
 import { Badge, Button, Card, CardHeader, cn, Empty, Field, Input, Notice, PageHeader, PageLoading, PlatformMark, platformFormatLabel, platformLabel, platformFormats, roleReadOnlyHint, Select, Switch, Textarea } from '@/components/ui'
@@ -432,6 +433,7 @@ export default function SettingsAccounts() {
   const [q, setQ] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const inv = useInvalidate()
+  const { enter: enterDemo, busy: demoBusy } = useEnterDemoWorkspace()
   const [deletedCurrent, setDeletedCurrent] = useState<string | null>(null)
   const [connectionActionsTarget, setConnectionActionsTarget] = useState<HTMLDivElement | null>(null)
   const creating = params.get('new') === '1'
@@ -495,7 +497,10 @@ export default function SettingsAccounts() {
       return <Card className="space-y-3 p-5">
         <div className="font-semibold text-mist-900">{noAccounts ? '当前工作区还没有平台账号' : '请先在头像菜单选择账号'}</div>
         <p className="text-[13px] text-mist-600">平台账号设置只显示已选择且已验证的当前账号。</p>
-        <Button variant="primary" onClick={requestDesktopAccountSwitcher}>{noAccounts ? '打开账号入口' : '返回并选择账号'}</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="primary" onClick={requestDesktopAccountSwitcher}>{noAccounts ? '打开账号入口' : '返回并选择账号'}</Button>
+          {noAccounts && canManage && <Button variant="secondary" data-testid="accounts-enter-demo" loading={demoBusy} onClick={() => void enterDemo()}>先用示例账号体验 5 分钟</Button>}
+        </div>
       </Card>
     }
 
@@ -507,6 +512,7 @@ export default function SettingsAccounts() {
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-2">
                 <div className="min-w-0 truncate text-[16px] font-semibold text-mist-900" title={current.name}>{current.name}</div>
+                {current.is_demo && <Badge className="shrink-0" tone="gamboge">示例</Badge>}
                 <Badge className="shrink-0" tone={current.status === 'disabled' ? 'gamboge' : 'green'}>{current.status === 'disabled' ? '已停用' : '使用中'}</Badge>
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[12.5px] text-mist-500">
@@ -551,7 +557,10 @@ export default function SettingsAccounts() {
             icon={<Users className="size-5" />}
             title="还没有平台账号"
             desc={canManage ? '先添加平台账号。公众号凭证、定位档案、风格样本和模型可在添加后配置。' : '请联系工作区所有者添加平台账号。'}
-            action={canManage ? <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setParams({ new: '1' })}>添加账号</Button> : undefined}
+            action={canManage ? <div className="flex flex-wrap justify-center gap-2">
+              <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setParams({ new: '1' })}>添加账号</Button>
+              <Button variant="secondary" loading={demoBusy} onClick={() => void enterDemo()}>先用示例账号体验 5 分钟</Button>
+            </div> : undefined}
           />
           <ol className="space-y-2 border-t border-mist-100 bg-mist-50/60 px-6 py-4 text-[13px] text-mist-600">
             <li><span className="font-medium text-mist-800">1. 添加账号</span> — 本页</li>
@@ -605,6 +614,7 @@ export default function SettingsAccounts() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
                           <span className="truncate text-[13.5px] font-medium text-mist-900">{a.name}</span>
+                          {a.is_demo && <Badge tone="gamboge">示例</Badge>}
                           {selected === a.id && <Pencil className="size-3 shrink-0 text-ink-500" />}
                         </div>
                         <div className="text-[11.5px] text-mist-500">{platformLabel[a.platform]} · {platformFormatLabel(a.platform, a.content_format)}</div>

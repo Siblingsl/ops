@@ -545,13 +545,18 @@ func TestMaterialExtractAndInboxAreOneByOne(t *testing.T) {
 
 func TestDemoImportAndClear(t *testing.T) {
 	var res struct {
-		AccountID uuid.UUID `json:"account_id"`
+		AccountID    uuid.UUID   `json:"account_id"`
+		XHSAccountID uuid.UUID   `json:"xhs_account_id"`
+		AccountIDs   []uuid.UUID `json:"account_ids"`
 	}
 	env.mustJSON(t, "POST", "/api/v1/demo", nil, &res)
+	if res.AccountID == uuid.Nil || res.XHSAccountID == uuid.Nil || len(res.AccountIDs) != 2 {
+		t.Fatalf("demo workspace should create wechat + xhs accounts: %+v", res)
+	}
 	env.expectErr(t, "POST", "/api/v1/demo", nil, "state_invalid")
 	var n int
 	_ = env.srv.db.QueryRow(context.Background(), `SELECT count(*) FROM platform_account WHERE is_demo`).Scan(&n)
-	if n != 1 {
+	if n != 2 {
 		t.Fatalf("demo accounts: %d", n)
 	}
 	env.mustJSON(t, "DELETE", "/api/v1/demo", nil, nil)

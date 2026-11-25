@@ -842,6 +842,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
                 <button key={a.id} type="button" onClick={() => switchAccount(a.id)} onContextMenu={(e) => openMenu(e, accountMenu(a))} className={cn('flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left text-[13px] transition', a.id === current?.id ? 'bg-ink-50 font-semibold text-ink-800' : 'text-mist-600 hover:bg-mist-50 hover:text-mist-900')}>
                   <span className={cn('size-1.5 shrink-0 rounded-full', a.id === current?.id ? 'bg-ink-600' : 'bg-mist-300')} />
                   <span className="min-w-0 flex-1 break-words" title={a.name}>{a.name}</span>
+                  {a.is_demo && <span className="shrink-0 rounded bg-gamboge-100 px-1.5 py-0.5 text-[10.5px] font-medium text-gamboge-700">示例</span>}
                   {a.id === current?.id && <Check className="size-3.5 shrink-0 text-ink-600" />}
                 </button>
               ))}
@@ -942,6 +943,7 @@ function WorkspaceAccountTree({ compact }: { compact?: boolean }) {
                             >
                               <span className={cn('size-1.5 shrink-0 rounded-full', active ? 'bg-ink-600' : 'bg-mist-300')} />
                               <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                              {a.is_demo && <span className="shrink-0 rounded bg-gamboge-100 px-1.5 py-0.5 text-[10.5px] font-medium text-gamboge-700">示例</span>}
                               {active && <Check className="size-3.5 shrink-0 text-ink-600" />}
                             </button>
                           )

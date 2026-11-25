@@ -222,6 +222,12 @@ func (s *Server) createPublishTasks(w http.ResponseWriter, r *http.Request) erro
 	if err != nil {
 		return err
 	}
+	// 示例账号不能创建发布任务（服务端硬闸门，不能只靠前端隐藏入口）。
+	if demo, err := s.accountIsDemo(r.Context(), wk.AccountID); err != nil {
+		return err
+	} else if demo {
+		return demoAccountWriteError()
+	}
 	var in createPublishTasksInput
 	if err := decode(r, &in); err != nil {
 		return err
@@ -529,6 +535,14 @@ func (s *Server) publishTaskActionHandler(w http.ResponseWriter, r *http.Request
 	task, err := s.loadPublishTaskByID(r.Context(), taskID)
 	if err != nil {
 		return err
+	}
+	// queue / retry（同为 queued）不得为示例账号任务排队；其余状态（stop/skip/manual）保持可用。
+	if to == "queued" {
+		if demo, err := s.accountIsDemo(r.Context(), task.AccountID); err != nil {
+			return err
+		} else if demo {
+			return demoAccountWriteError()
+		}
 	}
 	var in struct {
 		ExpectedVersion int            `json:"expected_version"`
@@ -1464,6 +1478,11 @@ func (s *Server) createPublishBatch(w http.ResponseWriter, r *http.Request) erro
 		wk, err := s.loadWork(r.Context(), id)
 		if err != nil {
 			return err
+		}
+		if demo, err := s.accountIsDemo(r.Context(), wk.AccountID); err != nil {
+			return err
+		} else if demo {
+			return demoAccountWriteError()
 		}
 		if accountID == uuid.Nil {
 			accountID = wk.AccountID

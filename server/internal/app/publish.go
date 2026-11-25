@@ -155,6 +155,10 @@ func (s *Server) pushWechat(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	// 示例账号只体验写作与预览，绝不写真实平台草稿（服务端硬闸门，不依赖前端隐藏按钮）。
+	if m.Account.IsDemo {
+		return demoAccountWriteError()
+	}
 	if m.Account.Platform != "wechat_mp" {
 		return validation("只有公众号作品可以写入草稿")
 	}

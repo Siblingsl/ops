@@ -2,12 +2,13 @@ import { useQuery } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect } from 'react'
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { PageSkeleton } from './components/error-boundary'
+import { ColdStartWelcome } from './components/demo-onboarding'
 import { Button, Card, PageLoading, Spinner } from './components/ui'
 import { ApiError, errorMessage, get } from './lib/api'
 import { DESKTOP_ACCOUNT_SWITCHER_REQUEST } from './lib/desktop-settings'
 import { isElectronDesktop } from './lib/desktop-presentation.js'
 import { setRecentOwner } from './lib/recent'
-import { rememberedAccount, useAccounts, useCurrentAccountSelection, useMe } from './lib/session'
+import { rememberedAccount, rememberAccount, useAccounts, useCurrentAccountSelection, useMe } from './lib/session'
 import DesktopSettingsHost from './layout/DesktopSettingsHost'
 
 const Shell = lazy(() => import('./layout/Shell'))
@@ -66,15 +67,20 @@ function Home() {
   const { data: accounts, isLoading } = useAccounts()
   const selection = useCurrentAccountSelection()
   const desktop = isElectronDesktop(navigator.userAgent)
-  if (isLoading || me.isLoading || (desktop && selection.isLoading)) return <PageLoading />
   const active = accounts?.filter((a) => a.status === 'active') ?? []
+  const userId = me.data?.user_id ?? me.data?.username
+  const workspaceId = me.data?.workspace.id
+  // 新设备尚未记住账号或刚导入示例账号时，直接落到第一个活跃账号，不再卡回空白设置页。
+  const fallbackId = desktop && active.length > 0 && !selection.account ? active[0].id : undefined
+  useEffect(() => {
+    if (fallbackId) rememberAccount(fallbackId, userId, workspaceId)
+  }, [fallbackId, userId, workspaceId])
+  if (isLoading || me.isLoading || (desktop && selection.isLoading)) return <PageLoading />
+  // 零活跃账号不再强制跳设置：先给“示例体验”这条路，绑定真实账号只是并行的第二步。
+  if (active.length === 0) return <ColdStartWelcome />
   if (desktop) {
-    if (!selection.account) return <Navigate to="/settings/accounts" replace />
-    return <Navigate to={`/a/${selection.account.id}`} replace />
-  }
-  // 无平台账号：所有者去添加；编辑者去成员页等待
-  if (active.length === 0) {
-    return <Navigate to={me.data?.role === 'owner' ? '/settings/accounts?new=1' : '/settings/members'} replace />
+    if (selection.account) return <Navigate to={`/a/${selection.account.id}`} replace />
+    return <Navigate to={`/a/${fallbackId ?? active[0].id}`} replace />
   }
   const id = active.find((a) => a.id === rememberedAccount())?.id ?? active[0].id
   return <Navigate to={`/a/${id}`} replace />

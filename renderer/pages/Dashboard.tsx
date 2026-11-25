@@ -1,4 +1,5 @@
 import { openCreateWork } from '@/components/create-work-panel'
+import { DemoImportRow, DemoModeBanner, OnboardingStepsCard } from '@/components/demo-onboarding'
 import { FirstValueGuide } from '@/components/first-value-guide'
 import { openQuickCollect } from '@/components/quick-collect'
 import { DailyPanel } from './ops/Daily'
@@ -6,14 +7,12 @@ import HotPanel from './ops/Hot'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, BookOpenCheck, Bot, CalendarDays, CheckCircle2, ChevronDown, Circle, ClipboardCheck, Compass, Cpu, FilePen, HeartPulse, KeyRound, Lightbulb, PenLine, Send, Shield, Sparkles, TrendingUp, UploadCloud } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
-import { confirm } from '@/components/dialog'
-import { Button, Card, cn, platformFormatLabel, Notice, PageHeader, PageState, StatusBadge, statusMeta } from '@/components/ui'
-import { del, errorMessage, get, post } from '@/lib/api'
+import { Link } from 'react-router-dom'
+import { Button, Card, cn, platformFormatLabel, PageHeader, PageState, StatusBadge, statusMeta, Badge } from '@/components/ui'
+import { get } from '@/lib/api'
 import { fmtNum, relTime } from '@/lib/format'
 import { useAgentBootstrap } from '@/lib/agent'
-import { useAccounts, useCanWrite, useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
+import { useCanWrite, useCurrentAccount } from '@/lib/session'
 import { currentAccountSettingsPath } from '@/lib/desktop-settings'
 import type { Account, AILimit, ContentFormat, DailyResult, HealthItem, NextAction, WorkStatus } from '@/lib/types'
 import { usePrefetchWork, useRecentWorks } from '@/lib/v3'
@@ -231,58 +230,13 @@ function HealthAndRhythm({ accountId }: { accountId: string }) {
   )
 }
 
-function DemoCard({ acc, owner }: { acc: Account; owner: boolean }) {
-  const inv = useInvalidate()
-  const nav = useNavigate()
-  const { data: accounts } = useAccounts()
-  const hasDemo = (accounts ?? []).some((a) => a.is_demo)
-  if (!owner) return null
-  if (acc.is_demo) {
-    return (
-      <Notice tone="gamboge" className="mb-6">
-        这是示例账号，里面的档案、素材和作品都是演示数据，可以随便试。试完后
-        <button type="button" className="mx-1 cursor-pointer font-medium underline" onClick={async () => {
-          if (!(await confirm({ title: '清除示例数据？', desc: '会删除示例账号及其全部内容，你自己的账号不受影响。', confirmText: '清除', danger: true }))) return
-          try {
-            await del('/demo')
-            await inv(['accounts'])
-            toast.success('示例数据已清除')
-            nav('/')
-          } catch (e) {
-            toast.error(errorMessage(e))
-          }
-        }}>一键清除示例数据</button>
-      </Notice>
-    )
-  }
-  if (hasDemo) return null
-  return (
-    <button type="button" className="mb-6 flex w-full cursor-pointer items-center gap-3 rounded-xl border border-dashed border-mist-300 px-5 py-3 text-left text-[13px] text-mist-600 transition hover:border-ink-300 hover:bg-ink-50/40"
-      onClick={async () => {
-        try {
-          const r = await post<{ account_id: string }>('/demo')
-          await inv(['accounts'])
-          toast.success('已导入示例账号')
-          nav(`/a/${r.account_id}`)
-        } catch (e) {
-          toast.error(errorMessage(e))
-        }
-      }}>
-      <Sparkles className="size-4 text-gamboge-500" />
-      <span className="flex-1">想先看看完整流程？导入一个示例账号（含档案、风格样本、素材和一篇进行中的作品），随时可一键清除。</span>
-      <ArrowRight className="size-4 text-mist-400" />
-    </button>
-  )
-}
-
 function DesktopDashboard({
-  account, data, canWrite, guideVisible, owner, create, setup, setupItems, pendingSetup, hideSetup,
+  account, data, canWrite, guideVisible, create, setup, setupItems, pendingSetup, hideSetup,
 }: {
   account: Account
   data: Dash
   canWrite: boolean
   guideVisible: boolean
-  owner: boolean
   create: () => void
   setup: Dash['setup']
   setupItems: { done: boolean; label: string; desc: string; to: string; icon: React.ReactNode }[]
@@ -318,10 +272,18 @@ function DesktopDashboard({
 
   return (
     <div className="desktop-dashboard creative-page animate-fade-in" data-testid="desktop-dashboard">
+      <DemoModeBanner account={account} />
       <div className="creative-welcome">
-        <div><h1>今天，给灵感一点空间。</h1><p>{account.name} · 从一个小想法，到一篇有温度的内容。</p></div>
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1>今天，给灵感一点空间。</h1>
+            {account.is_demo && <span data-testid="demo-account-badge" className="shrink-0"><Badge tone="gamboge">示例</Badge></span>}
+          </div>
+          <p>{account.name} · 从一个小想法，到一篇有温度的内容。</p>
+        </div>
         <div className="actions"><span className="date-pill"><CalendarDays aria-hidden="true" /> {dateLabel}</span>{canWrite && <button type="button" className="button primary" onClick={create}><PenLine aria-hidden="true" />新建作品</button>}</div>
       </div>
+      <OnboardingStepsCard account={account} modelReady={data.setup.ai} totalWorks={totalWorks} sampleWorkId={activeWork?.work_id} onCreateWork={create} />
 
       <div className="creative-main-grid">
         <div className="creative-left">
@@ -440,7 +402,6 @@ function DesktopDashboard({
           <div id="desktop-account-health"><HealthAndRhythm accountId={account.id} /></div>
           {pendingSetup.length > 0 && <Card className="mb-6 overflow-hidden"><div className="flex items-center justify-between border-b border-mist-100 bg-gamboge-50/50 px-5 py-3"><div className="text-[13.5px] font-semibold text-mist-800">进阶提升 · 还有 {pendingSetup.length} 项可补充</div><div className="text-xs text-mist-500">{setupItems.length - pendingSetup.length} / {setupItems.length} 已完成 · 不阻塞首条推荐</div></div><div className="grid divide-mist-100 sm:grid-cols-2 lg:grid-cols-4 lg:divide-x">{setupItems.map((item) => <Link key={item.label} to={item.to} className={cn('group flex items-start gap-3 px-5 py-4 transition hover:bg-mist-50', item.done && 'opacity-55')}>{item.done ? <CheckCircle2 className="mt-0.5 size-4 text-success" /> : <Circle className="mt-0.5 size-4 text-gamboge-400" />}<div><div className="text-[13.5px] font-medium text-mist-800 group-hover:text-ink-700">{item.label}</div><div className="text-xs text-mist-500">{item.desc}</div></div></Link>)}</div></Card>}
           {canWrite && guideVisible && <details className="desktop-first-value-disclosure" data-testid="desktop-first-value-disclosure"><summary><span className="desktop-first-value-icon"><Lightbulb aria-hidden="true" /></span><span className="desktop-first-value-copy"><strong>首次创作路径</strong><small>查看从第一篇作品到第一条推荐的 5 步准备</small></span><ChevronDown aria-hidden="true" /></summary><FirstValueGuide key={account.id} accountId={account.id} modelReady={setup.ai} profileReady={setup.profile} hasWork={totalWorks > 0} /></details>}
-          <DemoCard acc={account} owner={owner} />
         </div>
       </details>
     </div>
@@ -450,7 +411,6 @@ function DesktopDashboard({
 export default function Dashboard() {
   const acc = useCurrentAccount()
   const canWrite = useCanWrite()
-  const { data: me } = useMe()
   const { data, isLoading, error, failureReason, isFetching, refetch } = useQuery({ queryKey: ['dashboard', acc?.id], queryFn: () => get<Dash>(`/accounts/${acc!.id}/dashboard`), enabled: !!acc })
   const create = useCreateWork(acc?.id, acc?.platform)
   const prefetch = usePrefetchWork()
@@ -479,7 +439,7 @@ export default function Dashboard() {
   const greet = hour < 6 ? '夜深了' : hour < 12 ? '早上好' : hour < 18 ? '下午好' : '晚上好'
 
   if (document.documentElement.dataset.presentation === 'ops-creative-desktop') {
-    return <DesktopDashboard account={acc} data={data} canWrite={canWrite} guideVisible={guideVisible} owner={me?.role === 'owner'} create={() => create()} setup={s} setupItems={setupItems} pendingSetup={pendingSetup} hideSetup={guideVisible} />
+    return <DesktopDashboard account={acc} data={data} canWrite={canWrite} guideVisible={guideVisible} create={() => create()} setup={s} setupItems={setupItems} pendingSetup={pendingSetup} hideSetup={guideVisible} />
   }
 
   return (
@@ -487,14 +447,16 @@ export default function Dashboard() {
       <PageHeader
         eyebrow={new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}
         title={`${greet}，今天写点什么？`}
-        desc={`当前账号：${acc.name}`}
+        desc={<span className="inline-flex flex-wrap items-center gap-2">当前账号：{acc.name}{acc.is_demo && <Badge tone="gamboge">示例</Badge>}</span>}
         action={canWrite ? <>
           <Link to={`/a/${acc.id}/topics?suggest=1`}><Button icon={<Sparkles className="size-4" />}>AI 选题建议</Button></Link>
           <Button variant="primary" icon={<PenLine className="size-4" />} onClick={() => create()}>新建作品</Button>
         </> : undefined}
       />
 
-      <DemoCard acc={acc} owner={me?.role === 'owner'} />
+      <DemoModeBanner account={acc} />
+      <OnboardingStepsCard account={acc} modelReady={s.ai} totalWorks={Object.values(data.counts).reduce((a, b) => a + (b ?? 0), 0)} sampleWorkId={data.todos[0]?.work_id} onCreateWork={() => create()} />
+      {!acc.is_demo && <DemoImportRow className="mb-6" />}
       {canWrite && <FirstValueGuide key={acc.id} accountId={acc.id} modelReady={s.ai} profileReady={s.profile} hasWork={!!data?.counts && Object.values(data.counts).some((n) => (n ?? 0) > 0)} />}
       <MainLine accountId={acc.id} hideSetup={guideVisible} />
       <BriefCard accountId={acc.id} />
