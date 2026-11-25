@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -15,7 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"ops/internal/secure"
+	"ops/internal/domain/compliance"
 )
 
 type CheckItem struct {
@@ -32,21 +31,21 @@ type CheckItem struct {
 }
 
 type CheckRun struct {
-	ID                       uuid.UUID   `json:"id"`
-	Revision                 int         `json:"revision"`
-	TargetPlatform           string      `json:"target_platform"`
-	FactStatus               string      `json:"fact_status"`
+	ID                       uuid.UUID       `json:"id"`
+	Revision                 int             `json:"revision"`
+	TargetPlatform           string          `json:"target_platform"`
+	FactStatus               string          `json:"fact_status"`
 	CompletedAt              *time.Time      `json:"completed_at"`
 	CreatedAt                time.Time       `json:"created_at"`
 	OpsStandardBasis         json.RawMessage `json:"ops_standard_basis,omitempty"`
-	StandardChanged           bool            `json:"standard_changed"`
+	StandardChanged          bool            `json:"standard_changed"`
 	Stale                    bool            `json:"stale"`
-	MaterialBasisStale       bool        `json:"material_basis_stale"`
-	MaterialBasisUnavailable int         `json:"material_basis_unavailable"`
-	Items                    []CheckItem `json:"items"`
-	Total                    int         `json:"total"`
-	Confirmed                int         `json:"confirmed"`
-	Blocking                 int         `json:"blocking"`
+	MaterialBasisStale       bool            `json:"material_basis_stale"`
+	MaterialBasisUnavailable int             `json:"material_basis_unavailable"`
+	Items                    []CheckItem     `json:"items"`
+	Total                    int             `json:"total"`
+	Confirmed                int             `json:"confirmed"`
+	Blocking                 int             `json:"blocking"`
 }
 
 var allowedResolutions = map[string][]string{
@@ -59,27 +58,14 @@ var allowedResolutions = map[string][]string{
 	"rewrite":       {"acknowledged", "modified"},
 }
 
-var pendingMarker = regexp.MustCompile(`【待核实[^】]*】`)
+var pendingMarker = compliance.PendingMarker
 
 func sentenceAround(text string, idx, n int) string {
-	runes := []rune(text)
-	start := len([]rune(text[:idx]))
-	end := start + len([]rune(text[idx:idx+n]))
-	isStop := func(r rune) bool { return r == '。' || r == '！' || r == '？' || r == '\n' || r == '!' || r == '?' }
-	for start > 0 && !isStop(runes[start-1]) {
-		start--
-	}
-	for end < len(runes) && !isStop(runes[end]) {
-		end++
-	}
-	if end < len(runes) {
-		end++
-	}
-	return strings.TrimSpace(string(runes[start:end]))
+	return compliance.SentenceAround(text, idx, n)
 }
 
 func fingerprint(category, matched, sentence string) string {
-	return secure.SHA256Hex([]byte(category + "|" + matched + "|" + sentence))[:32]
+	return compliance.Fingerprint(category, matched, sentence)
 }
 
 type textField struct {
@@ -327,11 +313,11 @@ func (s *Server) buildRuleItems(ctx context.Context, w *Work, htmlChars, htmlByt
 }
 
 // adWords are the 广告法极限词 shared by the formal check and live lint.
-var adWords = []string{"最", "第一", "唯一", "首个", "顶级", "极致", "绝对", "100%", "永久", "国家级", "世界级"}
+var adWords = compliance.AdWords
 
 type checkWord struct{ w, source string }
 
-var sourceLabel = map[string]string{"base": "通用词库", "custom": "自定义词库", "account": "账号禁用词", "memory": "AI 记忆中的避免用词"}
+var sourceLabel = compliance.SourceLabels
 
 // checkWords is the word list used by both the formal check and /lint, so their results agree (EX-E-09).
 func (s *Server) checkWords(ctx context.Context, accountID uuid.UUID) ([]checkWord, error) {

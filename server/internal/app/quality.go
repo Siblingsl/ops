@@ -6,15 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"ops/internal/domain/compliance"
 )
 
 // ---------- EX-P-02 质量看板 ----------
@@ -754,51 +754,16 @@ type CustomTheme struct {
 	QuoteStyle   string  `json:"quote_style"`
 }
 
-var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
-
 func customThemePrimaryContrastRatio(color string) float64 {
-	channels := [3]float64{}
-	for i, offset := range []int{1, 3, 5} {
-		value, _ := strconv.ParseUint(color[offset:offset+2], 16, 8)
-		channel := float64(value) / 255
-		if channel <= 0.04045 {
-			channels[i] = channel / 12.92
-		} else {
-			channels[i] = math.Pow((channel+0.055)/1.055, 2.4)
-		}
-	}
-	luminance := channels[0]*0.2126 + channels[1]*0.7152 + channels[2]*0.0722
-	return 1.05 / (luminance + 0.05)
+	return compliance.CustomThemePrimaryContrastRatio(color)
 }
 
 func (t *CustomTheme) validate() error {
-	if t.Base == "" {
-		t.Base = "ink"
-	}
-	if !hexColor.MatchString(t.PrimaryColor) {
-		return validation("主色需要是 #RRGGBB 格式")
-	}
-	if customThemePrimaryContrastRatio(t.PrimaryColor) < 4.5 {
-		return validation("主色与白色背景的文字对比度不足 4.5:1")
-	}
-	if t.FontSize < 14 || t.FontSize > 17 {
-		return validation("正文字号需在 14–17px 之间")
-	}
-	if t.LineHeight < 1.4 || t.LineHeight > 2.2 {
-		return validation("行距需在 1.4–2.2 之间")
-	}
-	if t.ParagraphGap < 8 || t.ParagraphGap > 32 {
-		return validation("段间距需在 8–32px 之间")
-	}
-	switch t.HeadingStyle {
-	case "plain", "underline", "bar", "block":
-	default:
-		return validation("标题样式无效")
-	}
-	switch t.QuoteStyle {
-	case "bar", "box", "italic":
-	default:
-		return validation("引用样式无效")
+	normalizedBase, errMsg := compliance.ValidateCustomThemeInput(
+		t.Base, t.PrimaryColor, t.FontSize, t.LineHeight, t.ParagraphGap, t.HeadingStyle, t.QuoteStyle)
+	t.Base = normalizedBase
+	if errMsg != "" {
+		return validation(errMsg)
 	}
 	return nil
 }
@@ -845,49 +810,10 @@ func (s *Server) putCustomTheme(w http.ResponseWriter, r *http.Request) error {
 
 // ---------- EX-G-02 排版建议（规则优先，逐条应用） ----------
 
-type LayoutSuggestion struct {
-	SectionID uuid.UUID `json:"section_id"`
-	Kind      string    `json:"kind"`
-	Text      string    `json:"text"`
-	Reason    string    `json:"reason"`
-}
-
-var (
-	keySentence = regexp.MustCompile(`[^。！？\n]*(关键是|本质上|核心是|说到底|记住|真正重要的是)[^。！？\n]*[。！？]?`)
-	enumMarker  = regexp.MustCompile(`(第[一二三四五六七八九十]|首先|其次|最后|[1-9][.、])`)
-)
+type LayoutSuggestion = compliance.LayoutSuggestion
 
 func layoutRules(sectionID uuid.UUID, content string, golden []string) []LayoutSuggestion {
-	out := []LayoutSuggestion{}
-	for _, g := range golden {
-		g = strings.TrimSpace(g)
-		if g == "" || !strings.Contains(content, g) || strings.Contains(content, "**"+g) {
-			continue
-		}
-		out = append(out, LayoutSuggestion{SectionID: sectionID, Kind: "bold", Text: g, Reason: "这是你收藏的金句，加粗后更醒目"})
-	}
-	for _, m := range keySentence.FindAllString(content, 3) {
-		m = strings.TrimSpace(m)
-		if m == "" || strings.Contains(content, "**"+m) || runeLen(m) > 60 {
-			continue
-		}
-		out = append(out, LayoutSuggestion{SectionID: sectionID, Kind: "bold", Text: m, Reason: "这是观点句，加粗便于读者抓重点"})
-	}
-	for _, para := range strings.Split(content, "\n\n") {
-		if strings.HasPrefix(strings.TrimSpace(para), "-") {
-			continue
-		}
-		if len(enumMarker.FindAllString(para, -1)) >= 3 {
-			out = append(out, LayoutSuggestion{SectionID: sectionID, Kind: "list", Text: strings.TrimSpace(para), Reason: "这段有 3 个以上的并列要点，改成列表更清楚"})
-		}
-	}
-	if runeLen(content) > 800 && !strings.Contains(content, "\n---\n") {
-		paras := strings.Split(content, "\n\n")
-		if len(paras) >= 4 {
-			out = append(out, LayoutSuggestion{SectionID: sectionID, Kind: "divider", Text: strings.TrimSpace(paras[len(paras)/2]), Reason: "这段较长，在中间加分割线可以让阅读喘口气"})
-		}
-	}
-	return out
+	return compliance.LayoutRules(sectionID, content, golden)
 }
 
 // layoutSuggest: rules first; with {"ai":true} the model adds ideas, each quoting a sentence that exists verbatim.
