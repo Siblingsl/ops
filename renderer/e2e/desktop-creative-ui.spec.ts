@@ -101,7 +101,11 @@ test('Electron 专属创作空间的标题栏、主题、动效、工作台与 A
   const avatar = page.getByRole('complementary', { name: '主导航' }).getByRole('button', { name: /用户菜单/ })
   await expect(avatar).toBeVisible()
   await expect(page.locator('.desktop-toolbar-actions').getByRole('button', { name: /用户菜单/ })).toHaveCount(0)
-  expect((await avatar.boundingBox())!.y).toBeGreaterThan((await page.locator('.desktop-sidebar-bottom a[href="/agent"]').boundingBox())!.y)
+  // OPT-U04：AI 对话已升到主导航顶组，底部不再有 /agent 入口。
+  const agentNavLink = page.locator('#main-navigation a[href="/agent"]')
+  await expect(agentNavLink).toHaveCount(1)
+  expect((await avatar.boundingBox())!.y).toBeGreaterThan((await agentNavLink.boundingBox())!.y)
+  await expect(page.locator('.desktop-sidebar-bottom a[href="/agent"]')).toHaveCount(0)
   await expect(page.getByRole('button', { name: /展开导航文字|收起导航文字/ })).toHaveCount(0)
   await expect(page.locator('#main-navigation')).not.toHaveClass(/desktop-nav-expanded/)
   await expect(page.getByTestId('desktop-statusbar').locator('.desktop-statusbar-context')).toHaveAttribute('title', /浏览器验收号/)
@@ -170,9 +174,10 @@ test('Electron 专属创作空间的标题栏、主题、动效、工作台与 A
   expect(await creationFeature.evaluate((element) => element.getBoundingClientRect().bottom)).toBeLessThan(900)
   await expect(page.locator('#root > div > aside')).toHaveCSS('width', '64px')
   const homeOrder = await page.locator('.desktop-dashboard').evaluate((element) =>
-    Array.from(element.children).map((child) => child.classList[0])
+    Array.from(element.children).map((child) => child.getAttribute('data-testid') || child.classList[0])
   )
-  expect(homeOrder.slice(0, 3)).toEqual(['creative-welcome', 'creative-main-grid', 'creative-footer'])
+  // OPT-U01：欢迎区与主网格之间新增首启「3 步开始写作」引导卡（demo-onboarding）。
+  expect(homeOrder.slice(0, 4)).toEqual(['creative-welcome', 'onboarding-3-steps', 'creative-main-grid', 'creative-footer'])
   const leftOrder = await page.locator('.creative-left').evaluate((element) =>
     Array.from(element.children).map((child) => child.classList[0])
   )
@@ -186,7 +191,8 @@ test('Electron 专属创作空间的标题栏、主题、动效、工作台与 A
   // 因此限定在 .today-panel 内断言，避免 strict mode 命中两个 heading。
   await expect(page.locator('.today-panel').getByRole('heading', { name: '今天的主线' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '一个想法，也可以聊聊' })).toBeVisible()
-  expect(await page.locator('#main-navigation .desktop-nav-group-label').allTextContents()).toEqual(['创作', '资源', '运营'])
+  // OPT-U04：桌面侧栏固定 3 组——AI 助手（含 AI 对话）、创作、资产与复盘。
+  expect(await page.locator('#main-navigation .desktop-nav-group-label').allTextContents()).toEqual(['AI 助手', '创作', '资产与复盘'])
   await expect(page.locator('.desktop-rail-brand')).toBeVisible()
   await expect(page.locator('.desktop-rail-create-shell, .desktop-rail-create')).toHaveCount(0)
   await page.getByRole('button', { name: /记下一条灵感/ }).click()
@@ -230,7 +236,7 @@ test('Electron 专属创作空间的标题栏、主题、动效、工作台与 A
   await page.mouse.move(500, 200)
   const accountNav = page.getByRole('complementary', { name: '主导航' })
   await expect(accountNav).toBeVisible()
-  const agentNavigation = accountNav.locator('.desktop-sidebar-bottom a[href="/agent"]')
+  const agentNavigation = accountNav.locator('a[href="/agent"]')
   await expect(agentNavigation).toBeVisible()
   await expect(agentNavigation).toHaveText('AI 对话')
   await expect(page.getByRole('navigation', { name: '底部导航' })).toBeHidden()
@@ -252,7 +258,9 @@ test('Electron 专属创作空间的标题栏、主题、动效、工作台与 A
   }
   await page.setViewportSize({ width: 960, height: 640 })
   await expect(page.getByTestId('desktop-agent-list')).toBeHidden()
-  const openConversationList = page.getByRole('button', { name: '打开对话列表', exact: true })
+  // 窄窗容器下侧栏列表由 CSS 收起，按钮文案取决于本地折叠状态（可能是“收起会话列表”），
+  // 按稳定 class 定位，避免把状态文案当成唯一入口。
+  const openConversationList = page.locator('.desktop-agent-workbench-list-button')
   await expect(openConversationList).toBeVisible()
   await openConversationList.click()
   await expect(page.getByRole('heading', { name: '对话', exact: true })).toBeVisible()
@@ -575,7 +583,11 @@ test('真实 Electron 业务窗按客户端主题与动效呈现', async () => {
     await business.getByRole('button', { name: /用户菜单/ }).click()
     await business.getByRole('menuitem', { name: '设置…', exact: true }).click()
     const settings = business.getByTestId('desktop-settings-window')
-    await selectDesktopSetting(business, '桌面 AI 策略')
+    // 等「设置…」的用户菜单导航落地，再走冻结项深链，避免 goto 被路由中断。
+    await expect(settings.getByRole('heading', { name: '偏好设置', exact: true })).toBeVisible()
+    // OPT-S03 / D-224：桌面 AI 策略已软冻结隐藏导航，保留 /settings/desktop-ai 排障深链。
+    await business.goto('http://127.0.0.1:5287/settings/desktop-ai')
+    await expect(settings.getByRole('heading', { name: '工作区桌面 AI 策略', exact: true })).toBeVisible()
     const policySwitch = settings.getByRole('switch', { name: '允许此工作区使用桌面 AI', exact: true })
     await expect(policySwitch).toBeEnabled()
     if (await policySwitch.getAttribute('aria-checked') !== 'true') await policySwitch.click()
@@ -735,7 +747,7 @@ test('真实 Electron 业务窗按客户端主题与动效呈现', async () => {
     await privacyNotice.getByRole('button', { name: '我知道了' }).click()
     await expect(privacyNotice).toBeHidden()
     await expect(business.getByTestId('desktop-agent-list')).toBeHidden()
-    await business.getByRole('button', { name: '打开对话列表', exact: true }).click()
+    await business.locator('.desktop-agent-workbench-list-button').click()
     await expect(business.getByRole('heading', { name: '对话', exact: true })).toBeVisible()
     await business.getByRole('button', { name: '关闭对话列表', exact: true }).click()
     await business.locator('main').evaluate((element) => element.scrollTo(0, 0))

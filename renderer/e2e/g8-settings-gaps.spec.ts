@@ -837,8 +837,10 @@ test('DEV-QA26 G2-04 真实 Electron 本机 SMTP sink 投递邀请与失败恢�
     const email = inviteCard.getByPlaceholder('收件邮箱')
     const send = inviteCard.getByRole('button', { name: '发送邮件', exact: true })
 
-    await selectDesktopSetting(owner.page, '邀请邮件')
+    // OPT-S03 / D-224：邀请邮件软冻结，导航不可见；经 /settings/mail 深链直达。
+    await owner.page.goto(`${baseURL}/settings/mail`)
     settings = owner.page.getByTestId('desktop-settings-window')
+    await expect(settings.getByRole('heading', { name: '邀请邮件', exact: true })).toBeVisible()
     const smtpHost = settings.getByLabel('SMTP 主机')
     const smtpPort = settings.getByLabel('端口')
     const smtpFrom = settings.getByLabel('发件人 From')
@@ -866,7 +868,8 @@ test('DEV-QA26 G2-04 真实 Electron 本机 SMTP sink 投递邀请与失败恢�
     const failedLog = (await api(page, 'GET', '/audit-logs?action=invite_email&limit=200') as Array<{ target_id: string; result: string }>).find((entry) => entry.target_id === invite.id)
     expect(failedLog?.result).toBe('failed')
 
-    await selectDesktopSetting(owner.page, '邀请邮件')
+    // 邀请邮件已软冻结；改用可见的「平台账号与凭证」触发「放弃未保存的设置？」保护。
+    await selectDesktopSetting(owner.page, '平台账号与凭证')
     let discardEmail = owner.page.getByRole('dialog').filter({ has: owner.page.getByRole('heading', { name: '放弃未保存的设置？', exact: true }) })
     await expect(discardEmail).toBeVisible()
     await discardEmail.getByRole('button', { name: '取消', exact: true }).click()
@@ -874,11 +877,15 @@ test('DEV-QA26 G2-04 真实 Electron 本机 SMTP sink 投递邀请与失败恢�
     await expect(failingEmail).toHaveValue('qa26-failure@example.invalid')
     expect((await api(page, 'GET', '/settings')).smtp.port).toBe(rejectingSmtp.port)
 
-    await selectDesktopSetting(owner.page, '邀请邮件')
+    await selectDesktopSetting(owner.page, '平台账号与凭证')
     discardEmail = owner.page.getByRole('dialog').filter({ has: owner.page.getByRole('heading', { name: '放弃未保存的设置？', exact: true }) })
     await expect(discardEmail).toBeVisible()
     await discardEmail.getByRole('button', { name: '放弃修改', exact: true }).click()
+    // 放弃后路由继续切到「平台账号与凭证」；等导航落地再走冻结项深链，避免 goto 被中断。
+    await expect(settings.getByRole('heading', { name: '平台账号与凭证', exact: true })).toBeVisible()
+    await owner.page.goto(`${baseURL}/settings/mail`)
     settings = owner.page.getByTestId('desktop-settings-window')
+    await expect(settings.getByRole('heading', { name: '邀请邮件', exact: true })).toBeVisible()
     await settings.getByLabel('SMTP 主机').fill('127.0.0.1')
     await settings.getByLabel('端口').fill(String(smtp.port))
     await settings.getByLabel('发件人 From').fill('qa26-sender@example.invalid')
@@ -888,7 +895,7 @@ test('DEV-QA26 G2-04 真实 Electron 本机 SMTP sink 投递邀请与失败恢�
     expect((await saveWorkingConfig).status()).toBe(200)
     await expect(settings.locator('.desktop-settings-footer')).toContainText('配置按各项说明保存')
     await owner.page.reload({ waitUntil: 'domcontentloaded' })
-    await selectDesktopSetting(owner.page, '邀请邮件')
+    await owner.page.goto(`${baseURL}/settings/mail`)
     settings = owner.page.getByTestId('desktop-settings-window')
     await expect(settings.getByLabel('SMTP 主机')).toHaveValue('127.0.0.1')
     await expect(settings.getByLabel('端口')).toHaveValue(String(smtp.port))

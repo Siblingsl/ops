@@ -341,26 +341,42 @@ func TestContextPackBudgets(t *testing.T) {
 	}
 
 	// OPT-A03 防回归：strategy + style + history + task_instruction 同时存在时仍严格按槽序。
-	// 方案直接写库以绕开账号类型字段校验（与 cx_account_analysis_test 同法），
-	// 用例结束即清理，避免污染同包共享的测试账号。
-	if _, e := env.srv.db.Exec(jctx, `INSERT INTO account_strategy(account_id,version,status,niche,audience,pillars)
-		VALUES($1,(SELECT COALESCE(MAX(version),0)+1 FROM account_strategy WHERE account_id=$1),'active','回归定位','回归读者','[{"name":"内容支柱","desc":"描述","ratio":100,"examples":[]}]')`, a.ID); e != nil {
-		t.Fatal(e)
-	}
+	// 共享 fx.wechat 可能已被同包用例（如 cx_writing_basis_test）写入 active 运营方案，
+	// 再插一行会撞 account_strategy_one_active 唯一约束；改用本用例专有的隔离账号
+	//（与 A102 同法），结束时连同风格样本、运营方案与作品一并清理，绝不改动共享账号的策略行。
+	var isoAcc Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{
+		"platform": "wechat_mp", "name": "预算回归隔离号", "content_format": "long_article",
+	}, &isoAcc)
 	var histWork, curWork Work
-	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/works", map[string]string{"title": "历史槽回归作品"}, &histWork)
-	if _, e := env.srv.db.Exec(jctx, `INSERT INTO work_section(work_id,position,heading,content_md) VALUES($1,0,'旧段写法','预算回归历史的写法：先给结论，再讲一段亲历，最后落到可执行的下一步。')`, histWork.ID); e != nil {
-		t.Fatal(e)
-	}
-	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/works", map[string]string{"title": "当前任务作品"}, &curWork)
 	t.Cleanup(func() {
 		bg := context.Background()
-		env.srv.db.Exec(bg, `DELETE FROM account_strategy WHERE account_id=$1 AND niche='回归定位'`, a.ID)
-		env.srv.db.Exec(bg, `DELETE FROM work_section WHERE work_id=$1`, histWork.ID)
-		env.srv.db.Exec(bg, `DELETE FROM work WHERE id=$1`, histWork.ID)
-		env.srv.db.Exec(bg, `DELETE FROM work WHERE id=$1`, curWork.ID)
+		env.srv.db.Exec(bg, `DELETE FROM account_strategy WHERE account_id=$1`, isoAcc.ID)
+		env.srv.db.Exec(bg, `DELETE FROM style_sample WHERE account_id=$1`, isoAcc.ID)
+		env.srv.db.Exec(bg, `DELETE FROM work_section WHERE work_id IN (SELECT id FROM work WHERE account_id=$1)`, isoAcc.ID)
+		env.srv.db.Exec(bg, `DELETE FROM work WHERE account_id=$1`, isoAcc.ID)
+		env.srv.db.Exec(bg, `DELETE FROM platform_account WHERE id=$1`, isoAcc.ID)
 	})
-	pack2, err := env.srv.buildContext(jctx, aiTask{Type: "section_draft", Account: a, WorkID: &curWork.ID,
+	iso, err := env.srv.account(jctx, isoAcc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	styleText := "预算回归历史的写法：先给结论，再讲一段亲历，最后落到可执行的下一步。"
+	if _, e := env.srv.db.Exec(ctx, `INSERT INTO style_sample (account_id,title,content_md,char_count) VALUES($1,'回归风格样本',$2,$3)`,
+		iso.ID, styleText, runeLen(styleText)); e != nil {
+		t.Fatal(e)
+	}
+	// 运营方案直接写库以绕开账号类型字段校验；隔离账号上不存在其它 active 行。
+	if _, e := env.srv.db.Exec(ctx, `INSERT INTO account_strategy(account_id,version,status,niche,audience,pillars)
+		VALUES($1,(SELECT COALESCE(MAX(version),0)+1 FROM account_strategy WHERE account_id=$1),'active','回归定位','回归读者','[{"name":"内容支柱","desc":"描述","ratio":100,"examples":[]}]')`, iso.ID); e != nil {
+		t.Fatal(e)
+	}
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+iso.ID.String()+"/works", map[string]string{"title": "历史槽回归作品"}, &histWork)
+	if _, e := env.srv.db.Exec(ctx, `INSERT INTO work_section(work_id,position,heading,content_md) VALUES($1,0,'旧段写法','预算回归历史的写法：先给结论，再讲一段亲历，最后落到可执行的下一步。')`, histWork.ID); e != nil {
+		t.Fatal(e)
+	}
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+iso.ID.String()+"/works", map[string]string{"title": "当前任务作品"}, &curWork)
+	pack2, err := env.srv.buildContext(jctx, aiTask{Type: "section_draft", Account: iso, WorkID: &curWork.ID,
 		History: "预算回归历史", Work: "观点：先给结论", TaskPrompt: &taskPromptSnapshot{Content: "写一段正文", Version: 1}, User: "x"})
 	if err != nil {
 		t.Fatal(err)

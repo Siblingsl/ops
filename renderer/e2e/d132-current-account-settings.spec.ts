@@ -396,8 +396,9 @@ test('D-132 创建网络失败保留表单，重试只创建一个账号', async
   await page.goto('/settings/accounts')
   await page.getByRole('button', { name: '打开账号入口', exact: true }).click()
   const picker = page.getByTestId('desktop-context-menu')
-  await picker.getByRole('tab', { name: /今日头条/ }).click()
-  await picker.getByRole('button', { name: '添加今日头条账号', exact: true }).click()
+  // OPT-S04：今日头条折叠进「显示更多实验平台」，先展开再添加。
+  await picker.getByTestId('desktop-toggle-experimental-platforms').click()
+  await picker.getByRole('button', { name: /添加今日头条账号/ }).click()
   const add = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '添加平台账号', exact: true }) })
   const name = add.getByLabel('账号名称')
   await name.fill('失败后保留的头条账号')
@@ -540,8 +541,9 @@ test('D-132 无账号工作区显示中性态，所有者可从顶部创建首�
   await settings.getByRole('button', { name: '打开账号入口', exact: true }).click()
   const picker = page.getByTestId('desktop-context-menu')
   await expect(picker).toBeVisible()
-  await picker.getByRole('tab', { name: /今日头条/ }).click()
-  await picker.getByRole('button', { name: '添加今日头条账号', exact: true }).click()
+  // OPT-S04：无头条账号时先展开「更多实验平台」。
+  await picker.getByTestId('desktop-toggle-experimental-platforms').click()
+  await picker.getByRole('button', { name: /添加今日头条账号/ }).click()
 
   const add = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '添加平台账号', exact: true }) })
   await expect(add.getByText('今日头条', { exact: true })).toBeVisible()
@@ -556,8 +558,11 @@ test('D-132 无账号工作区显示中性态，所有者可从顶部创建首�
 
   await openDesktopAccountSwitcher(page)
   const reopenedPicker = page.getByTestId('desktop-context-menu')
-  await reopenedPicker.getByRole('tab', { name: /今日头条/ }).click()
-  await reopenedPicker.getByRole('button', { name: '添加今日头条账号', exact: true }).click()
+  // showExperimental 是 Shell 级状态，关闭再打开会保留上次的展开状态；只在未展开时点击。
+  const experimentalToggle = reopenedPicker.getByTestId('desktop-toggle-experimental-platforms')
+  if ((await experimentalToggle.getAttribute('aria-expanded')) !== 'true') await experimentalToggle.click()
+  await expect(experimentalToggle).toHaveAttribute('aria-expanded', 'true')
+  await reopenedPicker.getByRole('button', { name: /添加今日头条账号/ }).click()
   const reopenedAdd = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '添加平台账号', exact: true }) })
   await reopenedAdd.getByLabel('账号名称').fill('首个头条运营账号')
   const created = page.waitForResponse((result) => result.url().endsWith('/api/v1/accounts') && result.request().method() === 'POST')
@@ -782,9 +787,17 @@ test('D-132 顶部按平台创建同平台账号及三平台账号，成功后�
     if (await picker.isVisible()) await page.keyboard.press('Escape')
     await openDesktopAccountSwitcher(page)
     await expect(picker).toBeVisible()
-    await picker.getByRole('tab', { name: new RegExp(platform) }).click()
-    if (useWorkspaceAdd) await picker.getByTitle('添加账号').click()
-    else await picker.getByRole('button', { name: `添加${platform}账号`, exact: true }).click()
+    if (platform === '今日头条') {
+      // OPT-S04：无头条账号时折叠在「更多实验平台」里，没有平台 tab。
+      const experimentalToggle = picker.getByTestId('desktop-toggle-experimental-platforms')
+      if ((await experimentalToggle.getAttribute('aria-expanded')) !== 'true') await experimentalToggle.click()
+      await expect(experimentalToggle).toHaveAttribute('aria-expanded', 'true')
+      await picker.getByRole('button', { name: new RegExp(`添加${platform}账号`) }).click()
+    } else {
+      await picker.getByRole('tab', { name: new RegExp(platform) }).click()
+      if (useWorkspaceAdd) await picker.getByTitle('添加账号').click()
+      else await picker.getByRole('button', { name: new RegExp(`添加${platform}账号`) }).click()
+    }
 
     const add = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '添加平台账号', exact: true }) })
     await expect(add).toBeVisible()

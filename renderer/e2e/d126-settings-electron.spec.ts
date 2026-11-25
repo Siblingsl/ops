@@ -328,10 +328,15 @@ test('DEV-QA26 G7 智能体设置、桌面 AI 策略与提示词模板真实 Ele
     // 只在本测试新建的 E2E 工作区打开 owner 本机 AI；成员自选端点保持关闭。
     // 先改回原值确认未保存的草稿不会写入，再经设置页保存开启状态。
     await electronLocalSettingsWaitIdle(app)
-    await selectDesktopSetting(page, '桌面 AI 策略')
+    // OPT-S03 / D-224：桌面 AI 策略已软冻结，导航不再可见；先点现存可见项验证
+    // 本机面板的「放弃未保存的设置？」保护，再走深链直达冻结页继续原断言。
+    await selectDesktopSetting(page, '智能体设置')
     const discardLocalDraft = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '放弃未保存的设置？', exact: true }) })
     await expect(discardLocalDraft).toBeVisible()
     await discardLocalDraft.getByRole('button', { name: '放弃修改', exact: true }).click()
+    // 放弃后路由会继续切到「智能体设置」；等这次导航落地再走冻结项深链，避免 goto 被中断。
+    await expect(page.getByRole('heading', { name: '智能体设置', exact: true })).toBeVisible()
+    await page.goto(`${appUrl}/settings/desktop-ai`)
     await expect(page.getByRole('heading', { name: '工作区桌面 AI 策略', exact: true })).toBeVisible()
     await expect(settings.locator('footer')).toHaveText('配置按各项说明保存；独立工具在主窗口打开')
     const workspaceAI = page.getByRole('switch', { name: '允许此工作区使用桌面 AI', exact: true })
@@ -382,6 +387,10 @@ test('DEV-QA26 G7 智能体设置、桌面 AI 策略与提示词模板真实 Ele
     await expect(page.getByTestId('desktop-dashboard')).toBeVisible()
     await page.getByRole('button', { name: /^用户菜单/ }).click()
     await page.getByRole('menuitem', { name: '设置…', exact: true }).click()
+    // 设置窗重开后同一本机面板可能已失去 sender 登记；先切到另一个本机面板再切回 AI，
+    // 强制面板变更触发重新登记，避免后续本机调用被判为不可信窗口。
+    await selectDesktopSetting(page, '客户端连接')
+    await electronLocalSettingsWaitPanel(app, 'connection')
     await selectDesktopSetting(page, '本机 AI 配置')
     await electronLocalSettingsWaitPanel(app, 'ai')
     const savedMockModelName = `QA26 本地 mock ${Date.now()}`
@@ -413,7 +422,9 @@ test('DEV-QA26 G7 智能体设置、桌面 AI 策略与提示词模板真实 Ele
     await expect(page.getByTestId('desktop-dashboard')).toBeVisible()
     await page.getByRole('button', { name: /^用户菜单/ }).click()
     await page.getByRole('menuitem', { name: '设置…', exact: true }).click()
-    await selectDesktopSetting(page, '桌面 AI 策略')
+    await expect(page.getByRole('heading', { name: '偏好设置', exact: true })).toBeVisible()
+    // OPT-S03 / D-224：冻结项只能走 /settings/desktop-ai 深链。
+    await page.goto(`${appUrl}/settings/desktop-ai`)
     await expect(page.getByRole('heading', { name: '工作区桌面 AI 策略', exact: true })).toBeVisible()
     const policyAfterRestart = await page.evaluate(async () => (await (await fetch('/api/v1/desktop/policy')).json()) as {
       global_enabled: boolean
@@ -434,7 +445,7 @@ test('DEV-QA26 G7 智能体设置、桌面 AI 策略与提示词模板真实 Ele
       `Array.from(document.getElementById('model-select').options).map(option=>({value:option.value,label:option.textContent??''}))`)
     expect(localModelsAfterRestart.some((model) => model.value && model.label.includes(savedMockModelName))).toBe(true)
 
-    await selectDesktopSetting(page, '桌面 AI 策略')
+    await page.goto(`${appUrl}/settings/desktop-ai`)
     await page.getByRole('switch', { name: '允许此工作区使用桌面 AI', exact: true }).click()
     await saveWorkspacePolicy()
     const restoredPolicy = await page.evaluate(async () => (await (await fetch('/api/v1/desktop/policy')).json()) as {

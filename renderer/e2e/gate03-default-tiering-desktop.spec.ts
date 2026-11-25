@@ -4,26 +4,31 @@ import { rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
-// CF-GATE-03（90 D-187 P6）：「默认部署可达性」断言——不设 OPS_AGENT_WORKBENCH_FEATURES
-// 时，A 档 11 项默认开、B 档 5 项与 C 档 3 项默认关。主桌面 E2E 服务的 env 是 config 里
-// 显式写死的长清单（既有用例依赖它，不动），所以这里由用例自拉一个空 env 的 ops-e2e
-// 实例（独立端口 8185/8195），直接对它注册账号并读 /agent/bootstrap。
-// 与 web/e2e/gate03-default-tiering-web.spec.ts 各自独立校验本端断言名单与
+// CF-GATE-03（90 D-187 P6 / D-190 / REF41 A6·A7）：「默认部署可达性」断言——不设
+// OPS_AGENT_WORKBENCH_FEATURES 时，A 档 11 项 + REF41 A6/A7 的 agent_roles、
+// workflow_templates 共 13 项默认开；B 档 5 项、C 档 3 项与 D-190 P2 的
+// operations_directory / side_chat / today_ops 共 11 项默认关（总计 24 项）。
+// 主桌面 E2E 服务的 env 是 config 里显式写死的长清单（既有用例依赖它，不动），
+// 所以这里由用例自拉一个空 env 的 ops-e2e 实例（独立端口 8185/8195），
+// 直接对它注册账号并读 /agent/bootstrap。
+// 桌面端只有这一套 E2E，本用例断言名单必须与
 // server/internal/app/agent_workbench.go 的 agentFeatureDefaultOn 同步维护。
 
 const tierAOn = [
   'workbench_ui', 'conversation_organize', 'context_refs', 'skill_requests', 'artifacts',
   'run_control', 'event_resume', 'plans', 'goals', 'routines', 'document_parse',
+  'agent_roles', 'workflow_templates',
 ]
 const tierOff = [
   'chrome_connect', 'browser_workspace', 'personal_memories', 'plugin_mcp', 'subagents',
   'voice_dictation', 'voice_realtime', 'computer_use',
+  'operations_directory', 'side_chat', 'today_ops',
 ]
 
 const defaultAPI = 'http://127.0.0.1:8185'
 const binary = join(tmpdir(), `ops-e2e-gate03-desktop-${process.platform}.exe`)
 
-test('CF-GATE-03 P6：空 env 时工作台特性按 D-187 档位默认可达（A11 开 / B·C 8 关）', async ({ browser }) => {
+test('CF-GATE-03 P6：空 env 时工作台特性按 D-187+D-190+REF41 A6/A7 默认可达（13 开 / 11 关，共 24 项）', async ({ browser }) => {
   // go run 在 Windows 下是双进程树（go.exe + 编译产物），kill 不净；预编译成单二进制再 spawn。
   test.setTimeout(300_000)
   execFileSync('go', ['build', '-o', binary, './cmd/ops-e2e'], { cwd: resolve('../server'), stdio: 'pipe' })
@@ -68,7 +73,7 @@ test('CF-GATE-03 P6：空 env 时工作台特性按 D-187 档位默认可达（A
       for (const name of tierOff) {
         expect(bootstrap.features[name], `非 A 档 ${name} 应默认关`).toBe(false)
       }
-      expect(Object.keys(bootstrap.features).length).toBe(19)
+      expect(Object.keys(bootstrap.features).length).toBe(24)
     } finally {
       await context.close()
     }
