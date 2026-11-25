@@ -281,23 +281,37 @@ func TestContextPackBudgets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 槽位顺序与 buildContext 的 p.add 调用顺序一致；包含只在特定数据条件下出现的槽位，
-	// 避免共享测试账号累积数据后（如 performance / strategy）出现未知槽位被当成 0 序。
-	order := map[string]int{"rules": 0, "profile": 1, "strategy": 2, "memory": 3, "data_prefs": 4,
-		"performance": 5, "style": 6, "references": 7, "task_instruction": 8, "materials": 9,
-		"history": 10, "work": 11, "user_instruction": 12}
-	last := -1
-	slots := map[string]Slot{}
-	for _, sl := range pack.Slots {
-		if order[sl.Name] < last {
-			t.Fatalf("slot %s out of priority order", sl.Name)
-		}
-		last = order[sl.Name]
-		slots[sl.Name] = sl
-		if sl.Label == "" {
-			t.Fatalf("slot %s has no label", sl.Name)
-		}
+	// 槽位顺序与 buildContext 的 p.add 调用顺序一致（OPT-A03）：
+	// rules → profile → style → strategy → memory → skills → data_prefs → performance →
+	// references → history → materials → work → task_instruction → user_instruction。
+	// 包含只在特定数据条件下出现的槽位，避免共享测试账号累积数据后（如 performance）误判。
+	order := map[string]int{
+		"rules": 0, "profile": 1, "style": 2, "strategy": 3, "memory": 4, "skills": 5,
+		"data_prefs": 6, "performance": 7, "references": 8, "history": 9, "materials": 10,
+		"work": 11, "task_instruction": 12, "user_instruction": 13,
 	}
+	// 未知槽位不得按 0 序静默通过：新增槽位必须同步更新上面的 order。
+	assertOrder := func(t *testing.T, p *ContextPack) map[string]Slot {
+		t.Helper()
+		last := -1
+		slots := map[string]Slot{}
+		for _, sl := range p.Slots {
+			pos, known := order[sl.Name]
+			if !known {
+				t.Fatalf("unknown slot %s", sl.Name)
+			}
+			if pos < last {
+				t.Fatalf("slot %s out of priority order", sl.Name)
+			}
+			last = pos
+			slots[sl.Name] = sl
+			if sl.Label == "" {
+				t.Fatalf("slot %s has no label", sl.Name)
+			}
+		}
+		return slots
+	}
+	slots := assertOrder(t, pack)
 	ms := slots["materials"]
 	if ms.Truncated || ms.Budget != 0 || ms.Chars <= 4000 || len(ms.Items) != len(mats) {
 		t.Fatalf("materials slot: %+v", ms)
@@ -324,6 +338,38 @@ func TestContextPackBudgets(t *testing.T) {
 	b, _ := json.Marshal(refs)
 	if strings.Contains(string(b), strings.Repeat("长", 100)) {
 		t.Fatal("context_refs must store ids and sizes, not full text")
+	}
+
+	// OPT-A03 防回归：strategy + style + history + task_instruction 同时存在时仍严格按槽序。
+	// 方案直接写库以绕开账号类型字段校验（与 cx_account_analysis_test 同法），
+	// 用例结束即清理，避免污染同包共享的测试账号。
+	if _, e := env.srv.db.Exec(jctx, `INSERT INTO account_strategy(account_id,version,status,niche,audience,pillars)
+		VALUES($1,(SELECT COALESCE(MAX(version),0)+1 FROM account_strategy WHERE account_id=$1),'active','回归定位','回归读者','[{"name":"内容支柱","desc":"描述","ratio":100,"examples":[]}]')`, a.ID); e != nil {
+		t.Fatal(e)
+	}
+	var histWork, curWork Work
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/works", map[string]string{"title": "历史槽回归作品"}, &histWork)
+	if _, e := env.srv.db.Exec(jctx, `INSERT INTO work_section(work_id,position,heading,content_md) VALUES($1,0,'旧段写法','预算回归历史的写法：先给结论，再讲一段亲历，最后落到可执行的下一步。')`, histWork.ID); e != nil {
+		t.Fatal(e)
+	}
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/works", map[string]string{"title": "当前任务作品"}, &curWork)
+	t.Cleanup(func() {
+		bg := context.Background()
+		env.srv.db.Exec(bg, `DELETE FROM account_strategy WHERE account_id=$1 AND niche='回归定位'`, a.ID)
+		env.srv.db.Exec(bg, `DELETE FROM work_section WHERE work_id=$1`, histWork.ID)
+		env.srv.db.Exec(bg, `DELETE FROM work WHERE id=$1`, histWork.ID)
+		env.srv.db.Exec(bg, `DELETE FROM work WHERE id=$1`, curWork.ID)
+	})
+	pack2, err := env.srv.buildContext(jctx, aiTask{Type: "section_draft", Account: a, WorkID: &curWork.ID,
+		History: "预算回归历史", Work: "观点：先给结论", TaskPrompt: &taskPromptSnapshot{Content: "写一段正文", Version: 1}, User: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slots2 := assertOrder(t, pack2)
+	for _, name := range []string{"strategy", "style", "history", "task_instruction"} {
+		if _, ok := slots2[name]; !ok {
+			t.Fatalf("slot %s missing even though strategy+style+history+task_instruction are present: %+v", name, pack2.Slots)
+		}
 	}
 }
 
