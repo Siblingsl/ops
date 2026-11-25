@@ -55,6 +55,9 @@ declare global {
       onPlatformIntentResult(listener: (result: DesktopPlatformIntentResult) => void): () => void
       onClientHealth(listener: (health: DesktopClientHealth) => void): () => void
       captureLongImage(buildId: string): Promise<CXLongImageCaptureResult>
+      // OPT-U03（docs/43 §4）：小红书人工接管包——图片按序导出到本机临时目录并打开文件夹。
+      // 参数只含 workId 与图片字节；返回值只含张数与安全文件名，本机绝对路径永不回传。
+      openXhsManualImageFolder(input: DesktopXhsManualImageExportInput): Promise<DesktopXhsManualImageExportResult>
       // DEV-AI27-17（W17b，A12）：本机选窗器（枚举只在本机，handle 不透明）。
       listComputerWindows(): Promise<DesktopComputerWindowListResult>
       // DT-04（W17c / 27 §11.5.2）：UIA 主链路固定意图——结果按 C09 白名单逐控件校验，
@@ -117,6 +120,17 @@ export type CXLongImageCaptureResult =  | { ok: false; code: string; message: st
     capturedAt: string
     fontFamily: string
   }
+
+export type DesktopXhsManualImageExt = 'png' | 'jpg' | 'webp' | 'gif'
+
+export type DesktopXhsManualImageExportInput = {
+  workId: string
+  files: Array<{ ext: DesktopXhsManualImageExt; bytes: Uint8Array }>
+}
+
+export type DesktopXhsManualImageExportResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; count: number; fileNames: string[] }
 
 // DEV-AI27-17（W17b，A12）：本机窗口摘要。handle 不透明，标题仅用于本机选择。
 // DEV-CU P5-2（用户选定方案①）：补 pid——observe/act 必填 pid，handle 不可逆无法反解；

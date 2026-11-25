@@ -56,6 +56,7 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     'onRealtimeEvent',
     'onSidepanelDraft',
     'onSidepanelStop',
+    'openXhsManualImageFolder',
     'readComputerUIA',
     'revokeMcpOAuth',
     'startMcpOAuth',
@@ -70,7 +71,7 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')).sort(),
     ['actComputerUIA', 'captureLongImage', 'confirmBrowserPairing', 'focusBrowserTab', 'getBrowserPairingState',
      'getMcpOAuthStatus', 'invalidateComputerUIA', 'invokeComputerUIA', 'invokeInBrowse',
-     'listBrowserTabs', 'listComputerWindows', 'observeComputerUIA', 'readComputerUIA',
+     'listBrowserTabs', 'listComputerWindows', 'observeComputerUIA', 'openXhsManualImageFolder', 'readComputerUIA',
      'revokeMcpOAuth', 'startMcpOAuth', 'validateMcpConnection']);
   const buildId = '00000008-1111-4111-8111-111111111111';
   assert.deepEqual(await exposed.opsDesktopUI.captureLongImage(buildId), {
@@ -783,4 +784,115 @@ test('P3-7: invalidateComputerUIA grant 校验与 cleared 白名单', async () =
     ipcRenderer: { on() {}, removeListener() {}, invoke: async () => ({ ok: true, cleared: 1.5 }) } });
   const r = await exposed2.opsDesktopUI.invalidateComputerUIA('g-1');
   assert.equal(r.ok, false);
+});
+
+// ---------------------------------------------------------------------------
+// OPT-U03（docs/43 §4）：小红书人工接管包的有序图片导出。
+// preload 侧与主进程同口径：workId ^[a-zA-Z0-9_-]{1,64}$、1–18 张、png/jpg/webp/gif、
+// 单张 1B–20MB、总量 ≤100MB；非法参数不发 IPC；返回值只允许 count/fileNames 或 code/message。
+// ---------------------------------------------------------------------------
+
+test('OPT-U03: openXhsManualImageFolder 参数本机拦截，非法一律不发 IPC', async () => {
+  const exposed = {};
+  const invokes = [];
+  const ipcRenderer = {
+    on() {},
+    removeListener() {},
+    invoke(channel, payload) { invokes.push({ channel, payload }); return Promise.resolve({ ok: true, count: 1, fileNames: ['01_封面.png'] }); },
+  };
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposed[n] = v; } }, ipcRenderer });
+  const ui = exposed.opsDesktopUI;
+  const bytes = new Uint8Array([1, 2, 3]);
+  const cases = [
+    null,
+    'work_1',
+    { workId: '../x', files: [{ ext: 'png', bytes }] },
+    { workId: 'a/b', files: [{ ext: 'png', bytes }] },
+    { workId: '', files: [{ ext: 'png', bytes }] },
+    { workId: 'x'.repeat(65), files: [{ ext: 'png', bytes }] },
+    { workId: 'work_1', files: [] },
+    { workId: 'work_1', files: Array.from({ length: 19 }, () => ({ ext: 'png', bytes })) },
+    { workId: 'work_1', files: [{ ext: 'bmp', bytes }] },
+    { workId: 'work_1', files: [{ ext: 'png', bytes: 'not-bytes' }] },
+    { workId: 'work_1', files: [{ ext: 'png', bytes: new Uint8Array(0) }] },
+    { workId: 'work_1', files: [{ ext: 'png', bytes: new Uint8Array(20 * 1024 * 1024 + 1) }] },
+    { workId: 'work_1', files: [{ ext: 'png', bytes, name: 'x.png' }] },
+    { workId: 'work_1', files: [{ ext: 'png', bytes }], dir: 'C:\\Users\\me' },
+  ];
+  for (const input of cases) {
+    const result = await ui.openXhsManualImageFolder(input);
+    assert.equal(result.ok, false, `应拒绝 ${JSON.stringify(input)?.slice(0, 80)}`);
+    assert.equal(result.code, 'invalid_argument');
+  }
+  assert.deepEqual(invokes, [], '非法参数不得发起 IPC');
+});
+
+test('OPT-U03: 合法参数透传 workId 与图片字节，返回值原样收敛', async () => {
+  const exposed = {};
+  const invokes = [];
+  const fileNames = ['01_封面.png', '02.jpg', '03.webp'];
+  const ipcRenderer = {
+    on() {},
+    removeListener() {},
+    invoke(channel, payload) { invokes.push({ channel, payload }); return Promise.resolve({ ok: true, count: 3, fileNames }); },
+  };
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposed[n] = v; } }, ipcRenderer });
+  const files = [
+    { ext: 'png', bytes: new Uint8Array([1]) },
+    { ext: 'jpg', bytes: new Uint8Array([2, 3]) },
+    { ext: 'webp', bytes: new Uint8Array([4]) },
+  ];
+  const result = await exposed.opsDesktopUI.openXhsManualImageFolder({ workId: 'work_1', files });
+  assert.deepEqual(result, { ok: true, count: 3, fileNames });
+  assert.equal(invokes.length, 1);
+  assert.equal(invokes[0].channel, 'publish-pack:open-xhs-images');
+  assert.equal(invokes[0].payload.workId, 'work_1');
+  assert.equal(invokes[0].payload.files.length, 3);
+  assert.deepEqual(Object.keys(invokes[0].payload).sort(), ['files', 'workId'], '只透传白名单键');
+});
+
+test('OPT-U03: 主进程返回路径或多余字段时整份拒绝（不泄漏本机目录）', async () => {
+  const exposed = {};
+  const ipcRenderer = {
+    on() {},
+    removeListener() {},
+    invoke() { return Promise.resolve({ ok: true, count: 3, fileNames: ['01_封面.png', '02.jpg', '03.webp'], dir: 'C:\\Users\\me\\AppData\\Local\\Temp\\ops-xhs-manual-pack' }); },
+  };
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposed[n] = v; } }, ipcRenderer });
+  const files = [
+    { ext: 'png', bytes: new Uint8Array([1]) },
+    { ext: 'jpg', bytes: new Uint8Array([2]) },
+    { ext: 'webp', bytes: new Uint8Array([3]) },
+  ];
+  assert.deepEqual(await exposed.opsDesktopUI.openXhsManualImageFolder({ workId: 'work_1', files }), {
+    ok: false, code: 'publish_pack_invalid', message: 'Electron 返回的图片导出结果无效。',
+  });
+
+  const exposedPath = {};
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposedPath[n] = v; } },
+    ipcRenderer: { on() {}, removeListener() {}, invoke: async () => ({
+      ok: true, count: 3, fileNames: ['C:\\Users\\me\\01_封面.png', '02.jpg', '03.webp'],
+    }) } });
+  assert.deepEqual(await exposedPath.opsDesktopUI.openXhsManualImageFolder({ workId: 'work_1', files }), {
+    ok: false, code: 'publish_pack_invalid', message: 'Electron 返回的图片导出结果无效。',
+  });
+
+  const exposedMismatch = {};
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposedMismatch[n] = v; } },
+    ipcRenderer: { on() {}, removeListener() {}, invoke: async () => ({ ok: true, count: 2, fileNames: ['01_封面.png'] }) } });
+  assert.equal((await exposedMismatch.opsDesktopUI.openXhsManualImageFolder({ workId: 'work_1', files })).ok, false);
+
+  const exposedFail = {};
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposedFail[n] = v; } },
+    ipcRenderer: { on() {}, removeListener() {}, invoke: async () => ({ ok: false, code: 'open_folder_failed', message: '无法打开系统文件夹，请重试' }) } });
+  assert.deepEqual(await exposedFail.opsDesktopUI.openXhsManualImageFolder({ workId: 'work_1', files }), {
+    ok: false, code: 'open_folder_failed', message: '无法打开系统文件夹，请重试',
+  });
+
+  const exposedThrow = {};
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposedThrow[n] = v; } },
+    ipcRenderer: { on() {}, removeListener() {}, invoke: async () => { throw new Error('no handler'); } } });
+  assert.deepEqual(await exposedThrow.opsDesktopUI.openXhsManualImageFolder({ workId: 'work_1', files }), {
+    ok: false, code: 'publish_pack_unavailable', message: '本机图片导出暂不可用，请重试。',
+  });
 });

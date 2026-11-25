@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { api, errorMessage, get, post } from '@/lib/api'
 import { Badge, Button, Card, CardHeader, Empty, Notice } from '@/components/ui'
+import { XhsManualFallbackBar } from './xhs-manual-fallback'
 
 interface TaskRow {
   plan_at?: string
@@ -162,6 +163,9 @@ export function PublishTaskBoard({ account }: { account: { id: string } }) {
                       <p className="mt-1 text-[11px] text-mist-600" data-testid={`publish-task-xhs-draft-${row.id}`}>
                         小红书任务不会由 OPS 点发布；请到小红书草稿箱确认并人工发布。
                       </p>
+                    )}
+                    {(row.platform === 'xhs' && (row.state === 'failed' || row.state === 'not_logged_in')) && (
+                      <XhsManualFallbackBar workId={row.work_id} errorCode={row.last_error_code} errorMessage={row.last_error_message} state={row.state} />
                     )}
                     {(row.state === 'failed' || row.state === 'not_logged_in') && (
                       <div className="mt-2 flex gap-1">

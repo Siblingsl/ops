@@ -32,6 +32,7 @@ import { registerMcpIpcHandlers } from './ipc/mcp';
 import { registerVoiceIpcHandlers, setRealtimeBridge } from './ipc/voice';
 import { registerComputerIpcHandlers, setComputerWorkerHost } from './ipc/computer';
 import { registerCXIpcHandlers } from './ipc/cx';
+import { registerPublishPackIpcHandlers } from './ipc/publish-pack';
 import { registerInBrowseIpcHandlers } from './ipc/inbrowse';
 import { registerBrowserIpcHandlers } from './ipc/browser';
 import { registerSettingsIpcHandlers } from './ipc/settings';
@@ -1063,6 +1064,9 @@ function registerIpcHandlers(): void {
   // DT-08 片 4：cx-long-image:capture 拆至 ipc/cx.ts（占用门与失败语义不变；
   // 在途捕获集合留在 main.ts 供退出统一清理）。
   registerCXIpcHandlers({ ipcHandle, businessWindow: () => businessWindow, isBusinessUrl, activeCXLongImageCaptures });
+  // OPT-U03（docs/43 §4）：小红书人工接管包的图片有序导出——通道整体在 ipc/publish-pack.ts，
+  // 落盘根目录/大小上限/业务窗口守卫都在该模块内；main.ts 不内联通道。
+  registerPublishPackIpcHandlers({ ipcHandle, businessWindow: () => businessWindow, isBusinessUrl });
   // DT-08 片 10：settings:* 28 通道 + local-state 事件拆至 ipc/settings.ts（确认弹窗
   // 文案与防线校验逐字节搬移；跨域依赖经 SettingsIpcDeps 注入）。
   registerSettingsIpcHandlers({

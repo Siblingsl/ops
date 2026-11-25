@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { errorMessage, get, post } from '@/lib/api'
 import type { Work } from '@/lib/types'
 import { Button } from './ui'
+import { XhsManualFallbackBar } from './xhs-manual-fallback'
 
 interface ManifestCheck {
   code: string
@@ -59,6 +60,7 @@ interface TaskProjection {
   attempt: number
   max_attempts: number
   last_error_code?: string
+  last_error_message?: string
   last_event_kind?: string
   last_event_at?: string
   evidence?: { readback?: Readback }
@@ -378,6 +380,9 @@ export function PublishManifestPanel({ work }: { work: Work }) {
                     </div>
                   )}
                 </div>
+              )}
+              {platform.id === 'xhs' && task && (task.state === 'failed' || task.state === 'not_logged_in' || (readback && readback.ok === false)) && (
+                <XhsManualFallbackBar workId={work.id} errorCode={task.last_error_code} errorMessage={task.last_error_message} state={task.state} />
               )}
               {open && manifest && (
                 <div data-testid={`publish-checks-${platform.id}`} className="mt-2 space-y-1 pl-11">

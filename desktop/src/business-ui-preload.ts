@@ -5,6 +5,8 @@ import type { DesktopClientHealth, PlatformIntentResult } from './ui-intents';
 const CLIENT_HEALTH_CHANNEL = 'desktop-ui:client-health';
 const PLATFORM_INTENT_RESULT_CHANNEL = 'desktop-ui:platform-intent-result';
 const CX_LONG_IMAGE_CAPTURE_CHANNEL = 'cx-long-image:capture';
+// OPT-U03（docs/43 §4）：小红书人工接管包的有序图片导出通道（参数与结果都在本侧先校验）。
+const PUBLISH_PACK_XHS_IMAGES_CHANNEL = 'publish-pack:open-xhs-images';
 
 type LocalSettingsState = { dirty: boolean; busy: boolean };
 type SettingsOpenListener = () => void;
@@ -31,6 +33,13 @@ type CXLongImageCaptureResult =
     capturedAt: string;
     fontFamily: string;
   };
+
+// OPT-U03（docs/43 §4）：人工接管包图片导出。结果只允许 {ok,count,fileNames} 或
+// {ok:false,code,message}——本机绝对路径永远不进渲染器。
+type XhsManualImageFileInput = { ext: string; bytes: Uint8Array };
+type XhsManualImageExportResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; count: number; fileNames: string[] };
 
 // DEV-AI27-17（W17b，A12）：本机选窗结果。handle 不透明，标题只在业务窗口内使用。
 type ComputerWindowView = { pid: number; handle: string; process: string; title: string; forbidden: boolean };
@@ -197,6 +206,58 @@ function parseCXLongImageCaptureResult(raw: unknown): CXLongImageCaptureResult |
     capturedAt: value.capturedAt,
     fontFamily: value.fontFamily
   };
+}
+
+// OPT-U03：人工接管包的入参本机校验（非法参数不发 IPC）。与主进程同口径：
+// workId ^[a-zA-Z0-9_-]{1,64}$、1–18 张、扩展名 png/jpg/webp/gif、单张 1B–20MB、总量 ≤100MB。
+const XHS_MANUAL_PACK_WORK_ID = /^[a-zA-Z0-9_-]{1,64}$/;
+const XHS_MANUAL_PACK_MAX_FILES = 18;
+const XHS_MANUAL_PACK_MAX_FILE_BYTES = 20 * 1024 * 1024;
+const XHS_MANUAL_PACK_MAX_TOTAL_BYTES = 100 * 1024 * 1024;
+const XHS_MANUAL_PACK_ALLOWED_EXT = new Set(['png', 'jpg', 'webp', 'gif']);
+const XHS_MANUAL_PACK_FILE_NAME = /^(?:0[1-9]|1[0-8])(?:_封面)?\.(?:png|jpg|webp|gif)$/;
+
+function parseXhsManualImageInput(raw: unknown): { workId: string; files: XhsManualImageFileInput[] } | null {
+  const value = asRecord(raw);
+  if (!value || Object.keys(value).sort().join(',') !== 'files,workId') return null;
+  if (typeof value.workId !== 'string' || !XHS_MANUAL_PACK_WORK_ID.test(value.workId)) return null;
+  if (!Array.isArray(value.files) || value.files.length === 0 || value.files.length > XHS_MANUAL_PACK_MAX_FILES) return null;
+  const files: XhsManualImageFileInput[] = [];
+  let totalBytes = 0;
+  for (const item of value.files) {
+    const file = asRecord(item);
+    if (!file || Object.keys(file).sort().join(',') !== 'bytes,ext') return null;
+    if (typeof file.ext !== 'string' || !XHS_MANUAL_PACK_ALLOWED_EXT.has(file.ext)) return null;
+    const bytes = file.bytes instanceof Uint8Array ? file.bytes : null;
+    if (!bytes || bytes.byteLength < 1 || bytes.byteLength > XHS_MANUAL_PACK_MAX_FILE_BYTES) return null;
+    totalBytes += bytes.byteLength;
+    files.push({ ext: file.ext, bytes });
+  }
+  if (totalBytes > XHS_MANUAL_PACK_MAX_TOTAL_BYTES) return null;
+  return { workId: value.workId, files };
+}
+
+// 返回值白名单收敛：只允许 count + 安全文件名（纯 basename），路径/目录等多余键整份拒绝。
+function parseXhsManualImageExportResult(raw: unknown): XhsManualImageExportResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.code === 'string' && value.code.length <= 40
+      && typeof value.message === 'string' && value.message.length <= 200
+      ? { ok: false, code: value.code, message: value.message }
+      : null;
+  }
+  if (Object.keys(value).sort().join(',') !== 'count,fileNames,ok') return null;
+  const count = value.count;
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 1 || count > XHS_MANUAL_PACK_MAX_FILES) return null;
+  if (!Array.isArray(value.fileNames) || value.fileNames.length !== count) return null;
+  const fileNames: string[] = [];
+  for (const name of value.fileNames) {
+    // 只接受 01_封面.<ext> / 02.<ext> 这类纯文件名；带分隔符即视为路径泄漏。
+    if (typeof name !== 'string' || name.length > 64 || !XHS_MANUAL_PACK_FILE_NAME.test(name)) return null;
+    fileNames.push(name);
+  }
+  return { ok: true, count, fileNames };
 }
 
 function parseComputerWindowListResult(raw: unknown): ComputerWindowListResult | null {
@@ -667,6 +728,21 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
     if (!isUuid(buildId)) return { ok: false, code: 'invalid_input', message: '长图构建参数无效。' };
     const result = parseCXLongImageCaptureResult(await ipcRenderer.invoke(CX_LONG_IMAGE_CAPTURE_CHANNEL, { buildId }));
     return result ?? { ok: false, code: 'long_image_invalid', message: 'Electron 返回的长图结果无效。' };
+  },
+  // OPT-U03（docs/43 §4）：小红书人工接管包——按序把本作品图片导出到本机临时目录并打开文件夹。
+  // 业务页只给 workId 与图片字节；参数本机校验后转发，返回值只留张数与安全文件名。
+  async openXhsManualImageFolder(rawInput: { workId: string; files: XhsManualImageFileInput[] }): Promise<XhsManualImageExportResult> {
+    const input = parseXhsManualImageInput(rawInput);
+    if (!input) {
+      return { ok: false, code: 'invalid_argument', message: '图片导出参数无效：请确认作品标识与 1–18 张 png/jpg/webp/gif 图片的大小限制。' };
+    }
+    let raw: unknown;
+    try {
+      raw = await ipcRenderer.invoke(PUBLISH_PACK_XHS_IMAGES_CHANNEL, input);
+    } catch {
+      return { ok: false, code: 'publish_pack_unavailable', message: '本机图片导出暂不可用，请重试。' };
+    }
+    return parseXhsManualImageExportResult(raw) ?? { ok: false, code: 'publish_pack_invalid', message: 'Electron 返回的图片导出结果无效。' };
   },
   // DEV-AI27-17（W17b，A12）：本机窗口枚举——只在本机执行，渲染器拿到的是不透明 handle。
   async listComputerWindows(): Promise<ComputerWindowListResult> {
