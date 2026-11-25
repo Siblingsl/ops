@@ -23,18 +23,29 @@ const (
 	platformDiagnosticsWindowDays = 7
 )
 
-// platformCollectionGloballyEnabled 是准入判断的唯一入口（D-160）。
-func (s *Server) platformCollectionGloballyEnabled(ctx context.Context) bool {
+// platformCollectionGlobalStatus 是采集全局状态的唯一事实源（D-160）：
+// 日常听 kill switch；仅当 OPS_DESKTOP_PLATFORM_ENABLED 显式为 0/false 时紧急全关。
+// 返回的 reason/hint 只用于如实说明“为什么停”，不改变准入判断本身。
+func (s *Server) platformCollectionGlobalStatus(ctx context.Context) (enabled bool, disabledReason string, disabledHint string) {
 	if envExplicitFalse("OPS_DESKTOP_PLATFORM_ENABLED") {
-		return false
+		return false, "server_env_disabled", "服务端未开启 OPS_DESKTOP_PLATFORM_ENABLED=1，本机自动采集与状态心跳已暂停"
 	}
 	killed, err := s.systemBool(ctx, platformKillSwitchKey, false)
 	if err != nil {
 		// 读不到开关时按“已关闭”处理：安全侧失败，不因为配置读取异常而放开采集。
 		slog.Error("平台采集：读取全局开关失败，按关闭处理", "err", err)
-		return false
+		return false, "switch_read_failed", "服务端暂时无法读取平台采集全局开关，本机自动采集与状态心跳已暂停"
 	}
-	return !killed
+	if killed {
+		return false, "kill_switch_enabled", "系统管理员已开启平台采集全局总闸（kill switch），本机自动采集与状态心跳已暂停"
+	}
+	return true, "", ""
+}
+
+// platformCollectionGloballyEnabled 是准入判断的唯一入口（D-160）。
+func (s *Server) platformCollectionGloballyEnabled(ctx context.Context) bool {
+	enabled, _, _ := s.platformCollectionGlobalStatus(ctx)
+	return enabled
 }
 
 // platformDiagnostics 是一次窗口内的运营计数，供 owner 与超管页展示。

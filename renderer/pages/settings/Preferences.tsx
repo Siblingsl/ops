@@ -2,9 +2,10 @@ import { Keyboard } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { Button, Card, CardHeader, cn, PageHeader, Switch } from '@/components/ui'
+import { Button, Card, CardHeader, cn, Notice, PageHeader, Switch } from '@/components/ui'
 import { confirm } from '@/components/dialog'
 import { errorMessage } from '@/lib/api'
+import { getPlatformCollectionDisabledInfo, useDesktopCapabilities } from '@/lib/desktop-capabilities'
 import type { UserPrefs } from '@/lib/types'
 import { ghostKeys, usePrefs, useSavePrefs } from '@/lib/v3'
 import { useSettingsDraft } from '@/lib/desktop-settings'
@@ -41,6 +42,9 @@ export default function Preferences() {
   const save = useSavePrefs()
   const navigate = useNavigate()
   const desktop = isElectronDesktop(navigator.userAgent)
+  // OPT-U06（docs/43 §4）：只读能力查询与账号连接卡共用缓存，服务端关闭时在此明确说明原因。
+  const capabilitiesQuery = useDesktopCapabilities(desktop)
+  const platformDisabled = getPlatformCollectionDisabledInfo(capabilitiesQuery.data)
   const [reducedMotion, setReducedMotion] = useState(() => document.documentElement.dataset.reducedMotion === 'true')
   const [health, setHealth] = useState<DesktopClientHealth | null>(null)
   useEffect(() => {
@@ -66,9 +70,16 @@ export default function Preferences() {
               window.open(`ops-desktop://ui/motion/${value ? 'reduce' : 'soft'}`, '_blank', 'noopener,noreferrer')
             }} />
           </Row>
-          <Row title="平台采集状态" desc={[health?.presence.message, health?.collection.message].filter(Boolean).join('；') || '等待客户端状态'}>
-            <span className="text-sm text-mist-500">{health?.collection.status === 'partial' || health?.collection.status === 'failed' ? '采集需处理' : health?.collection.status === 'running' ? '正在采集' : health?.presence.status === 'online' ? '平台在线' : health?.presence.status === 'error' ? '平台异常' : health?.presence.status === 'offline' ? '采集未启用' : '读取中'}</span>
+          <Row title="平台采集状态" desc={platformDisabled
+            ? '服务端平台采集已暂停，本机不会发送采集与状态心跳。'
+            : ([health?.presence.message, health?.collection.message].filter(Boolean).join('；') || '等待客户端状态')}>
+            <span className={cn('text-sm', platformDisabled ? 'font-medium text-gamboge-700' : 'text-mist-500')}>{platformDisabled
+              ? '服务端已暂停采集'
+              : health?.collection.status === 'partial' || health?.collection.status === 'failed' ? '采集需处理' : health?.collection.status === 'running' ? '正在采集' : health?.presence.status === 'online' ? '平台在线' : health?.presence.status === 'error' ? '平台异常' : health?.presence.status === 'offline' ? '采集未启用' : '读取中'}</span>
           </Row>
+          {platformDisabled && <div className="px-5 py-3">
+            <Notice tone="gamboge" data-testid="preferences-platform-disabled-notice">{platformDisabled.hint}</Notice>
+          </div>}
           {/* OPT-U04（docs/43 §4）：本机状态与诊断在偏好设置里一键直达，不必再猜设置入口。 */}
           <Row title="本机客户端管理" desc="连接状态、平台登录与诊断信息都在本机设置中查看。">
             <div className="flex flex-wrap justify-end gap-2" data-testid="desktop-local-settings-shortcuts">

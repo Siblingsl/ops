@@ -11,8 +11,9 @@ import type { PlatformAccountSnapshot, PlatformAvailability, PlatformConnection,
 import { useMe } from '@/lib/session'
 import { DESKTOP_LOCAL_SETTINGS_REQUEST, useSettingsDraft } from '@/lib/desktop-settings'
 import { requestDesktopPlatformIntent } from '@/lib/desktop-platform-intent'
+import { getPlatformCollectionDisabledInfo, useDesktopCapabilities } from '@/lib/desktop-capabilities'
 import { PlatformSyncDetails } from './platform-sync-details'
-import { Badge, Button, Card, CardHeader, cn, Field, MoreMenu, platformLabel, roleReadOnlyHint, Switch } from './ui'
+import { Badge, Button, Card, CardHeader, cn, Field, MoreMenu, Notice, platformLabel, roleReadOnlyHint, Switch } from './ui'
 
 // 平台数据连接（D-129 / 20 文档 §14）。页面只展示服务端返回的真实状态：
 // 不推断“已同步”，不把未知显示成 0，也不提供任何批量操作入口。
@@ -142,6 +143,7 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
     staleTime: 60_000,
     retry: false,
   })
+  const capabilitiesQuery = useDesktopCapabilities(desktopPresentation && platform !== 'toutiao')
   const [connection, setConnection] = useState<PlatformConnection | null>(null)
   const [observations, setObservations] = useState<PlatformObservation[]>([])
   const [loading, setLoading] = useState(true)
@@ -417,6 +419,8 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
   const canOpenToutiao = !adminOverride && accountStatus === 'active' && role !== 'viewer'
   const canConfirmObservations = !adminOverride && role !== 'viewer'
   const isToutiao = platform === 'toutiao'
+  // OPT-U06（docs/43 §4）：服务端关闭全局采集时，账号卡与偏好页都显示同一份原因，不再静默停采。
+  const platformDisabled = getPlatformCollectionDisabledInfo(capabilitiesQuery.data)
   // OPT-U04（docs/43 §4）：新宿主优先走固定 IPC 直接打开平台登录窗，绕开会返回 null 的 window.open；
   // 只有旧宿主没有 openPlatformLogin 时才退回自定义协议深链。失败如实提示，不静默吞错。
   const openPlatformLogin = async () => {
@@ -451,6 +455,9 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
       <Card className={desktopPresentation ? 'desktop-platform-connection @container' : undefined}>
         <CardHeader title="平台登录与同步" desc={`${platformLabel[platform as keyof typeof platformLabel] ?? platform} 登录态保存在本机；登录核验与作品同步是两个独立操作。`} className={desktopPresentation ? 'desktop-platform-connection-header flex-wrap py-4' : undefined} />
         <div className={cn('space-y-2 text-[13px] leading-relaxed text-mist-600', desktopPresentation ? 'desktop-platform-disconnected p-4 @[640px]:p-5' : 'p-5')}>
+          {desktopPresentation && !isToutiao && platformDisabled && (
+            <Notice tone="gamboge" data-testid="platform-collection-disabled-notice">{platformDisabled.hint}</Notice>
+          )}
           <p>{isToutiao
             ? '头条稳定身份与数据读取能力尚未验证。登录后不会自动同步作品，作品仍通过发布包手动发布。'
             : '尚未连接。登录平台账号后需要本人核对稳定身份；登录不会自动同步历史作品。'} </p>
@@ -492,6 +499,8 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
     if (!connection.is_holder) return '请由平台连接保管人在保存登录态的主设备上发起。'
     if (connection.state !== 'active') return '平台连接已暂停或撤销，请先恢复连接。'
     if (connection.availability !== 'ready') return `平台连接状态为“${availability.text}”，请先重新核对登录。`
+    // OPT-U06：服务端关闭采集时本机不会发心跳，presence 会离线；必须先说明根因，再判客户端离线。
+    if (platformDisabled) return platformDisabled.hint
     if (presence !== 'online') return '保存该平台登录态的本机客户端当前离线。'
     if (policyQuery.isLoading) return '正在核实工作区平台读取权限…'
     if (policyQuery.isError || !policyQuery.data) return '无法核实服务端能力与工作区策略，请重试状态查询。'
@@ -660,6 +669,9 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
         ) : undefined}
       />
       {renderedActions}
+      {desktopPresentation && !isToutiao && platformDisabled && <div className="border-b border-line/60 px-5 py-3">
+        <Notice tone="gamboge" data-testid="platform-collection-disabled-notice">{platformDisabled.hint}</Notice>
+      </div>}
       {desktopPresentation && operationsQuery.isError && <div role="alert" className="border-b border-line/60 px-5 py-3 text-[13px] text-danger">
         同步进度读取失败：{errorMessage(operationsQuery.error)} <button className="underline" onClick={() => void operationsQuery.refetch()}>重试进度</button>
       </div>}
