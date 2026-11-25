@@ -179,6 +179,8 @@ func (s *Server) buildRouter() http.Handler {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/healthz", s.healthz)
 		r.Get("/desktop/capabilities", s.h(s.desktopCapabilities))
+		// OPT-E02：只读版本元数据（不触发下载/安装），与 capabilities 同级、无需登录。
+		r.Get("/desktop/release", s.h(s.desktopRelease))
 		// The WebSocket upgrade authenticates only a short-lived, one-use ticket.
 		r.Get("/desktop/channel", s.desktopChannel)
 		r.Group(func(r chi.Router) {

@@ -38,10 +38,12 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).sort(), [
     'actComputerUIA',
     'captureLongImage',
+    'checkUpdate',
     'confirmBrowserPairing',
     'focusBrowserTab',
     'getBrowserPairingState',
     'getMcpOAuthStatus',
+    'getUpdateStatus',
     'invalidateComputerUIA',
     'invokeComputerUIA',
     'invokeInBrowse',
@@ -56,7 +58,9 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     'onRealtimeEvent',
     'onSidepanelDraft',
     'onSidepanelStop',
+    'onUpdateStatus',
     'openPlatformLogin',
+    'openUpdateDownload',
     'openXhsManualImageFolder',
     'readComputerUIA',
     'revokeMcpOAuth',
@@ -71,9 +75,9 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
   // DEV-AI27-A3：MCP 验证与 OAuth 生命周期为独立固定意图（握手/授权在本机，秘密不进 IPC）。
   // DT-04（W17c）：UIA 读/调用同口径独立固定意图（C09 白名单逐控件校验）。
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')).sort(),
-    ['actComputerUIA', 'captureLongImage', 'confirmBrowserPairing', 'focusBrowserTab', 'getBrowserPairingState',
-     'getMcpOAuthStatus', 'invalidateComputerUIA', 'invokeComputerUIA', 'invokeInBrowse',
-     'listBrowserTabs', 'listComputerWindows', 'observeComputerUIA', 'openPlatformLogin', 'openXhsManualImageFolder',
+    ['actComputerUIA', 'captureLongImage', 'checkUpdate', 'confirmBrowserPairing', 'focusBrowserTab', 'getBrowserPairingState',
+     'getMcpOAuthStatus', 'getUpdateStatus', 'invalidateComputerUIA', 'invokeComputerUIA', 'invokeInBrowse',
+     'listBrowserTabs', 'listComputerWindows', 'observeComputerUIA', 'openPlatformLogin', 'openUpdateDownload', 'openXhsManualImageFolder',
      'readComputerUIA', 'revokeMcpOAuth', 'setLocalSettingsPanel', 'startMcpOAuth', 'validateMcpConnection']);
   const buildId = '00000008-1111-4111-8111-111111111111';
   assert.deepEqual(await exposed.opsDesktopUI.captureLongImage(buildId), {
@@ -1010,4 +1014,122 @@ test('OPT-U04: invoke 抛错压成 desktop_ui_unavailable，不把异常原文�
   }), {
     ok: false, code: 'desktop_ui_unavailable', message: '本机平台登录暂不可用，请重试。',
   });
+});
+
+// ---------------------------------------------------------------------------
+// OPT-E02（docs/43 §5）：版本更新检查——4 个白名单方法、9 键状态严格校验、
+// 推送缓存回放、invoke 抛错压码；状态里任何多余键或非法类型都整份拒绝。
+// ---------------------------------------------------------------------------
+
+function validUpdateStatus(over = {}) {
+  return {
+    status: 'update-available',
+    currentVersion: '0.1.0',
+    latestVersion: '0.2.0',
+    updateAvailable: true,
+    releaseNotes: '新版说明',
+    downloadUrl: 'https://downloads.example.com/ops.exe',
+    sha256: 'a'.repeat(64),
+    checkedAt: 1,
+    error: '',
+    ...over,
+  };
+}
+
+function loadUpdatePreload(respond) {
+  const exposed = {};
+  const handlers = new Map();
+  const invokes = [];
+  const ipcRenderer = {
+    on(channel, handler) {
+      const listeners = handlers.get(channel) ?? new Set();
+      listeners.add(handler);
+      handlers.set(channel, listeners);
+    },
+    removeListener(channel, handler) { handlers.get(channel)?.delete(handler); },
+    invoke(channel, payload) {
+      invokes.push({ channel, payload });
+      return Promise.resolve(respond(channel));
+    },
+  };
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposed[n] = v; } }, ipcRenderer });
+  return { exposed, handlers, invokes };
+}
+
+test('OPT-E02: getUpdateStatus 只用固定通道并严格收敛 9 键状态', async () => {
+  const { exposed, invokes } = loadUpdatePreload(() => ({ ok: true, status: validUpdateStatus() }));
+  assert.deepEqual(await exposed.opsDesktopUI.getUpdateStatus(), { ok: true, status: validUpdateStatus() });
+  assert.deepEqual(invokes.at(-1), { channel: 'desktop-ui:get-update-status', payload: undefined });
+
+  for (const badStatus of [
+    validUpdateStatus({ extra: 'SHOULD-NOT-LEAK' }),
+    validUpdateStatus({ status: 'unknown' }),
+    validUpdateStatus({ checkedAt: -1 }),
+    validUpdateStatus({ checkedAt: 1.5 }),
+    validUpdateStatus({ updateAvailable: 'true' }),
+    validUpdateStatus({ downloadUrl: 'http://127.0.0.1/ops.exe' }),
+    validUpdateStatus({ sha256: 'not-a-sha' }),
+    validUpdateStatus({ releaseNotes: 'x'.repeat(2001) }),
+    validUpdateStatus({ error: 'x'.repeat(201) }),
+  ]) {
+    const local = loadUpdatePreload(() => ({ ok: true, status: badStatus }));
+    assert.deepEqual(await local.exposed.opsDesktopUI.getUpdateStatus(), {
+      ok: false, code: 'desktop_update_invalid', message: 'Electron 返回的更新状态无效。',
+    }, `应拒绝 ${JSON.stringify(badStatus).slice(0, 80)}`);
+  }
+  // checkedAt=null 是合法初始值；上面用例把它放进负例集合时同时带了其它字段，
+  // 这里单独验证「未检查」形状可以透出。
+  const initial = loadUpdatePreload(() => ({
+    ok: true,
+    status: validUpdateStatus({ status: 'idle', updateAvailable: false, latestVersion: '', releaseNotes: '', downloadUrl: '', sha256: '', checkedAt: null }),
+  }));
+  assert.equal((await initial.exposed.opsDesktopUI.getUpdateStatus()).ok, true);
+});
+
+test('OPT-E02: checkUpdate 与 openUpdateDownload 的异常收敛', async () => {
+  const ok = loadUpdatePreload((channel) => channel === 'desktop-ui:check-update'
+    ? { ok: true, status: validUpdateStatus() }
+    : { ok: true });
+  assert.deepEqual(await ok.exposed.opsDesktopUI.checkUpdate(), { ok: true, status: validUpdateStatus() });
+  assert.deepEqual(await ok.exposed.opsDesktopUI.openUpdateDownload(), { ok: true });
+
+  const refused = { ok: false, code: 'download_unavailable', message: '当前没有可用的下载链接，请联系管理员获取最新安装包。' };
+  const fail = loadUpdatePreload(() => refused);
+  assert.deepEqual(await fail.exposed.opsDesktopUI.openUpdateDownload(), refused);
+
+  const extra = loadUpdatePreload(() => ({ ok: true, url: 'https://evil.example.com/malware.exe' }));
+  assert.deepEqual(await extra.exposed.opsDesktopUI.openUpdateDownload(), {
+    ok: false, code: 'desktop_update_invalid', message: 'Electron 返回的下载结果无效。',
+  });
+  assert.deepEqual(await extra.exposed.opsDesktopUI.checkUpdate(), {
+    ok: false, code: 'desktop_update_invalid', message: 'Electron 返回的更新状态无效。',
+  });
+
+  const thrower = loadUpdatePreload(() => { throw new Error('No handler registered'); });
+  assert.deepEqual(await thrower.exposed.opsDesktopUI.checkUpdate(), {
+    ok: false, code: 'desktop_update_unavailable', message: '本机客户端更新检查暂不可用，请重试。',
+  });
+  assert.deepEqual(await thrower.exposed.opsDesktopUI.openUpdateDownload(), {
+    ok: false, code: 'desktop_update_unavailable', message: '本机下载页打开暂不可用，请重试。',
+  });
+});
+
+test('OPT-E02: onUpdateStatus 缓存回放、非法推送丢弃、退订生效', async () => {
+  const { exposed, handlers } = loadUpdatePreload(() => ({ ok: true }));
+  const channel = 'desktop-ui:update-status';
+  // 订阅前推送：缓存最新状态，订阅时立即回放。
+  emit(handlers, channel, validUpdateStatus());
+  const seen = [];
+  const unsubscribe = exposed.opsDesktopUI.onUpdateStatus((status) => seen.push(status));
+  assert.deepEqual(seen, [validUpdateStatus()]);
+
+  emit(handlers, channel, validUpdateStatus({ latestVersion: '0.3.0' }));
+  emit(handlers, channel, validUpdateStatus({ extra: 'SHOULD-NOT-LEAK' }));
+  emit(handlers, channel, { ...validUpdateStatus(), downloadUrl: 'http://127.0.0.1/ops.exe' });
+  assert.deepEqual(seen.at(-1).latestVersion, '0.3.0');
+  assert.equal(seen.length, 2);
+
+  unsubscribe();
+  emit(handlers, channel, validUpdateStatus());
+  assert.equal(seen.length, 2);
 });

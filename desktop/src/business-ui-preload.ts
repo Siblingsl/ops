@@ -10,12 +10,37 @@ const PUBLISH_PACK_XHS_IMAGES_CHANNEL = 'publish-pack:open-xhs-images';
 // OPT-U04（docs/43 §4）：平台重登与本机设置面板的固定意图通道（不再依赖 window.open）。
 const DESKTOP_UI_OPEN_PLATFORM_LOGIN_CHANNEL = 'desktop-ui:open-platform-login';
 const DESKTOP_UI_SETTINGS_PANEL_CHANNEL = 'desktop-ui:settings-panel';
+// OPT-E02（docs/43 §5）：版本更新检查——状态推送 + 读状态/立即检查/打开受信任下载页。
+const DESKTOP_UI_UPDATE_STATUS_CHANNEL = 'desktop-ui:update-status';
+const DESKTOP_UI_GET_UPDATE_STATUS_CHANNEL = 'desktop-ui:get-update-status';
+const DESKTOP_UI_CHECK_UPDATE_CHANNEL = 'desktop-ui:check-update';
+const DESKTOP_UI_OPEN_UPDATE_DOWNLOAD_CHANNEL = 'desktop-ui:open-update-download';
 
 type LocalSettingsState = { dirty: boolean; busy: boolean };
 type SettingsOpenListener = () => void;
 type LocalSettingsStateListener = (state: LocalSettingsState) => void;
 type PlatformIntentResultListener = (result: PlatformIntentResult) => void;
 type ClientHealthListener = (health: DesktopClientHealth) => void;
+
+// OPT-E02（docs/43 §5）：更新状态固定 9 键。preload 对推送与 invoke 返回值都做
+// 键集合 + 类型白名单收敛，多余键整份拒绝；渲染器拿不到未校验的下载地址。
+type DesktopUpdateStatusKind = 'idle' | 'checking' | 'update-available' | 'up-to-date' | 'unconfigured' | 'error';
+type DesktopUpdateStatus = {
+  status: DesktopUpdateStatusKind;
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  releaseNotes: string;
+  downloadUrl: string;
+  sha256: string;
+  checkedAt: number | null;
+  error: string;
+};
+type DesktopUpdateStatusResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; status: DesktopUpdateStatus };
+type DesktopUpdateOpenResult = { ok: false; code: string; message: string } | { ok: true };
+type DesktopUpdateStatusListener = (status: DesktopUpdateStatus) => void;
 type CXLongImageCaptureResult =
   | { ok: false; code: string; message: string }
   | {
@@ -163,9 +188,11 @@ const openSettingsListeners = new Set<SettingsOpenListener>();
 const localSettingsStateListeners = new Set<LocalSettingsStateListener>();
 const platformIntentResultListeners = new Set<PlatformIntentResultListener>();
 const clientHealthListeners = new Set<ClientHealthListener>();
+const updateStatusListeners = new Set<DesktopUpdateStatusListener>();
 let pendingOpenSettings = false;
 let latestLocalSettingsState: LocalSettingsState | null = null;
 let latestClientHealth: DesktopClientHealth | null = null;
+let latestUpdateStatus: DesktopUpdateStatus | null = null;
 
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 // OPT-U04：桌面平台登录 / 本机设置面板的固定白名单（与主进程 ipc/desktop-ui.ts 同口径）。
@@ -278,6 +305,73 @@ function parseXhsManualImageExportResult(raw: unknown): XhsManualImageExportResu
 
 // OPT-U04：返回值白名单收敛——只允许 {ok:true} 或 {ok:false,code,message}，多余键整份拒绝。
 function parseDesktopUiActionResult(raw: unknown): DesktopUiActionResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.code === 'string' && value.code.length <= 40
+      && typeof value.message === 'string' && value.message.length <= 200
+      ? { ok: false, code: value.code, message: value.message }
+      : null;
+  }
+  return Object.keys(value).length === 1 ? { ok: true } : null;
+}
+
+// OPT-E02（docs/43 §5）：更新状态白名单——严格 9 键、枚举合法、字符串长度受限；
+// 下载链接只接受空串或 https 开头，SHA-256 只接受空串或 64 位十六进制。
+function parseDesktopUpdateStatus(raw: unknown): DesktopUpdateStatus | null {
+  const value = asRecord(raw);
+  if (!value) return null;
+  if (Object.keys(value).sort().join(',') !==
+    'checkedAt,currentVersion,downloadUrl,error,latestVersion,releaseNotes,sha256,status,updateAvailable') return null;
+  if (!['idle', 'checking', 'update-available', 'up-to-date', 'unconfigured', 'error']
+    .includes(String(value.status))) return null;
+  if (typeof value.updateAvailable !== 'boolean') return null;
+  if (value.checkedAt !== null
+    && (typeof value.checkedAt !== 'number' || !Number.isSafeInteger(value.checkedAt) || value.checkedAt < 0)) return null;
+  const bounded = (key: string, max: number): string | null => {
+    const item = value[key];
+    return typeof item === 'string' && item.length <= max ? item : null;
+  };
+  const currentVersion = bounded('currentVersion', 64);
+  const latestVersion = bounded('latestVersion', 64);
+  const releaseNotes = typeof value.releaseNotes === 'string' && Array.from(value.releaseNotes).length <= 2000
+    ? value.releaseNotes
+    : null;
+  const downloadUrl = bounded('downloadUrl', 4096);
+  const sha256 = bounded('sha256', 64);
+  const error = bounded('error', 200);
+  if (currentVersion === null || latestVersion === null || releaseNotes === null
+    || downloadUrl === null || sha256 === null || error === null) return null;
+  if (downloadUrl !== '' && !downloadUrl.startsWith('https://')) return null;
+  if (sha256 !== '' && !/^[0-9a-f]{64}$/.test(sha256)) return null;
+  return {
+    status: value.status as DesktopUpdateStatusKind,
+    currentVersion,
+    latestVersion,
+    updateAvailable: value.updateAvailable,
+    releaseNotes,
+    downloadUrl,
+    sha256,
+    checkedAt: value.checkedAt as number | null,
+    error,
+  };
+}
+
+function parseDesktopUpdateStatusResult(raw: unknown): DesktopUpdateStatusResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.code === 'string' && value.code.length <= 40
+      && typeof value.message === 'string' && value.message.length <= 200
+      ? { ok: false, code: value.code, message: value.message }
+      : null;
+  }
+  if (Object.keys(value).sort().join(',') !== 'ok,status') return null;
+  const status = parseDesktopUpdateStatus(value.status);
+  return status ? { ok: true, status } : null;
+}
+
+function parseDesktopUpdateOpenResult(raw: unknown): DesktopUpdateOpenResult | null {
   const value = asRecord(raw);
   if (!value || typeof value.ok !== 'boolean') return null;
   if (!value.ok) {
@@ -747,6 +841,13 @@ ipcRenderer.on(CLIENT_HEALTH_CHANNEL, (_event: IpcRendererEvent, raw: unknown) =
   for (const listener of clientHealthListeners) listener(health);
 });
 
+ipcRenderer.on(DESKTOP_UI_UPDATE_STATUS_CHANNEL, (_event: IpcRendererEvent, raw: unknown) => {
+  const status = parseDesktopUpdateStatus(raw);
+  if (!status) return;
+  latestUpdateStatus = status;
+  for (const listener of updateStatusListeners) listener(status);
+});
+
 contextBridge.exposeInMainWorld('opsDesktopUI', {
   onOpenSettings(listener: SettingsOpenListener) {
     openSettingsListeners.add(listener);
@@ -769,6 +870,42 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
     clientHealthListeners.add(listener);
     if (latestClientHealth) listener(latestClientHealth);
     return () => clientHealthListeners.delete(listener);
+  },
+  // OPT-E02（docs/43 §5）：更新状态推送——与 onClientHealth 同模式，新订阅者若有缓存立即回放。
+  onUpdateStatus(listener: DesktopUpdateStatusListener) {
+    updateStatusListeners.add(listener);
+    if (latestUpdateStatus) listener(latestUpdateStatus);
+    return () => updateStatusListeners.delete(listener);
+  },
+  async getUpdateStatus(): Promise<DesktopUpdateStatusResult> {
+    let raw: unknown;
+    try {
+      raw = await ipcRenderer.invoke(DESKTOP_UI_GET_UPDATE_STATUS_CHANNEL);
+    } catch {
+      return { ok: false, code: 'desktop_update_unavailable', message: '本机客户端更新状态暂不可用，请重试。' };
+    }
+    return parseDesktopUpdateStatusResult(raw)
+      ?? { ok: false, code: 'desktop_update_invalid', message: 'Electron 返回的更新状态无效。' };
+  },
+  async checkUpdate(): Promise<DesktopUpdateStatusResult> {
+    let raw: unknown;
+    try {
+      raw = await ipcRenderer.invoke(DESKTOP_UI_CHECK_UPDATE_CHANNEL);
+    } catch {
+      return { ok: false, code: 'desktop_update_unavailable', message: '本机客户端更新检查暂不可用，请重试。' };
+    }
+    return parseDesktopUpdateStatusResult(raw)
+      ?? { ok: false, code: 'desktop_update_invalid', message: 'Electron 返回的更新状态无效。' };
+  },
+  async openUpdateDownload(): Promise<DesktopUpdateOpenResult> {
+    let raw: unknown;
+    try {
+      raw = await ipcRenderer.invoke(DESKTOP_UI_OPEN_UPDATE_DOWNLOAD_CHANNEL);
+    } catch {
+      return { ok: false, code: 'desktop_update_unavailable', message: '本机下载页打开暂不可用，请重试。' };
+    }
+    return parseDesktopUpdateOpenResult(raw)
+      ?? { ok: false, code: 'desktop_update_invalid', message: 'Electron 返回的下载结果无效。' };
   },
   async captureLongImage(buildId: string): Promise<CXLongImageCaptureResult> {
     if (!isUuid(buildId)) return { ok: false, code: 'invalid_input', message: '长图构建参数无效。' };

@@ -37,6 +37,13 @@ type Config struct {
 	// own switch on, platform readings are only written into official metrics when an
 	// operator has explicitly enabled this after formal acceptance (DEV-PS62).
 	DesktopPlatformAutoAdopt bool
+	// DesktopLatestVersion / DesktopReleaseNotes / DesktopDownloadURL / DesktopDownloadSHA256
+	// 是 OPT-E02 的只读版本元数据（GET /desktop/release）。它们只影响该接口的响应，
+	// 格式异常不会阻断服务启动，统一由出口函数清洗与降级。
+	DesktopLatestVersion  string
+	DesktopReleaseNotes   string
+	DesktopDownloadURL    string
+	DesktopDownloadSHA256 string
 	// AIWorkers is the per-workspace concurrency of background and streaming AI jobs (D-054).
 	AIWorkers int
 	// OfficeRenderDir 是 C3 独立 Node Office 渲染器目录（含 render.mjs 与 templates）。
@@ -63,6 +70,12 @@ func Load() (*Config, error) {
 		DesktopAIEnabled:         false,
 		DesktopPlatformEnabled:   false,
 		DesktopPlatformAutoAdopt: false,
+		// OPT-E02：桌面端版本更新元数据。非法值不在 Load 阶段报错，避免一个写错的
+		// 下载链接让整个服务起不来；由 /desktop/release 出口统一置空降级。
+		DesktopLatestVersion:  strings.TrimSpace(os.Getenv("OPS_DESKTOP_LATEST_VERSION")),
+		DesktopReleaseNotes:   strings.TrimSpace(os.Getenv("OPS_DESKTOP_RELEASE_NOTES")),
+		DesktopDownloadURL:    strings.TrimSpace(os.Getenv("OPS_DESKTOP_DOWNLOAD_URL")),
+		DesktopDownloadSHA256: strings.TrimSpace(os.Getenv("OPS_DESKTOP_SHA256")),
 	}
 	if v := strings.TrimSpace(os.Getenv("OPS_DESKTOP_AI_ENABLED")); v != "" {
 		switch strings.ToLower(v) {

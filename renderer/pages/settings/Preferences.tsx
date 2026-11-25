@@ -9,7 +9,8 @@ import { getPlatformCollectionDisabledInfo, useDesktopCapabilities } from '@/lib
 import type { UserPrefs } from '@/lib/types'
 import { ghostKeys, usePrefs, useSavePrefs } from '@/lib/v3'
 import { useSettingsDraft } from '@/lib/desktop-settings'
-import { isElectronDesktop, setDesktopMotion, type DesktopClientHealth } from '@/lib/desktop-presentation.js'
+import { isElectronDesktop, setDesktopMotion, type DesktopClientHealth, type DesktopUpdateStatus } from '@/lib/desktop-presentation.js'
+import DesktopUpdateDialog from '@/components/desktop-update-dialog'
 
 function Row({ title, desc, children }: { title: string; desc?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -47,6 +48,11 @@ export default function Preferences() {
   const platformDisabled = getPlatformCollectionDisabledInfo(capabilitiesQuery.data)
   const [reducedMotion, setReducedMotion] = useState(() => document.documentElement.dataset.reducedMotion === 'true')
   const [health, setHealth] = useState<DesktopClientHealth | null>(null)
+  // OPT-E02（docs/43 §5）：设置页的版本与更新入口。状态来自主进程只读推送/查询，
+  // 渲染器不直接请求版本接口，也不发起任何下载。
+  const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus | null>(null)
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
   useEffect(() => {
     if (!desktop) return
     const unsubscribe = window.opsDesktopUI?.onClientHealth(setHealth)
@@ -54,8 +60,61 @@ export default function Preferences() {
     window.addEventListener('ops:desktop-motion', syncMotion)
     return () => { unsubscribe?.(); window.removeEventListener('ops:desktop-motion', syncMotion) }
   }, [desktop])
+  useEffect(() => {
+    if (!desktop) return
+    const ui = window.opsDesktopUI
+    if (!ui?.onUpdateStatus) return
+    let alive = true
+    const unsubscribe = ui.onUpdateStatus(setUpdateStatus)
+    void ui.getUpdateStatus?.().then((result) => {
+      if (alive && result.ok) setUpdateStatus(result.status)
+    }).catch(() => undefined)
+    return () => { alive = false; unsubscribe?.() }
+  }, [desktop])
   useSettingsDraft(false, save.isPending)
   const set = (p: Partial<UserPrefs>) => save.mutate(p, { onError: (e) => toast.error(errorMessage(e)), onSuccess: () => toast.success('已保存', { duration: 1200 }) })
+  const updateStatusText = updateStatus
+    ? updateStatus.status === 'checking'
+      ? '正在检查…'
+      : updateStatus.status === 'idle'
+        ? '尚未检查'
+        : updateStatus.updateAvailable && updateStatus.latestVersion
+          ? `发现新版本 v${updateStatus.latestVersion}`
+          : updateStatus.status === 'error'
+            ? `检查失败：${updateStatus.error || '请稍后重试'}`
+            : updateStatus.status === 'unconfigured' || !updateStatus.latestVersion
+              ? '服务端未配置更新源'
+              : '已是最新版本'
+    : '尚未检查'
+  const currentVersionText = updateStatus?.currentVersion ? `v${updateStatus.currentVersion}` : '未知'
+  const checkUpdate = async () => {
+    const ui = window.opsDesktopUI
+    if (!ui?.checkUpdate) {
+      toast.info('当前环境不支持客户端更新检查')
+      return
+    }
+    setCheckingUpdate(true)
+    try {
+      const result = await ui.checkUpdate()
+      if (!result.ok) {
+        toast.error(result.message)
+        return
+      }
+      setUpdateStatus(result.status)
+      if (result.status.status === 'error') toast.error(result.status.error || '检查更新失败')
+      else if (result.status.updateAvailable && result.status.latestVersion) {
+        toast.success(`发现新版本 v${result.status.latestVersion}`, { duration: 1500 })
+      } else if (result.status.status === 'unconfigured' || !result.status.latestVersion) {
+        toast.info('服务端未配置更新源')
+      } else {
+        toast.success('已是最新版本', { duration: 1200 })
+      }
+    } catch {
+      toast.error('检查更新失败，请稍后重试')
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }
   return (
     <div className="max-w-3xl animate-fade-in">
       <PageHeader title="偏好设置" desc="只影响你自己，不影响同一工作区的其他成员。"
@@ -80,6 +139,16 @@ export default function Preferences() {
           {platformDisabled && <div className="px-5 py-3">
             <Notice tone="gamboge" data-testid="preferences-platform-disabled-notice">{platformDisabled.hint}</Notice>
           </div>}
+          {/* OPT-E02（docs/43 §5）：客户端版本与更新。检查不打断写稿，只有用户点「查看更新」才开弹窗。 */}
+          <Row title="客户端版本与更新" desc={`当前版本 ${currentVersionText} · ${updateStatusText}`}>
+            <div className="flex flex-wrap justify-end gap-2" data-testid="desktop-update-row">
+              {updateStatus?.updateAvailable && updateStatus.latestVersion && (
+                <Button size="sm" variant="secondary" onClick={() => setUpdateDialogOpen(true)}>查看更新</Button>
+              )}
+              <Button size="sm" variant="secondary" loading={checkingUpdate} onClick={checkUpdate}
+                data-testid="desktop-check-update-btn">检查更新</Button>
+            </div>
+          </Row>
           {/* OPT-U04（docs/43 §4）：本机状态与诊断在偏好设置里一键直达，不必再猜设置入口。 */}
           <Row title="本机客户端管理" desc="连接状态、平台登录与诊断信息都在本机设置中查看。">
             <div className="flex flex-wrap justify-end gap-2" data-testid="desktop-local-settings-shortcuts">
@@ -139,6 +208,7 @@ export default function Preferences() {
         </Row>
       </Card>
       {desktop && <InBrowseDataCard />}
+      {desktop && <DesktopUpdateDialog open={updateDialogOpen} onClose={() => setUpdateDialogOpen(false)} status={updateStatus} />}
     </div>
   )
 }

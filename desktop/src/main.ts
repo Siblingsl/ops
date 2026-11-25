@@ -34,6 +34,9 @@ import { registerComputerIpcHandlers, setComputerWorkerHost } from './ipc/comput
 import { registerCXIpcHandlers } from './ipc/cx';
 import { registerPublishPackIpcHandlers } from './ipc/publish-pack';
 import { registerDesktopUiIpcHandlers } from './ipc/desktop-ui';
+// OPT-E02（docs/43 §5）：只读版本更新检查——通道在 ipc/update.ts，检查器在 update-check.ts。
+import { registerDesktopUpdateIpcHandlers, DESKTOP_UI_UPDATE_STATUS_CHANNEL } from './ipc/update';
+import { createDesktopUpdateChecker, type DesktopUpdateChecker } from './update-check';
 import { registerInBrowseIpcHandlers } from './ipc/inbrowse';
 import { registerBrowserIpcHandlers } from './ipc/browser';
 import { registerSettingsIpcHandlers } from './ipc/settings';
@@ -206,6 +209,8 @@ let localSettingsSession: Session | null = null;
 let localSettingsViewController: ReturnType<typeof createLocalSettingsViewController> | null = null;
 let pendingNativeSettingsRequest = false;
 let desktopClient: DesktopClient | null = null;
+// OPT-E02：进程内单例检查器；通过固定 IPC 暴露给业务窗口，并在退出时 dispose。
+let desktopUpdateChecker: DesktopUpdateChecker | null = null;
 let clientHealthTimer: NodeJS.Timeout | null = null;
 let collectionHealth: DesktopClientHealth['collection'] = { status: 'idle', message: '自动采集状态尚未更新。', updatedAt: null };
 let presenceHealth: DesktopClientHealth['presence'] = { status: 'unknown', message: '平台连接状态尚未更新。', updatedAt: null };
@@ -297,6 +302,18 @@ function startApplication(): void {
       businessSession = session.fromPartition(businessPartition);
       localSettingsSession = session.fromPartition('ops-settings');
       desktopClient = new DesktopClient(businessSession, apiOrigin, serviceNamespace);
+      // OPT-E02：更新检查器只读 app.getVersion() 与 apiOrigin，不写任何本机文件。
+      // 发现新版本时仅推送状态给业务窗口，由底栏温和提示；绝不自动弹窗。
+      desktopUpdateChecker = createDesktopUpdateChecker({
+        currentVersion: () => app.getVersion(),
+        apiOrigin: () => apiOrigin,
+        onStatus: (status) => {
+          const window = businessWindow;
+          if (!window || window.isDestroyed() || window.webContents.isDestroyed()
+            || !isBusinessUrl(window.webContents.getURL())) return;
+          window.webContents.send(DESKTOP_UI_UPDATE_STATUS_CHANNEL, status);
+        },
+      });
       startClientHealthBroadcast();
       registerDesktopPowerHandlers(
         powerMonitor,
@@ -584,6 +601,9 @@ function createBusinessWindow(businessSession: Session): void {
     event.preventDefault();
     void confirmApplicationQuit(currentWindow);
   });
+
+  // OPT-E02：业务窗口就绪后延迟 15s 做一次静默检查；只推状态，不弹窗打断写稿。
+  desktopUpdateChecker?.scheduleStartupCheck();
 }
 
 function installBusinessPermissions(businessSession: Session): void {
@@ -993,6 +1013,7 @@ function disposeApplicationResources(): void {
     // 退出时只清空占用标记，让 capture_busy 门不再阻塞新会话启动。
     activeCXLongImageCaptures.clear();
   });
+  safeDispose('desktop update checker', () => desktopUpdateChecker?.dispose());
   safeDispose('desktop client', () => desktopClient?.disconnect());
 }
 
@@ -1071,6 +1092,17 @@ function registerIpcHandlers(): void {
   // OPT-U04（docs/43 §4）：平台重登与本机设置面板的固定 IPC——通道与校验都在 ipc/desktop-ui.ts，
   // 业务页不再依赖会被拦截的 window.open；原 setWindowOpenHandler 的 ops-desktop://ui/* 兼容保留。
   registerDesktopUiIpcHandlers({ ipcHandle, businessWindow: () => businessWindow, isBusinessUrl, applyIntent: applyDesktopUiIntent });
+  // OPT-E02（docs/43 §5）：版本更新三通道。checker 在 whenReady 里已创建；这里只接线，
+  // 业务窗口守卫与「打开下载页只吃已校验链接」都在 ipc/update.ts 内完成。
+  if (desktopUpdateChecker) {
+    registerDesktopUpdateIpcHandlers({
+      ipcHandle,
+      businessWindow: () => businessWindow,
+      isBusinessUrl,
+      checker: desktopUpdateChecker,
+      openExternal: (url) => shell.openExternal(url),
+    });
+  }
   // DT-08 片 10：settings:* 28 通道 + local-state 事件拆至 ipc/settings.ts（确认弹窗
   // 文案与防线校验逐字节搬移；跨域依赖经 SettingsIpcDeps 注入）。
   registerSettingsIpcHandlers({

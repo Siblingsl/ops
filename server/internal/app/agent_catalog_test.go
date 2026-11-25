@@ -554,6 +554,8 @@ func agentClassifiedRouteList() map[string]string {
 		"GET /preview/{token}",
 		"GET /api/v1/auth/status",
 		"GET /api/v1/desktop/capabilities",
+		// OPT-E02：只读版本更新元数据，只供桌面客户端检查更新，不作为智能体工具。
+		"GET /api/v1/desktop/release",
 		"POST /api/v1/desktop/challenges",
 		"GET /api/v1/desktop/channel",
 		"POST /api/v1/desktop/connections",

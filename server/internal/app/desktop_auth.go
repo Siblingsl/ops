@@ -3,8 +3,13 @@ package app
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -105,6 +110,302 @@ func (s *Server) desktopCapabilities(w http.ResponseWriter, r *http.Request) err
 		},
 		"platform_collection": platformCollection,
 	})
+}
+
+// OPT-E02（docs/43 §5）：桌面端轻量版本更新提示。这里只提供只读版本元数据，
+// 不触发任何下载或安装动作；下载链接在服务端出口清洗，主进程打开前还会再校验一次。
+const desktopReleaseNotesMaxRunes = 2000
+
+// desktopSemver 是只用于版本比较的三段式语义版本（不含 build metadata）。
+// 单独实现而不是复用 golang.org/x/mod/semver：后者要求完整 SemVer 语法且对
+// 前导 v 与预发布比较的口径不同，客户端（TypeScript）需要与本接口逐位一致。
+type desktopSemver struct {
+	major, minor, patch int
+	prerelease          []string
+}
+
+func (v desktopSemver) String() string {
+	out := strconv.Itoa(v.major) + "." + strconv.Itoa(v.minor) + "." + strconv.Itoa(v.patch)
+	if len(v.prerelease) > 0 {
+		out += "-" + strings.Join(v.prerelease, ".")
+	}
+	return out
+}
+
+func isDesktopSemverIdent(raw string) bool {
+	if raw == "" || len(raw) > 32 {
+		return false
+	}
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func isDesktopSemverNumber(raw string) bool {
+	if raw == "" || len(raw) > 9 {
+		return false
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] < '0' || raw[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// parseDesktopSemver 接受可选前导 v/V、严格的 major.minor.patch 与可选 -prerelease；
+// `+build` 元数据被忽略。无法解析时返回 ok=false，调用方必须按“未配置”降级。
+func parseDesktopSemver(raw string) (desktopSemver, bool) {
+	var v desktopSemver
+	s := strings.TrimSpace(raw)
+	if s == "" || len(s) > 128 {
+		return v, false
+	}
+	if s[0] == 'v' || s[0] == 'V' {
+		s = s[1:]
+	}
+	if s == "" || len(s) > 128 {
+		return v, false
+	}
+	if i := strings.IndexByte(s, '+'); i >= 0 {
+		build := s[i+1:]
+		if build == "" {
+			return v, false
+		}
+		for _, part := range strings.Split(build, ".") {
+			if !isDesktopSemverIdent(part) {
+				return v, false
+			}
+		}
+		s = s[:i]
+	}
+	if i := strings.IndexByte(s, '-'); i >= 0 {
+		pre := s[i+1:]
+		if pre == "" {
+			return v, false
+		}
+		for _, part := range strings.Split(pre, ".") {
+			if !isDesktopSemverIdent(part) {
+				return v, false
+			}
+		}
+		v.prerelease = strings.Split(pre, ".")
+		s = s[:i]
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		return v, false
+	}
+	for i, part := range parts {
+		if !isDesktopSemverNumber(part) {
+			return v, false
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			return v, false
+		}
+		switch i {
+		case 0:
+			v.major = n
+		case 1:
+			v.minor = n
+		case 2:
+			v.patch = n
+		}
+	}
+	return v, true
+}
+
+// compareDesktopSemver 返回 -1 / 0 / 1。数字段按数值比较（0.10.0 > 0.2.0）；
+// 同三段时正式版大于预发布版；双预发布逐段比较，纯数字段小于字母段。
+func compareDesktopSemver(a, b desktopSemver) int {
+	if a.major != b.major {
+		if a.major < b.major {
+			return -1
+		}
+		return 1
+	}
+	if a.minor != b.minor {
+		if a.minor < b.minor {
+			return -1
+		}
+		return 1
+	}
+	if a.patch != b.patch {
+		if a.patch < b.patch {
+			return -1
+		}
+		return 1
+	}
+	if len(a.prerelease) == 0 && len(b.prerelease) == 0 {
+		return 0
+	}
+	if len(a.prerelease) == 0 {
+		return 1
+	}
+	if len(b.prerelease) == 0 {
+		return -1
+	}
+	for i := 0; i < len(a.prerelease) && i < len(b.prerelease); i++ {
+		an, aErr := strconv.Atoi(a.prerelease[i])
+		bn, bErr := strconv.Atoi(b.prerelease[i])
+		aNum, bNum := aErr == nil, bErr == nil
+		switch {
+		case aNum && bNum:
+			if an != bn {
+				if an < bn {
+					return -1
+				}
+				return 1
+			}
+		case aNum:
+			return -1
+		case bNum:
+			return 1
+		default:
+			if c := strings.Compare(a.prerelease[i], b.prerelease[i]); c != 0 {
+				if c < 0 {
+					return -1
+				}
+				return 1
+			}
+		}
+	}
+	if len(a.prerelease) < len(b.prerelease) {
+		return -1
+	}
+	if len(a.prerelease) > len(b.prerelease) {
+		return 1
+	}
+	return 0
+}
+
+// desktopReservedHostNets 覆盖 IsGlobalUnicast 仍为 true 的保留/文档网段，
+// 避免把「公网可解析但实际不可路由」的地址当成合法下载源。
+var desktopReservedHostNets = func() []*net.IPNet {
+	var out []*net.IPNet
+	for _, cidr := range []string{
+		"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24",
+		"198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4",
+		"2001:db8::/32",
+	} {
+		if _, network, err := net.ParseCIDR(cidr); err == nil {
+			out = append(out, network)
+		}
+	}
+	return out
+}()
+
+// desktopLocalHost 判断主机名是否指向本机、内网或保留地址。
+func desktopLocalHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return true
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() ||
+			ip.IsLinkLocalMulticast() || ip.IsMulticast() || !ip.IsGlobalUnicast() {
+			return true
+		}
+		for _, network := range desktopReservedHostNets {
+			if network.Contains(ip) {
+				return true
+			}
+		}
+		return false
+	}
+	// 单段主机名（如 https://releases）通常只在组织内网可解析；公开下载包不应使用。
+	return !strings.Contains(host, ".")
+}
+
+// sanitizeDesktopDownloadURL 只放行合法 https、无凭据、非本机/内网/保留地址的链接；
+// 其他一律返空串，让客户端明确显示“未配置下载链接”，而不是拿到一个可疑地址。
+func sanitizeDesktopDownloadURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" || len(value) > 4096 {
+		return ""
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+		return ""
+	}
+	if desktopLocalHost(parsed.Hostname()) {
+		return ""
+	}
+	return value
+}
+
+// sanitizeDesktopSHA256 只接受 64 位十六进制（大小写均可，返回小写）；其他返空串。
+func sanitizeDesktopSHA256(raw string) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if len(value) != 64 {
+		return ""
+	}
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') {
+			continue
+		}
+		return ""
+	}
+	return value
+}
+
+func truncateDesktopRunes(raw string, max int) string {
+	if utf8.RuneCountInString(raw) <= max {
+		return raw
+	}
+	return string([]rune(raw)[:max])
+}
+
+type desktopReleaseInfo struct {
+	Configured      bool   `json:"configured"`
+	LatestVersion   string `json:"latest_version"`
+	CurrentVersion  string `json:"current_version"`
+	UpdateAvailable bool   `json:"update_available"`
+	ReleaseNotes    string `json:"release_notes"`
+	DownloadURL     string `json:"download_url"`
+	SHA256          string `json:"sha256"`
+}
+
+// desktopRelease 是桌面客户端唯一的版本元数据来源。未配置或配置非法时一律返回
+// configured=false 与全空字段，客户端据此显示“服务端未配置更新源”。
+func (s *Server) desktopRelease(w http.ResponseWriter, r *http.Request) error {
+	w.Header().Set("Cache-Control", "no-store")
+	rawCurrent := strings.TrimSpace(r.URL.Query().Get("current"))
+	if len(rawCurrent) > 128 {
+		rawCurrent = rawCurrent[:128]
+	}
+	if len(rawCurrent) > 0 && (rawCurrent[0] == 'v' || rawCurrent[0] == 'V') {
+		rawCurrent = rawCurrent[1:]
+	}
+	currentVersion := rawCurrent
+	current, currentOK := parseDesktopSemver(rawCurrent)
+	if currentOK {
+		currentVersion = current.String()
+	}
+	info := desktopReleaseInfo{CurrentVersion: currentVersion}
+	latest, configured := parseDesktopSemver(s.cfg.DesktopLatestVersion)
+	if !configured {
+		return ok(w, info)
+	}
+	info.Configured = true
+	info.LatestVersion = latest.String()
+	info.ReleaseNotes = truncateDesktopRunes(s.cfg.DesktopReleaseNotes, desktopReleaseNotesMaxRunes)
+	info.DownloadURL = sanitizeDesktopDownloadURL(s.cfg.DesktopDownloadURL)
+	info.SHA256 = sanitizeDesktopSHA256(s.cfg.DesktopDownloadSHA256)
+	// 未传 current 或 current 非法时不臆断有更新：客户端传的是自己的真实版本，
+	// 缺失就只回元数据，由客户端自行比对。
+	info.UpdateAvailable = currentOK && compareDesktopSemver(latest, current) > 0
+	return ok(w, info)
 }
 
 // requireDesktopAccountSession validates only the user's online session. It is

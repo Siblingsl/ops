@@ -62,6 +62,12 @@ declare global {
       // 业务页不再依赖会被拦截的 window.open（RC-03 桌面重登 null 的根治入口）。
       openPlatformLogin(input: DesktopPlatformLoginInput): Promise<DesktopUiActionResult>
       setLocalSettingsPanel(action: DesktopLocalSettingsAction): Promise<DesktopUiActionResult>
+      // OPT-E02（docs/43 §5）：客户端版本更新——状态推送/读取/立即检查/打开受信任下载页。
+      // 打开下载页不接受渲染器传入 URL，主进程只用自身已校验过的链接。
+      onUpdateStatus(listener: (status: DesktopUpdateStatus) => void): () => void
+      getUpdateStatus(): Promise<DesktopUpdateStatusResult>
+      checkUpdate(): Promise<DesktopUpdateStatusResult>
+      openUpdateDownload(): Promise<DesktopUpdateOpenResult>
       // DEV-AI27-17（W17b，A12）：本机选窗器（枚举只在本机，handle 不透明）。
       listComputerWindows(): Promise<DesktopComputerWindowListResult>
       // DT-04（W17c / 27 §11.5.2）：UIA 主链路固定意图——结果按 C09 白名单逐控件校验，
@@ -148,6 +154,35 @@ export type DesktopPlatformLoginInput = {
 export type DesktopLocalSettingsAction = 'connection' | 'ai' | 'account-device' | 'diagnostics' | 'detach' | 'close'
 
 export type DesktopUiActionResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true }
+
+// OPT-E02（docs/43 §5）：更新状态固定 9 键，由 preload 的严格白名单收敛后进入渲染器。
+export type DesktopUpdateStatusKind =
+  | 'idle'
+  | 'checking'
+  | 'update-available'
+  | 'up-to-date'
+  | 'unconfigured'
+  | 'error'
+
+export type DesktopUpdateStatus = {
+  status: DesktopUpdateStatusKind
+  currentVersion: string
+  latestVersion: string
+  updateAvailable: boolean
+  releaseNotes: string
+  downloadUrl: string
+  sha256: string
+  checkedAt: number | null
+  error: string
+}
+
+export type DesktopUpdateStatusResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; status: DesktopUpdateStatus }
+
+export type DesktopUpdateOpenResult =
   | { ok: false; code: string; message: string }
   | { ok: true }
 
