@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 !deploy/.env.example
+!deploy/.env.lite.example
 
 # Go
 server/bin/

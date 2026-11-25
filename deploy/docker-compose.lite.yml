@@ -1,0 +1,138 @@
+name: ops
+
+# 个人 + 小团队（2C2G 单机）轻量生产编排：postgres + app + 单个 parser_a 沙箱。
+# 与 docker-compose.prod.yml 并存，不改动原生产编排；去掉 parser_b 省 256MB 内存与容器开销。
+# 内存预算：app 768m + parser_a 256m + postgres 512m = 1536m，为宿主机/反代留约 0.5G。
+# 用法见 deploy/.env.lite.example 顶部；HTTP 入口只绑 127.0.0.1，由宿主机 Nginx/Caddy 反代。
+#
+# 严禁在此文件或 .env.lite 配置 HTTP_PROXY / HTTPS_PROXY：微信出站必须走服务器直连出口
+# （固定出口 IP / 公众号 IP 白名单依赖直连 IP），下面已显式置空。
+
+services:
+  app:
+    image: ${OPS_IMAGE:-ops-app:local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    mem_limit: 768m
+    cpus: 1
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # 关键：.env.lite 不是必填。干净仓库直接 --env-file deploy/.env.lite.example config -q
+    # 时不会因为缺少 deploy/.env 报错；正式启动按模板说明传入 --env-file deploy/.env.lite。
+    env_file:
+      - path: .env.lite
+        required: false
+    environment:
+      OPS_DEV: "0"
+      OPS_LISTEN: ":8080"
+      OPS_DATA_DIR: /data
+      # 微信出站必须走服务器直连出口（NFR-02 固定出口 IP / 公众号 IP 白名单），
+      # 显式置空防止 .env.lite 或宿主环境带入代理变量后出口静默漂移（docs/41 Q-24）。
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      NO_PROXY: "*"
+      OPS_PUBLIC_IP: ${OPS_PUBLIC_IP}
+      OPS_MASTER_KEY: ${OPS_MASTER_KEY}
+      # 桌面包通过 HTTPS API 访问，Secure Cookie 必须开启
+      OPS_COOKIE_SECURE: ${OPS_COOKIE_SECURE:-1}
+      # 只允许 Electron 桌面 UI 的本地安全协议来源
+      OPS_CORS_ORIGINS: ${OPS_CORS_ORIGINS:-ops-desktop://business}
+      # 桌面本地 UI 跨站请求 API，需要 None + Secure Cookie
+      OPS_COOKIE_SAMESITE: ${OPS_COOKIE_SAMESITE:-none}
+      # env_file 可能仍含旧的静态前端路径，生产容器明确禁用静态 Web 服务
+      OPS_STATIC_DIR: ""
+      # 2C2G：AI 并发与连接池都按轻量档收紧（默认值即本档，显式写便于排查）
+      OPS_AI_WORKERS: ${OPS_AI_WORKERS:-2}
+      OPS_DB_MAX_CONNS: ${OPS_DB_MAX_CONNS:-12}
+      OPS_DATABASE_URL: postgres://ops:${POSTGRES_PASSWORD}@postgres:5432/ops?sslmode=disable
+      # 单沙箱解析器：只挂 parser_a 的 socket，不配置 parser_b
+      OPS_DOCUMENT_PARSER_SOCKETS: /run/ops-parser-a/parser.sock
+      # 永久超级管理员（D-044）：启动时自动创建/对齐，密码只从环境变量读取
+      OPS_SYSTEM_ADMIN_USER: ${OPS_SYSTEM_ADMIN_USER:-skyeder}
+      OPS_SYSTEM_ADMIN_PASSWORD: ${OPS_SYSTEM_ADMIN_PASSWORD:-}
+      # V4 采集部署开关；off 为默认，改为 allow 后仍需超管在网页开启来源与强度
+      OPS_CRAWL_MODE: ${OPS_CRAWL_MODE:-off}
+      # D-129 / D-160：桌面 AI 与平台采集闸门，默认全关，验收前不要打开
+      OPS_DESKTOP_AI_ENABLED: ${OPS_DESKTOP_AI_ENABLED:-}
+      OPS_DESKTOP_PLATFORM_ENABLED: ${OPS_DESKTOP_PLATFORM_ENABLED:-}
+      OPS_DESKTOP_PLATFORM_AUTO_ADOPT: ${OPS_DESKTOP_PLATFORM_AUTO_ADOPT:-0}
+      # 冻结的智能体特性：默认空 = 不额外放开任何键，以超管 DB 为准
+      OPS_AGENT_WORKBENCH_FEATURES: ${OPS_AGENT_WORKBENCH_FEATURES:-}
+      # 可信反代网段。宿主机反代 -> 127.0.0.1:${OPS_HOST_PORT} -> 容器 8080，
+      # 容器内看到的直连对端是 Docker 网关（默认落在 172.16.0.0/12）。
+      OPS_TRUSTED_PROXIES: ${OPS_TRUSTED_PROXIES:-172.16.0.0/12}
+    ports:
+      # 只绑本机回环，交给宿主机反代；容器内仍监听 8080
+      - "127.0.0.1:${OPS_HOST_PORT:-44537}:8080"
+    volumes:
+      - app_data:/data
+      - parser_a_socket:/run/ops-parser-a
+    depends_on:
+      postgres:
+        condition: service_healthy
+      parser_a:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      start_period: 30s
+      retries: 5
+
+  parser_a:
+    image: ${OPS_IMAGE:-ops-app:local}
+    command: ["/app/ops", "parse-service"]
+    restart: unless-stopped
+    network_mode: none
+    read_only: true
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    pids_limit: 32
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=4m
+    environment:
+      GOMEMLIMIT: "192MiB"
+      OPS_DOCUMENT_PARSER_SOCKET: /run/ops-parser/parser.sock
+    volumes:
+      - parser_a_socket:/run/ops-parser
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--unix-socket", "/run/ops-parser/parser.sock", "http://localhost/healthz"]
+      interval: 5s
+      timeout: 2s
+      start_period: 5s
+      retries: 10
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.75
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      POSTGRES_USER: ops
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ops
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ops -d ops"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pg_data:
+  app_data:
+  parser_a_socket:
