@@ -18,6 +18,8 @@ const {
 } = require('./resolve');
 const { scopeDetail } = require('./scope');
 
+const MAX_WINDOW_TITLE_LEN = 120;
+
 /** 枚举可见顶层窗口（PowerShell：有主窗口的进程）。返回脱敏摘要（pid/标题/进程名）。 */
 function listWindows() {
   return new Promise((resolve) => {
@@ -44,7 +46,7 @@ function listWindows() {
           .map((w) => ({
             pid: Number(w.Id),
             process: String(w.ProcessName || '').slice(0, 64),
-            title: String(w.MainWindowTitle || '').slice(0, 120),
+            title: String(w.MainWindowTitle || '').slice(0, MAX_WINDOW_TITLE_LEN),
             forbidden: isHardForbidden(w.ProcessName) || isHardForbidden(w.MainWindowTitle),
           }));
         resolve({ ok: true, windows });
@@ -71,10 +73,12 @@ $hwnd = $proc.MainWindowHandle
 $start = ''
 try { $start = $proc.StartTime.ToUniversalTime().ToString('o') } catch {}
 ${PS_HASH_FN}
-$title = [string]$proc.MainWindowTitle
-$doc = $title.TrimStart()
+$rawTitle = [string]$proc.MainWindowTitle
+$doc = $rawTitle.TrimStart()
 # 文档身份摘要：去掉未保存星号/圆点等前缀，避免 IME 输入把标题变脏就误判换文档。
 while ($doc.Length -gt 0 -and (($doc[0] -eq [char]42) -or ($doc[0] -eq [char]8226) -or ($doc[0] -eq [char]9679) -or ($doc[0] -eq [char]32))) { $doc = $doc.Substring(1) }
+$documentHash = (Hex32 $doc).Substring(0,32)
+$title = if ($rawTitle.Length -gt ${MAX_WINDOW_TITLE_LEN}) { $rawTitle.Substring(0, ${MAX_WINDOW_TITLE_LEN}) } else { $rawTitle }
 $bx = 0.0; $by = 0.0; $bw = 0.0; $bh = 0.0
 $hx = [long]$hwnd
 if ($hx -ne 0) {
@@ -87,7 +91,7 @@ if ($hx -ne 0) {
     if (-not [double]::IsNaN($r.Height) -and -not [double]::IsInfinity($r.Height)) { $bh = [double]$r.Height }
   } catch {}
 }
-@{ ok=$true; pid=${pid}; hwnd=$hx; process_start_time=$start; title_hash=(Hex32 $title).Substring(0,32); target_handle=(Hex32 (('' + ${pid}) + [char]0 + $title)).Substring(0,32); document_hash=(Hex32 $doc).Substring(0,32); bounds=@{ x=$bx; y=$by; w=$bw; h=$bh } } | ConvertTo-Json -Compress -Depth 4
+@{ ok=$true; pid=${pid}; hwnd=$hx; process_start_time=$start; title_hash=(Hex32 $title).Substring(0,32); target_handle=(Hex32 (('' + ${pid}) + [char]0 + $title)).Substring(0,32); document_hash=$documentHash; bounds=@{ x=$bx; y=$by; w=$bw; h=$bh } } | ConvertTo-Json -Compress -Depth 4
 `;
   return runPowerShell(script).then((r) => {
     if (!r.ok) return r;
@@ -203,12 +207,13 @@ $startTime = ''
 try { $startTime = $proc.StartTime.ToUniversalTime().ToString('o') } catch {}
 ${PS_HASH_FN}
 # P2-5 步骤 1/2：标题只在 PS 内参与哈希，不落进 JSON；handle 与 ipc/computer.ts:31 同一公式。
-$title = [string]$proc.MainWindowTitle
-$titleHash = (Hex32 $title).Substring(0,32)
-$targetHandle = (Hex32 (('' + ${pid}) + [char]0 + $title)).Substring(0,32)
-$doc = $title.TrimStart()
+$rawTitle = [string]$proc.MainWindowTitle
+$doc = $rawTitle.TrimStart()
 while ($doc.Length -gt 0 -and (($doc[0] -eq [char]42) -or ($doc[0] -eq [char]8226) -or ($doc[0] -eq [char]9679) -or ($doc[0] -eq [char]32))) { $doc = $doc.Substring(1) }
 $documentHash = (Hex32 $doc).Substring(0,32)
+$title = if ($rawTitle.Length -gt ${MAX_WINDOW_TITLE_LEN}) { $rawTitle.Substring(0, ${MAX_WINDOW_TITLE_LEN}) } else { $rawTitle }
+$titleHash = (Hex32 $title).Substring(0,32)
+$targetHandle = (Hex32 (('' + ${pid}) + [char]0 + $title)).Substring(0,32)
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
 $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
 # DEV-CU P1-1 步骤 4：四字段强制字符串并裁剪，上限对齐 business-ui-preload.ts:192-195（200/60/500/4000）。

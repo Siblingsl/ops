@@ -255,7 +255,12 @@ export abstract class ChannelMixin {
       this.appliedRouteRevision = ticket.route_revision;
       this.requestRouting = {
         mode: workspace.appliedMode === 'desktop' ? 'desktop' : 'server',
-        requestContext: this.requestRouting.requestContext
+        requestContext: {
+          deviceId: device.id,
+          connectionId: ticket.connection_id,
+          generation: ticket.generation,
+          routeRevision: ticket.route_revision
+        }
       };
       this.channelMessage = '桌面 AI 模式已连接（模型调用经本机工作进程）。';
       if (workspace.appliedMode !== 'desktop') {

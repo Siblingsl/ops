@@ -400,3 +400,27 @@ test('P2-5 真实动作：几何变化与前台切走都会被拒（需 OPS_UIA_
       try { fs.unlinkSync(scratch); } catch { /* 可能仍被占用 */ }
     }
   });
+
+test('P2-5: 窗口标题统一按 MAX_WINDOW_TITLE_LEN 截断，文档摘要仍取完整标题', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/computer-worker/native.js'), 'utf8');
+  const count = (needle) => source.split(needle).length - 1;
+
+  assert.equal(count('const MAX_WINDOW_TITLE_LEN = 120;'), 1, '必须只定义一个 120 字符上限');
+  assert.equal(
+    count("title: String(w.MainWindowTitle || '').slice(0, MAX_WINDOW_TITLE_LEN)"),
+    1,
+    'listWindows 必须按统一常量截断标题',
+  );
+  assert.equal(count('$rawTitle = [string]$proc.MainWindowTitle'), 2,
+    'windowIdentity / readRawTree 都必须先取完整标题');
+  assert.equal(count('$doc = $rawTitle.TrimStart()'), 2,
+    '$doc 必须从完整 $rawTitle 派生，保留超长标题尾部换文档感知');
+  assert.equal(count('$title = if ($rawTitle.Length -gt ${MAX_WINDOW_TITLE_LEN}) '
+    + '{ $rawTitle.Substring(0, ${MAX_WINDOW_TITLE_LEN}) } else { $rawTitle }'), 2,
+  '两处 PowerShell 必须按同一 UTF-16 码元口径截断标题');
+  assert.equal(count('title_hash=(Hex32 $title)'), 1, 'windowIdentity 的 title_hash 必须用截断标题');
+  assert.equal(count('titleHash = (Hex32 $title)'), 1, 'readRawTree 的 title_hash 必须用截断标题');
+  assert.equal(count('[char]0 + $title)'), 2, '两处 target_handle 必须用截断标题');
+  assert.equal(count('[char]0 + $rawTitle)'), 0, 'target_handle 不得改用完整标题');
+  assert.equal(count('$doc = $title.TrimStart()'), 0, '文档摘要不得改用截断标题');
+});
