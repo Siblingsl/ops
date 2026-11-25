@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (path) => readFileSync(join(root, path), 'utf8')
-const agent = read('pages/Agent.tsx')
+const agent = ['pages/Agent.tsx', 'pages/agent/AgentMessageStream.tsx', 'pages/agent/AgentComposer.tsx', 'pages/agent/AgentDialogs.tsx', 'pages/agent/useAttachmentQueue.ts'].map(read).join('\n')
 const header = read('pages/agent/ConversationHeader.tsx')
 const workbench = read('pages/agent/Workbench.tsx')
 const tabs = read('pages/agent/PanelTabs.tsx')
@@ -21,7 +21,8 @@ const css = read('styles/desktop-agent-v2.css')
 const shell = read('layout/Shell.tsx')
 
 test('UI-04：Agent 页面源码不再出现 10/10.5/11px 字号', () => {
-  const files = [agent, read('pages/agent/MessageChrome.tsx'), read('pages/agent/PlansQuestions.tsx'), list, header, workbench, actions]
+  const files = [agent, read('pages/agent/MessageChrome.tsx'), read('pages/agent/PlansQuestions.tsx'), list, header, workbench, actions,
+    read('pages/agent/AgentMessageStream.tsx'), read('pages/agent/AgentComposer.tsx'), read('pages/agent/AgentDialogs.tsx')]
   for (const source of files) {
     assert.equal(/text-\[(10|10\.5|11)px\]/.test(source), false)
   }

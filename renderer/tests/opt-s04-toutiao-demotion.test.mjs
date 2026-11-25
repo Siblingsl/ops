@@ -38,7 +38,7 @@ test('新建账号默认只突出公众号与小红书，头条折叠进更多�
 });
 
 test('账号切换器按 hasToutiaoAccount 决定是否展示头条，已有头条账号保持原全量 tab', async () => {
-  const source = await readSource('layout/Shell.tsx');
+  const source = await readSource('layout/WorkspaceAccountTree.tsx');
   assert.match(source, /const PLATFORMS: Platform\[\] = \['wechat_mp', 'xhs', 'toutiao'\]/);
   assert.match(source, /const PRIMARY_PLATFORMS: Platform\[\] = \['wechat_mp', 'xhs'\]/);
   // 含停用账号判定，保证停用历史号也能找回。

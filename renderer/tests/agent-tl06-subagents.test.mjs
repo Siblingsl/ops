@@ -17,7 +17,7 @@ test('TL-06：添加菜单“并行协作”仅在 subagents 开启时条件渲�
 })
 
 test('TL-06：开启后显示 chip、发送 allow_subagents 并打开任务面板，切换会话重置', () => {
-  const agent = read('pages/Agent.tsx')
+  const agent = ['pages/Agent.tsx', 'pages/agent/AgentComposer.tsx'].map(read).join('\n')
   assert.match(agent, /agent-subagents-chip/)
   assert.match(agent, /allow_subagents: edit \? false : subagentsArmed/)
   assert.match(agent, /allow_subagents: true/)

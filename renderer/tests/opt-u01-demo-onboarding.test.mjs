@@ -125,7 +125,7 @@ test('OPT-U01 账号页：保留既有空态文案与“打开账号入口”，
 })
 
 test('OPT-U01 账号切换：桌面与窄屏两处列表都对 is_demo 标注「示例」，导航数组不动', () => {
-  const shell = read('layout/Shell.tsx')
+  const shell = read('layout/WorkspaceAccountTree.tsx')
   const matches = shell.match(/a\.is_demo && <span className="shrink-0 rounded bg-gamboge-100 px-1\.5 py-0\.5 text-\[10\.5px\] font-medium text-gamboge-700">示例<\/span>/g) ?? []
   assert.equal(matches.length, 2, '桌面与非桌面账号切换列表各一处示例徽标')
 })

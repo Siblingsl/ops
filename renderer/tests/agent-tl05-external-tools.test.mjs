@@ -30,7 +30,7 @@ test('TL-05：plugin_mcp 开启时添加菜单才出现插件入口，关闭时�
   assert.match(addMenu, /\.\.\.\(pluginsEnabled \? \[\{ id: 'plugins' as const, label: '插件与工具', hint: '外部 MCP 连接与工具'/)
   assert.doesNotMatch(addMenu, /未开放/)
   assert.doesNotMatch(addMenu, /disabled: !pluginsEnabled/)
-  const agent = read('pages/Agent.tsx')
+  const agent = ['pages/Agent.tsx', 'pages/agent/AgentComposer.tsx'].map(read).join('\n')
   assert.match(agent, /pluginsEnabled=\{bootstrapData\.features\.plugin_mcp === true\}/)
   assert.match(agent, /action === 'plugins'\) navigate\('\/settings\/plugins'\)/)
 })

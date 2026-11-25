@@ -22,7 +22,7 @@ test('OT-04 埋点白名单只含约定事件与安全目标类型', () => {
 
 test('OT-04 埋点接线不携带消息或提示词正文', () => {
   const root = fileURLToPath(new URL('..', import.meta.url))
-  const agent = readFileSync(root + 'pages/Agent.tsx', 'utf8')
+  const agent = ['pages/Agent.tsx', 'pages/agent/AgentMessageStream.tsx'].map((path) => readFileSync(root + path, 'utf8')).join('\n')
   const workbench = readFileSync(root + 'pages/agent/Workbench.tsx', 'utf8')
   const cards = readFileSync(root + 'pages/agent/ActionCards.tsx', 'utf8')
   assert.match(agent, /trackAgentEvent\('agent_panel_open'/)
