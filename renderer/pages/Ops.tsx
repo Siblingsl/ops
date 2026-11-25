@@ -4,7 +4,7 @@ import { References } from './ops/References'
 import { useQuery } from '@tanstack/react-query'
 import { Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
 import {
@@ -977,10 +977,30 @@ function PlanPanel({ account }: { account: Account }) {
 export default function Ops() {
   const desktopPresentation = document.documentElement.dataset.presentation === 'ops-creative-desktop'
   const account = useCurrentAccount()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [desktopTab, setDesktopTab] = useState('strategy')
   const [desktopStrategyView, setDesktopStrategyView] = useState<'current' | 'history'>('current')
+  // 手动切 Tab 时清掉 ?tab/?paste，避免旧降级参数残留导致再次直达失效。
+  const selectDesktopTab = (tab: string) => {
+    setDesktopTab(tab)
+    if (searchParams.has('tab') || searchParams.has('paste')) setSearchParams({}, { replace: true })
+  }
   const strategy = useQuery({ queryKey: ['strategy', account?.id], queryFn: () => get<StrategyResult>(`/accounts/${account!.id}/strategy`), enabled: !!account })
   const plan = useQuery({ queryKey: ['plan', account?.id], queryFn: () => get<AccountPlan>(`/accounts/${account!.id}/plan`), enabled: !!account })
+  // OPT-A04：支持从热点降级弹窗带 ?tab=...&paste=1 直达对标参考粘贴框。
+  const tabParam = searchParams.get('tab')
+  useEffect(() => {
+    const tabs = ['strategy', 'plan', 'hot', 'references', 'daily', 'stats']
+    if (!tabParam || !tabs.includes(tabParam)) return
+    if (desktopPresentation) {
+      setDesktopTab(tabParam)
+      return
+    }
+    if (tabParam === 'references') {
+      const frame = window.requestAnimationFrame(() => document.getElementById('references')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+      return () => window.cancelAnimationFrame(frame)
+    }
+  }, [tabParam, desktopPresentation])
   if (!account) return <Empty title="请选择账号" />
   const cadence = strategy.data?.active?.cadence
   const nextPlanDate = plan.data?.slots.filter((slot) => slot.date >= plan.data!.today).sort((a, b) => a.date.localeCompare(b.date))[0]?.date
@@ -993,14 +1013,14 @@ export default function Ops() {
   return (
     <div className={`animate-fade-in ${desktopPresentation ? 'desktop-ops-page' : 'space-y-6'}`}>
       <PageHeader title="账号运营" desc="让定位、内容节奏与每天的创作连接起来。" action={desktopPresentation && <>
-        <Button variant="secondary" onClick={() => { setDesktopTab('strategy'); setDesktopStrategyView('current') }}>起号问卷</Button>
-        <Button variant="secondary" onClick={() => { setDesktopTab('strategy'); setDesktopStrategyView('history') }}>版本历史</Button>
+        <Button variant="secondary" onClick={() => { selectDesktopTab('strategy'); setDesktopStrategyView('current') }}>起号问卷</Button>
+        <Button variant="secondary" onClick={() => { selectDesktopTab('strategy'); setDesktopStrategyView('history') }}>版本历史</Button>
       </>} />
       <PublishTaskBoard account={account} />
       {desktopPresentation ? <>
         <div className="desktop-ops-tabs" role="tablist" aria-label="账号运营功能">
           {desktopTabs.map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={desktopTab === value}
-            className={desktopTab === value ? 'active' : ''} onClick={() => setDesktopTab(value)}>{label}</button>)}
+            className={desktopTab === value ? 'active' : ''} onClick={() => selectDesktopTab(value)}>{label}</button>)}
         </div>
         <div className="desktop-ops-layout">
           <section className="desktop-ops-main" data-testid="desktop-ops-main" role="tabpanel">

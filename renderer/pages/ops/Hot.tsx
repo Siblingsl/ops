@@ -1,16 +1,32 @@
 import { Trends } from './Trends'
 import { useQuery } from '@tanstack/react-query'
 import { Activity } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { HotFallbackDialog } from '@/components/hot-fallback-dialog'
 import { Badge, Button, Card, CardHeader, Empty, Field, Input, Notice, Spinner, Textarea } from '@/components/ui'
 import { errorMessage, get, post } from '@/lib/api'
 import { useCanWrite, useInvalidate } from '@/lib/session'
-import type { Account, AccountHot, HotMatch } from '@/lib/types'
+import type { Account, AccountHot, HotMatch, HotSourceIssue } from '@/lib/types'
 
 const riskLabel: Record<string, string> = { disaster: '灾难事故', tragedy: '伤亡悲剧', politics: '时政敏感', unverified: '尚未证实', commercial: '商业推广' }
 const risky = (item: HotMatch) => item.risk.some((r) => ['disaster', 'tragedy', 'politics'].includes(r))
+
+/** 优先使用后端 source_issues；旧数据只带 paused_sources 时组合同等结构的只读提示。 */
+function issuesOf(data?: AccountHot): HotSourceIssue[] {
+  if (!data) return []
+  if (data.source_issues?.length) return data.source_issues
+  return (data.paused_sources ?? []).map((name, i) => ({
+    key: `paused:${i}:${name}`,
+    name,
+    kind: '',
+    code: 'unreachable',
+    reason: '来源已暂停，暂时无法采集',
+    error: '',
+    paused_until: null,
+  }))
+}
 
 export default function HotPanel({ account, compact=false }: { account: Account; compact?: boolean }) {
   const canWrite = useCanWrite()
@@ -21,6 +37,18 @@ export default function HotPanel({ account, compact=false }: { account: Account;
   const [editing, setEditing] = useState<HotMatch | null>(null)
   const [title, setTitle] = useState('')
   const [angle, setAngle] = useState('')
+  const issues = issuesOf(query.data)
+  const issueSig = issues.map((item) => `${item.key}|${item.code}|${item.error}`).join(';')
+  const autoShown = useRef('')
+  const [fallbackOpen, setFallbackOpen] = useState(false)
+  const [fallbackIssues, setFallbackIssues] = useState<HotSourceIssue[]>([])
+  // 同一批异常在组件挂载期只自动弹一次，避免轮询反复骚扰；嵌入概览卡不弹全屏。
+  useEffect(() => {
+    if (compact || !issueSig || autoShown.current === issueSig) return
+    autoShown.current = issueSig
+    setFallbackIssues(issues)
+    setFallbackOpen(true)
+  }, [issueSig, compact])
   const run = async (path: string, body?: unknown) => {
     setBusy(true)
     try {
@@ -30,14 +58,29 @@ export default function HotPanel({ account, compact=false }: { account: Account;
       else await inv(['account-hot', account.id], ['hot-trends', account.id], ['references', account.id], ['plan', account.id], ['daily', account.id], ['next-actions', account.id], ['topics', account.id], ['dashboard', account.id])
       toast.success('已更新')
     }
-    catch (e) { toast.error(errorMessage(e)) } finally { setBusy(false) }
+    catch (e) {
+      const message = errorMessage(e)
+      toast.error(message)
+      if (path.endsWith('/hot/refresh')) {
+        setFallbackIssues(issues.length ? issues : [{ key: 'refresh', name: '今日热点', kind: 'search', code: 'unreachable', reason: '本次匹配未能取得可用热点', error: message, paused_until: null }])
+        setFallbackOpen(true)
+      }
+    } finally { setBusy(false) }
   }
   const paste = canWrite ? <Link to={`/a/${account.id}/topics?hot=1`}><Button>去选题池粘贴资讯</Button></Link> : undefined
   return <Card><CardHeader title="今日热点" desc="按账号方案筛选公开热点；逐条选择，事件细节请查看原文核实。" action={canWrite && query.data?.enabled ? <Button loading={busy} disabled={!!query.data.preparing} onClick={() => run(`/accounts/${account.id}/hot/refresh`)}>匹配今日热点</Button> : undefined} />
     {query.isError ? <Notice tone="red">{errorMessage(query.error)}<Button size="sm" onClick={() => query.refetch()}>重试</Button></Notice> : query.isPending ? <div className="p-5"><Spinner /></div> : !query.data.enabled ? <Empty icon={<Activity className="size-5" />} title="热点采集未开启" desc="可配置工作区来源，或手动粘贴资讯。" action={<div className="flex flex-wrap gap-2"><Link to="/settings/hot-sources"><Button size="sm">去配置热点来源</Button></Link>{paste}</div>} /> : <div className="space-y-4 p-5">
       {!compact&&<div className="flex gap-2"><Button size="sm" onClick={()=>setTrends(false)}>今日</Button><Button size="sm" onClick={()=>setTrends(true)}>近 7 天趋势与赛道雷达</Button></div>}{trends?<Trends accountId={account.id} platform={account.platform} contentFormat={account.content_format} />:<>
  <p className="text-xs text-mist-500">最近匹配：{query.data.updated_at ? new Date(query.data.updated_at).toLocaleString('zh-CN') : '尚未匹配'}</p>
-      {query.data.paused_sources.length > 0 && <Notice tone="gamboge">部分来源暂停：{query.data.paused_sources.join('、')}。其余来源仍可使用。</Notice>}
+      {issues.length > 0 && <Notice tone="gamboge">
+        <div className="space-y-2">
+          <p>部分来源异常：{issues.map((item) => `${item.name}（${item.reason}）`).join('；')}。其余来源仍可使用。</p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="secondary" onClick={() => { setFallbackIssues(issues); setFallbackOpen(true) }}>查看详情</Button>
+            <Link to={`/a/${account.id}/ops?tab=references&paste=1`}><Button size="sm" variant="human">手动粘贴参考</Button></Link>
+          </div>
+        </div>
+      </Notice>}
       {query.data.preparing && <Notice>正在准备今日热点…</Notice>}
       {editing && <div className="space-y-3 rounded-lg border border-gamboge-200 p-4"><Field label="选题标题"><Input value={title} onChange={(e) => setTitle(e.target.value)} /></Field><Field label="切入角度"><Textarea rows={3} value={angle} onChange={(e) => setAngle(e.target.value)} /></Field><Button variant="human" loading={busy} disabled={!title.trim()} onClick={() => run(`/hot-matches/${editing.id}/convert`, { title, angle })}>确认转为选题</Button><Button variant="ghost" disabled={busy} onClick={() => setEditing(null)}>取消</Button></div>}
       {!query.data.items.length ? <Empty title="暂无相关热点" desc="先启用工作区来源并完成采集，再匹配今日热点。" action={<div className="flex flex-wrap gap-2"><Link to="/settings/hot-sources"><Button size="sm">去配置热点来源</Button></Link>{paste}</div>} /> : <div className="grid gap-3 lg:grid-cols-2">{query.data.items.slice(0,compact?3:15).map((m) => <div key={m.id} className={`space-y-2 rounded-lg border p-4 ${risky(m) ? 'border-mist-200 bg-mist-50 text-mist-500' : 'border-mist-200'}`}>
@@ -50,5 +93,6 @@ export default function HotPanel({ account, compact=false }: { account: Account;
       </div>)}</div>}
       {compact?<Link className="text-sm text-ink-600" to={`/a/${account.id}/ops`}>查看今日热点</Link>:<Link className="text-sm text-ink-600" to="/settings/hot-sources">设置工作区热点来源</Link>}
     </>} </div>}
+    <HotFallbackDialog open={fallbackOpen} onClose={() => setFallbackOpen(false)} issues={fallbackIssues} accountId={account.id} />
   </Card>
 }

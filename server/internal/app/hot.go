@@ -43,6 +43,35 @@ type HotMatch struct {
 	TopicID   *uuid.UUID `json:"topic_id"`
 }
 
+// HotSourceIssue 是给前端降级弹窗使用的只读诊断，不包含任何密钥信息。
+type HotSourceIssue struct {
+	Key         string     `json:"key"`
+	Name        string     `json:"name"`
+	Kind        string     `json:"kind"`
+	Code        string     `json:"code"`
+	Reason      string     `json:"reason"`
+	Error       string     `json:"error"`
+	PausedUntil *time.Time `json:"paused_until"`
+}
+
+// classifyHotSourceIssue 把来源的暂停态 / 错误文本归为前端可理解的稳定分类。
+// 只有暂停或确实存在错误时才产出，正常来源不制造噪音。
+func classifyHotSourceIssue(src CrawlSource, now time.Time) (HotSourceIssue, bool) {
+	errText := strings.TrimSpace(src.Error)
+	paused := src.PausedUntil != nil && src.PausedUntil.After(now)
+	if !paused && errText == "" {
+		return HotSourceIssue{}, false
+	}
+	code, reason := "unreachable", "采集源暂时不可达或返回结构异常"
+	lower := strings.ToLower(errText)
+	if containsAny(lower, "429", "402", "额度", "限流") {
+		code, reason = "rate_or_quota", "搜索额度已耗尽或触发限流，来源已临时暂停"
+	} else if containsAny(lower, "403", "401", "robots", "访问限制", "认证", "验证码") {
+		code, reason = "blocked", "被目标站拒绝访问或受 robots / 认证限制"
+	}
+	return HotSourceIssue{Key: src.Key, Name: src.Name, Kind: src.Kind, Code: code, Reason: reason, Error: errText, PausedUntil: src.PausedUntil}, true
+}
+
 const hotCols = `h.id,h.source_key,src.name,h.title,h.url,h.rank,h.heat,h.category,h.summary,h.cluster_id,h.first_seen_at,h.last_seen_at`
 
 func scanHot(row interface{ Scan(...any) error }) (HotItem, error) {
@@ -424,15 +453,22 @@ func (s *Server) getAccountHot(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	paused := []string{}
+	issues := []HotSourceIssue{}
 	selected := s.workspaceHotSources(ctx)
 	for _, src := range sources {
-		if hotSourceSelected(selected, src.Key) && src.PausedUntil != nil && src.PausedUntil.After(s.now()) {
+		if !hotSourceSelected(selected, src.Key) {
+			continue
+		}
+		if src.PausedUntil != nil && src.PausedUntil.After(s.now()) {
 			paused = append(paused, src.Name)
+		}
+		if issue, ok := classifyHotSourceIssue(src, s.now()); ok {
+			issues = append(issues, issue)
 		}
 	}
 	var updated *time.Time
 	_ = s.db.QueryRow(ctx, `SELECT refreshed_at FROM account_hot_refresh WHERE account_id=$1`, a.ID).Scan(&updated)
-	return ok(w, map[string]any{"date": date, "enabled": enabled, "items": items, "paused_sources": paused, "updated_at": updated, "preparing": preparing, "job_id": job})
+	return ok(w, map[string]any{"date": date, "enabled": enabled, "items": items, "paused_sources": paused, "source_issues": issues, "updated_at": updated, "preparing": preparing, "job_id": job})
 }
 func hotSourceSelected(list []string, s string) bool {
 	for _, x := range list {

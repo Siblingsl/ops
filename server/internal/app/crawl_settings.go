@@ -24,7 +24,28 @@ func (s *Server) adminGetCrawl(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	return ok(w, map[string]any{"settings": s.loadCrawl(r.Context()), "sources": sources, "platforms": platforms})
+	visible := make([]CrawlSource, 0, len(sources))
+	for _, src := range sources {
+		visible = append(visible, sanitizeCrawlSource(src))
+	}
+	return ok(w, map[string]any{"settings": s.loadCrawl(r.Context()), "sources": visible, "platforms": platforms})
+}
+
+// sanitizeCrawlSource 返回脱敏副本：绝不把 API Key 明文或密文交给前端或写入日志。
+func sanitizeCrawlSource(x CrawlSource) CrawlSource {
+	hadKey := strings.TrimSpace(x.Config["api_key_enc"]) != "" || strings.TrimSpace(x.Config["api_key"]) != ""
+	cfg := make(map[string]string, len(x.Config))
+	for k, v := range x.Config {
+		if k == "api_key_enc" || k == "api_key" {
+			continue
+		}
+		cfg[k] = v
+	}
+	if hadKey {
+		cfg["has_api_key"] = "true"
+	}
+	x.Config = cfg
+	return x
 }
 func (s *Server) crawlSources(ctx context.Context, ws *uuid.UUID, all bool) ([]CrawlSource, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+crawlSourceCols+` FROM crawl_source WHERE $1 OR workspace_id IS NULL OR workspace_id=$2 ORDER BY workspace_id NULLS FIRST,key`, all, ws)
@@ -137,7 +158,7 @@ func (s *Server) adminTestCrawlSource(w http.ResponseWriter, r *http.Request) er
 		items = items[:10]
 	}
 	source, _ = scanCrawlSource(s.db.QueryRow(ctx, `SELECT `+crawlSourceCols+` FROM crawl_source WHERE key=$1`, source.Key))
-	return ok(w, map[string]any{"items": items, "robots_allow": source.RobotsAllow, "source": source})
+	return ok(w, map[string]any{"items": items, "robots_allow": source.RobotsAllow, "source": sanitizeCrawlSource(source)})
 }
 func (s *Server) adminCrawlRuns(w http.ResponseWriter, r *http.Request) error {
 	if err := s.requireSystemAdmin(r.Context()); err != nil {
@@ -185,10 +206,10 @@ func (s *Server) getHotSources(w http.ResponseWriter, r *http.Request) error {
 	visible := []CrawlSource{}
 	for _, src := range sources {
 		if src.Enabled || src.WorkspaceID != nil {
-			visible = append(visible, src)
+			visible = append(visible, sanitizeCrawlSource(src))
 		}
 	}
-	return ok(w, map[string]any{"sources": visible, "selected": s.workspaceHotSources(r.Context()), "enabled": s.loadCrawl(r.Context()).Limits.Enabled})
+	return ok(w, map[string]any{"sources": visible, "selected": s.workspaceHotSources(r.Context()), "enabled": s.loadCrawl(r.Context()).Limits.Enabled, "presets": crawl.PresetRSSSources()})
 }
 func (s *Server) putHotSources(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()

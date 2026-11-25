@@ -407,10 +407,28 @@ export interface CrawlSettings {
 }
 export interface CrawlSource {
   key: string; kind: string; name: string; enabled: boolean; interval_min: number; max_items: number
-  config: { url?: string }; workspace_id: string | null; fail_count: number
+  config: {
+    url?: string
+    engine?: 'native' | 'tavily' | 'bocha' | 'searxng' | string
+    query?: string
+    base_url?: string
+    model?: string
+    provider_id?: string
+    // 后端脱敏后仅返回布尔标记，绝不返回明文或密文密钥。
+    has_api_key?: string
+  }
+  workspace_id: string | null; fail_count: number
   paused_until: string | null; last_ok_at: string | null; robots_allow: boolean | null; error: string
 }
-export interface HotSourcesResult { sources: CrawlSource[]; selected: string[]; enabled: boolean }
+export interface HotSourcePreset {
+  key: string; kind: string; name: string; url: string; category: string; description: string
+}
+export interface HotSourceIssue {
+  key: string; name: string; kind: string
+  code: 'rate_or_quota' | 'blocked' | 'unreachable' | string
+  reason: string; error: string; paused_until: string | null
+}
+export interface HotSourcesResult { sources: CrawlSource[]; selected: string[]; enabled: boolean; presets?: HotSourcePreset[] }
 export interface HotItem {
  sources?: {name:string;rank:number;url:string}[]
   id: string; source_key: string; source_name: string; title: string; url: string; rank: number
@@ -422,6 +440,7 @@ export interface HotMatch {
 }
 export interface AccountHot {
   date: string; enabled: boolean; items: HotMatch[]; paused_sources: string[]; updated_at: string | null
+  source_issues?: HotSourceIssue[]
   job_id?: string | null; preparing?: boolean
 }
 export interface CrawlRun { id: string; source_key: string; started_at: string; requests: number; http_status: number; items: number; error: string }

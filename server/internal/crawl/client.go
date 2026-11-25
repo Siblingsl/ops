@@ -94,27 +94,35 @@ func New(o Options) *Client {
 	return c
 }
 
-func (c *Client) dial(ctx context.Context, network, address string) (net.Conn, error) {
-	if address == c.options.LocalHost && c.options.LocalHost != "" {
-		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, address)
-	}
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return nil, err
-	}
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	if len(ips) == 0 {
-		return nil, errors.New("无法解析来源地址")
-	}
-	for _, ip := range ips {
-		if !publicIP(ip.IP) {
-			return nil, errors.New("不允许读取内网或保留地址")
+// PublicDialContext 在拨号前解析域名并拒绝内网 / 保留地址，防止 DNS rebinding 型 SSRF。
+// localHost 仅用于本地 mock（由调用方在 Dev 下传入），其余地址一律要求公网 IP。
+func PublicDialContext(localHost string) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		if address == localHost && localHost != "" {
+			return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, address)
 		}
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		if len(ips) == 0 {
+			return nil, errors.New("无法解析来源地址")
+		}
+		for _, ip := range ips {
+			if !publicIP(ip.IP) {
+				return nil, errors.New("不允许读取内网或保留地址")
+			}
+		}
+		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
 	}
-	return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+}
+
+func (c *Client) dial(ctx context.Context, network, address string) (net.Conn, error) {
+	return PublicDialContext(c.options.LocalHost)(ctx, network, address)
 }
 
 func publicIP(ip net.IP) bool {

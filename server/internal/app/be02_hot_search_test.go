@@ -17,7 +17,7 @@ func TestBE02HotSearchTelemetryFailureIsObservable(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	now := time.Now()
-	env.srv.recordHotSearchTelemetry(ctx, CrawlSource{Key: "be02-hot-search"}, "mock", []byte(`{"native_search":true}`),
+	env.srv.recordHotSearchTelemetry(ctx, CrawlSource{Key: "be02-hot-search"}, "mock", "mock-model", []byte(`{"native_search":true}`),
 		ai.Usage{}, now, now, crawl.Outcome{}, 0, "failed", "canceled")
 	foundCall, foundRun := false, false
 	for _, record := range sink.records(t) {

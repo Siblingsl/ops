@@ -4,12 +4,36 @@ import { Navigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, Empty, Field, Input, Notice, PageHeader, roleReadOnlyHint, Select, Spinner, Textarea } from '@/components/ui'
 import { BackToSettings } from '@/components/back-to-settings'
+import { HotFallbackDialog } from '@/components/hot-fallback-dialog'
 import { errorMessage, get, post, put } from '@/lib/api'
-import { useInvalidate, useMe } from '@/lib/session'
-import type { CrawlHealth, CrawlRun, CrawlSettings, CrawlSource, HotSourcesResult, Provider } from '@/lib/types'
-import { useEmbeddedSettings, useSettingsDraft } from '@/lib/desktop-settings'
+import { useCurrentAccount, useInvalidate, useMe } from '@/lib/session'
+import type { CrawlHealth, CrawlRun, CrawlSettings, CrawlSource, HotSourceIssue, HotSourcesResult, Provider } from '@/lib/types'
+import { useSettingsDraft } from '@/lib/desktop-settings'
 
 type Platform = { platform: string; enabled: boolean; level: string; interval_min: number; daily_max: number; repeat_hours: number; jitter_min: number; today_requests: number; paused_until: string | null; strikes_7d: number }
+
+/** 只有仍在生效的暂停时间才算异常；过期时间不再提示，也不阻塞采集判断。 */
+export function isActivePause(until?: string | null): boolean {
+  return !!until && new Date(until).getTime() > Date.now()
+}
+
+/** 与后端 classifyHotSourceIssue 同口径的前端兜底分类，仅用于单个来源卡片的即时提示。 */
+function sourceIssue(source: CrawlSource, errorText = source.error ?? ''): HotSourceIssue {
+  const text = errorText
+  const code = /429|402|额度|限流/.test(text)
+    ? 'rate_or_quota'
+    : /403|401|robots|访问限制|认证|验证码/i.test(text)
+      ? 'blocked'
+      : 'unreachable'
+  const reason =
+    code === 'rate_or_quota'
+      ? '搜索额度已耗尽或触发限流，来源已临时暂停'
+      : code === 'blocked'
+        ? '被目标站拒绝访问或受 robots / 认证限制'
+        : '采集源暂时不可达或返回结构异常'
+  return { key: source.key, name: source.name, kind: source.kind, code, reason, error: text, paused_until: isActivePause(source.paused_until) ? source.paused_until : null }
+}
+
 function PlatformRow({ value, refresh, dev }: { value: Platform; refresh: () => void; dev: boolean }) {
  const [form, setForm] = useState(value)
  const [busy,setBusy]=useState(false)
@@ -22,6 +46,8 @@ function SourceRow({ source, onChange, disabled }: { source: CrawlSource; onChan
   const [maxItems, setMaxItems] = useState(source.max_items)
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState<string>('')
+  const [fallbackIssue, setFallbackIssue] = useState<HotSourceIssue | null>(null)
+  const account = useCurrentAccount()
   const sensitive = source.kind === 'xhs_page' || source.kind === 'wechat_page'
   const save = async (enabled: boolean) => {
     setBusy(true)
@@ -31,7 +57,12 @@ function SourceRow({ source, onChange, disabled }: { source: CrawlSource; onChan
   const test = async () => {
     setBusy(true)
     try { const data = await post<{ items: { title: string; url: string }[] }>(`/admin/crawl/sources/${encodeURIComponent(source.key)}/test`); setPreview(data.items.map((x) => x.title).join('\n')); onChange() }
-    catch (e) { toast.error(errorMessage(e)); onChange() } finally { setBusy(false) }
+    catch (e) {
+      const message = errorMessage(e)
+      toast.error(message)
+      setFallbackIssue({ ...sourceIssue(source, message), error: message })
+      onChange()
+    } finally { setBusy(false) }
   }
   return <div className="space-y-3 border-b border-mist-100 p-5">
     <div className="flex flex-wrap items-center gap-2"><strong>{source.name}</strong><Badge tone={source.enabled ? 'green' : 'gray'}>{source.enabled ? '开启' : '关闭'}</Badge>{source.robots_allow === false && <Badge tone="red">robots 不允许</Badge>}</div>
@@ -45,6 +76,7 @@ function SourceRow({ source, onChange, disabled }: { source: CrawlSource; onChan
     <p className="text-xs text-mist-500">最近成功：{source.last_ok_at ? new Date(source.last_ok_at).toLocaleString('zh-CN') : '尚无'}{source.paused_until && ` · 暂停至 ${new Date(source.paused_until).toLocaleString('zh-CN')}`}</p>
     {source.error && <Notice tone="red">{source.error}</Notice>}
     {preview && <pre className="whitespace-pre-wrap text-xs text-mist-600">{preview}</pre>}
+    <HotFallbackDialog open={!!fallbackIssue} onClose={() => setFallbackIssue(null)} issues={fallbackIssue ? [fallbackIssue] : []} accountId={account?.id} />
   </div>
 }
 
@@ -92,23 +124,97 @@ export default function Crawl() {
   </div>
 }
 
-function SearchSourceForm({refresh,disabled}:{refresh:()=>void;disabled:boolean}) {
- const providers=useQuery({queryKey:['providers'],queryFn:()=>get<Provider[]>('/model-providers')})
- const [provider,setProvider]=useState('');const [model,setModel]=useState('');const [query,setQuery]=useState('');const [busy,setBusy]=useState(false)
- const embedded=useEmbeddedSettings()
- useSettingsDraft(!disabled && !!(provider || model || query.trim()),busy)
- const current=providers.data?.find(p=>p.id===provider)
- return <div className="space-y-3 pt-4 border-t border-mist-100"><h3 className="font-semibold">联网搜索来源（默认关闭）</h3><Notice>复用支持百炼 DashScope / 方舟 Responses 原生联网搜索的供应商；只有返回搜索来源标题与链接时才入库，不使用模型回答代替新闻。配置后再勾选来源开启；受全站采集预算和工作区 AI 用量上限约束。</Notice><Field label="模型供应商"><Select disabled={disabled} disabledHint={roleReadOnlyHint.owner} value={provider} onChange={e=>{setProvider(e.target.value);setModel('')}}><option value="">选择已配置的供应商</option>{providers.data?.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</Select></Field><Field label="模型（如 qwen-plus，或已开通搜索的豆包模型）"><Select disabled={disabled} disabledHint={roleReadOnlyHint.owner} value={model} onChange={e=>setModel(e.target.value)}><option value="">选择模型</option>{current?.models.map(m=><option key={m} value={m}>{m}</option>)}</Select></Field><Field label="搜索关键词"><Input disabled={disabled} disabledHint={roleReadOnlyHint.owner} maxLength={200} value={query} onChange={e=>setQuery(e.target.value)} /></Field><Button loading={busy} disabled={disabled||!provider||!model||!query.trim()} disabledHint={disabled ? roleReadOnlyHint.owner : '请先选择供应商、模型并填写关键词'} onClick={async()=>{setBusy(true);try{await post('/hot-sources/search',{provider_id:provider,model,query});if(embedded){setProvider('');setModel('');setQuery('')}refresh();toast.success('已配置，请勾选联网搜索来源后保存')}catch(e){toast.error(errorMessage(e))}finally{setBusy(false)}}}>保存搜索配置</Button></div>
+function SearchSourceForm({ refresh, disabled, source }: { refresh: () => void; disabled: boolean; source?: CrawlSource }) {
+ const providers = useQuery({ queryKey: ['providers'], queryFn: () => get<Provider[]>('/model-providers') })
+ const initialEngine = source?.config.engine || 'native'
+ const initialProvider = source?.config.provider_id ?? ''
+ const initialModel = source?.config.model ?? ''
+ const initialQuery = source?.config.query ?? ''
+ const initialBaseUrl = initialEngine === 'searxng' ? (source?.config.base_url ?? '') : ''
+ const [engine, setEngine] = useState<string>(() => initialEngine)
+ const [provider, setProvider] = useState(() => initialProvider)
+ const [model, setModel] = useState(() => initialModel)
+ const [query, setQuery] = useState(() => initialQuery)
+ const [baseUrl, setBaseUrl] = useState(() => initialBaseUrl)
+ const [apiKey, setApiKey] = useState('')
+ const [busy, setBusy] = useState(false)
+ // 外部配置变化（首次加载、保存后刷新）时同步回显；密钥输入永远清空，避免旧密文被再次提交。
+ useEffect(() => {
+   if (!source) return
+   const nextEngine = source.config.engine || 'native'
+   setEngine(nextEngine)
+   setProvider(source.config.provider_id ?? '')
+   setModel(source.config.model ?? '')
+   setQuery(source.config.query ?? '')
+   setBaseUrl(nextEngine === 'searxng' ? (source.config.base_url ?? '') : '')
+   setApiKey('')
+ }, [source?.key, source?.config.engine, source?.config.provider_id, source?.config.model, source?.config.query, source?.config.base_url, source?.config.has_api_key])
+ const current = providers.data?.find((p) => p.id === provider)
+ const external = engine !== 'native'
+ // 仅同引擎更新时允许留空沿用旧密文；更换引擎必须重新填写。
+ const canReuseKey = source?.config.has_api_key === 'true' && engine === initialEngine
+ const canSubmit = !disabled && !!query.trim() && (external ? (engine !== 'searxng' || !!baseUrl.trim()) && (engine === 'searxng' || !!apiKey.trim() || canReuseKey) : !!provider && !!model)
+ // 差值判脏：只比较当前值与该来源的初始回显值，打开页面不误报未保存。
+ const isDirty = engine !== initialEngine || query !== initialQuery || baseUrl !== initialBaseUrl || provider !== initialProvider || model !== initialModel || apiKey.trim() !== ''
+ useSettingsDraft(!disabled && isDirty, busy)
+ return <div className="space-y-3 border-t border-mist-100 pt-4">
+  <h3 className="font-semibold">联网搜索来源（默认关闭）</h3>
+  <Notice>原生模型搜索复用支持百炼 DashScope / 方舟 Responses 的供应商；Tavily、博查、SearXNG 使用各自的真实搜索接口，只有返回公开链接时才入库。配置后再勾选来源开启；受全站采集预算和工作区 AI 用量上限约束。</Notice>
+  <Field label="搜索方式">
+   <Select disabled={disabled} disabledHint={roleReadOnlyHint.owner} value={engine} onChange={(e) => {
+     const nextEngine = e.target.value
+     setEngine(nextEngine)
+     setProvider('')
+     setModel('')
+     setApiKey('')
+     setBaseUrl(nextEngine === 'searxng' && initialEngine === 'searxng' ? (source?.config.base_url ?? '') : '')
+   }}>
+    <option value="native">原生模型搜索（已配置供应商）</option>
+    <option value="tavily">Tavily</option>
+    <option value="bocha">博查 Bocha</option>
+    <option value="searxng">SearXNG 自建实例</option>
+   </Select>
+  </Field>
+  {engine === 'native' ? <>
+   <Field label="模型供应商"><Select disabled={disabled} disabledHint={roleReadOnlyHint.owner} value={provider} onChange={(e) => { setProvider(e.target.value); setModel('') }}><option value="">选择已配置的供应商</option>{providers.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</Select></Field>
+   <Field label="模型（如 qwen-plus，或已开通搜索的豆包模型）"><Select disabled={disabled} disabledHint={roleReadOnlyHint.owner} value={model} onChange={(e) => setModel(e.target.value)}><option value="">选择模型</option>{current?.models.map((m) => <option key={m} value={m}>{m}</option>)}</Select></Field>
+  </> : <>
+   {engine === 'searxng' && <Field label="SearXNG 实例地址（HTTPS，自动补 /search）" hint="必须是公网 HTTPS 地址；内网、保留 IP 与敏感域名会被拒绝。">
+    <Input disabled={disabled} disabledHint={roleReadOnlyHint.owner} value={baseUrl} placeholder="https://searx.example.com" onChange={(e) => setBaseUrl(e.target.value)} />
+   </Field>}
+   {engine !== 'searxng' && <Notice tone="ink">为防 API Key 外泄，{engine === 'tavily' ? 'Tavily' : '博查'} 固定使用官方搜索接口，不接受自定义第三方地址。</Notice>}
+   <Field label={engine === 'searxng' ? 'API Key（可选）' : '搜索 API Key'}>
+    <Input type="password" autoComplete="new-password" disabled={disabled} disabledHint={roleReadOnlyHint.owner} value={apiKey} placeholder={canReuseKey ? '已保存密钥，留空沿用' : '填写搜索服务密钥'} onChange={(e) => setApiKey(e.target.value)} />
+   </Field>
+   {canReuseKey && <p className="text-xs text-mist-500">已保存密钥，修改关键词可留空沿用；更换引擎需重新填写。</p>}
+  </>}
+  <Field label="搜索关键词"><Input disabled={disabled} disabledHint={roleReadOnlyHint.owner} maxLength={200} value={query} onChange={(e) => setQuery(e.target.value)} /></Field>
+  <Button loading={busy} disabled={!canSubmit} disabledHint={disabled ? roleReadOnlyHint.owner : '请填写搜索方式所需字段'} onClick={async () => {
+    setBusy(true)
+    try {
+      await post('/hot-sources/search', {
+        engine,
+        query,
+        ...(engine === 'native' ? { provider_id: provider, model } : { base_url: engine === 'searxng' ? baseUrl.trim() : '', api_key: apiKey.trim() }),
+      })
+      setApiKey('')
+      refresh()
+      toast.success('已配置，请勾选联网搜索来源后保存')
+    } catch (e) { toast.error(errorMessage(e)) } finally { setBusy(false) }
+  }}>保存搜索配置</Button>
+ </div>
 }
 
 export function HotSources() {
   const { data: me } = useMe()
   const owner = me?.role === 'owner'
   const inv = useInvalidate()
+  const account = useCurrentAccount()
   const query = useQuery({ queryKey: ['hot-sources'], queryFn: () => get<HotSourcesResult>('/hot-sources') })
   const [selected, setSelected] = useState<string[]>([])
   const [rss, setRSS] = useState<{ key: string; name: string; url: string }[]>([])
   const [busy, setBusy] = useState(false)
+  const [fallbackIssues, setFallbackIssues] = useState<HotSourceIssue[]>([])
   useEffect(() => { if (query.data) { setSelected(query.data.selected); setRSS(query.data.sources.filter((s) => s.workspace_id && s.kind === 'rss').map((s) => ({ key: s.key, name: s.name, url: s.config.url ?? '' }))) } }, [query.data])
   const storedRSS = query.data?.sources.filter((source) => source.workspace_id && source.kind === 'rss').map((source) => ({ key: source.key, name: source.name, url: source.config.url ?? '' })) ?? []
   useSettingsDraft(owner && !!query.data && (JSON.stringify([...selected].sort()) !== JSON.stringify([...query.data.selected].sort()) || JSON.stringify(rss) !== JSON.stringify(storedRSS)), busy)
@@ -116,15 +222,41 @@ export function HotSources() {
     setBusy(true)
     try { await put('/hot-sources', { sources: selected, rss }); await inv(['hot-sources']); toast.success('热点来源已保存') } catch (e) { toast.error(errorMessage(e)) } finally { setBusy(false) }
   }
+  const presets = query.data?.presets ?? []
+  const searchSource = query.data?.sources.find((s) => s.kind === 'search')
   return <div className="max-w-3xl animate-fade-in space-y-5"><PageHeader title="工作区热点来源" desc="只使用全站已启用的来源和本工作区的 RSS。" />
     {query.isError ? <Notice tone="red">{errorMessage(query.error)}</Notice> : query.isPending ? <Spinner /> : <Card><div className="space-y-4 p-5">
       {!query.data.enabled && <Notice>热点采集未开启；来源配置会保存，当前不发出采集请求。</Notice>}
-      {query.data.sources.map((s) => <label key={s.key} className="flex items-center gap-2 text-sm"><input type="checkbox" title={!owner ? roleReadOnlyHint.owner : busy ? '正在保存…' : undefined} disabled={!owner || busy} checked={selected.includes(s.key)} onChange={(e) => setSelected((v) => e.target.checked ? [...v, s.key] : v.filter((key) => key !== s.key))} />{s.name}</label>)}
+      {query.data.sources.map((s) => {
+        const activePause = isActivePause(s.paused_until)
+        return <div key={s.key} className="space-y-1">
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" title={!owner ? roleReadOnlyHint.owner : busy ? '正在保存…' : undefined} disabled={!owner || busy} checked={selected.includes(s.key)} onChange={(e) => setSelected((v) => e.target.checked ? [...v, s.key] : v.filter((key) => key !== s.key))} />{s.name}{s.kind === 'search' && <Badge tone="ink">联网搜索</Badge>}</label>
+          {(!!s.error?.trim() || activePause) && <div className="flex flex-wrap items-center gap-2 pl-6">
+            <span className={activePause ? 'text-xs text-gamboge-700' : 'text-xs text-danger'}>{sourceIssue(s).reason}{activePause ? ` · 暂停至 ${new Date(s.paused_until!).toLocaleString('zh-CN')}` : ''}</span>
+            <Button size="sm" variant="ghost" onClick={() => setFallbackIssues([sourceIssue(s)])}>查看原因与手动粘贴参考</Button>
+          </div>}
+        </div>
+      })}
       {!query.data.sources.length && <Notice>暂无可选全站来源，可添加行业 RSS。</Notice>}
+      <div className="space-y-3" data-testid="hot-source-presets">
+        <h3 className="font-semibold">推荐公开 RSS 模板（一键填入）</h3>
+        <p className="text-xs text-mist-500">均为公开 RSS / Atom 地址；填入后仍需点击「保存来源」入库并勾选，才会进入采集。</p>
+        {presets.map((preset) => {
+          const filled = rss.some((r) => r.url.trim() === preset.url.trim())
+          const blocked = !owner || busy || rss.length >= 10
+          return <div key={preset.key} className="space-y-1 rounded-lg border border-mist-200 p-3">
+            <div className="flex flex-wrap items-center gap-2"><strong className="text-sm">{preset.name}</strong><Badge>{preset.category}</Badge></div>
+            <p className="text-xs text-mist-600">{preset.description}</p>
+            <p className="break-all text-xs text-mist-400">{preset.url}</p>
+            <Button size="sm" disabled={filled || blocked} disabledHint={!owner ? roleReadOnlyHint.owner : filled ? '该地址已在下方表单中' : '最多 10 个自定义 RSS'} onClick={() => setRSS((v) => [...v, { key: '', name: preset.name, url: preset.url }])}>{filled ? '已填入' : '一键填入'}</Button>
+          </div>
+        })}
+      </div>
       <h3 className="font-semibold">自定义 RSS</h3>
-      {rss.map((r, i) => <div key={i} className="space-y-2 rounded-lg border border-mist-200 p-3"><Field label="名称"><Input disabled={!owner || busy} disabledHint={!owner ? roleReadOnlyHint.owner : '正在保存…'} value={r.name} onChange={(e) => setRSS((v) => v.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} /></Field><Field label="订阅地址"><Textarea rows={1} disabled={!owner || busy} disabledHint={!owner ? roleReadOnlyHint.owner : '正在保存…'} value={r.url} onChange={(e) => setRSS((v) => v.map((x, j) => j === i ? { ...x, url: e.target.value } : x))} /></Field></div>)}
-      <SearchSourceForm disabled={!owner} refresh={()=>inv(['hot-sources'])}/>
+      {rss.map((r, i) => <div key={i} className="space-y-2 rounded-lg border border-mist-200 p-3"><Field label="名称"><Input disabled={!owner || busy} disabledHint={!owner ? roleReadOnlyHint.owner : '正在保存…'} value={r.name} onChange={(e) => setRSS((v) => v.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} /></Field><Field label="订阅地址"><Textarea rows={1} disabled={!owner || busy} disabledHint={!owner ? roleReadOnlyHint.owner : '正在保存…'} value={r.url} onChange={(e) => setRSS((v) => v.map((x, j) => j === i ? { ...x, url: e.target.value } : x))} /></Field>{!r.key && <Button size="sm" variant="ghost" disabled={!owner || busy} onClick={() => setRSS((v) => v.filter((_, j) => j !== i))}>移除</Button>}</div>)}
+      <SearchSourceForm disabled={!owner} refresh={() => inv(['hot-sources'])} source={searchSource} />
  {owner && <div className="flex gap-2"><Button disabled={busy || rss.length >= 10} onClick={() => setRSS((r) => [...r, { key: '', name: '', url: '' }])}>添加 RSS</Button><Button variant="primary" loading={busy} onClick={save}>保存来源</Button></div>}
     </div></Card>}
+    <HotFallbackDialog open={fallbackIssues.length > 0} onClose={() => setFallbackIssues([])} issues={fallbackIssues} accountId={account?.id} />
   </div>
 }
