@@ -56,9 +56,11 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     'onRealtimeEvent',
     'onSidepanelDraft',
     'onSidepanelStop',
+    'openPlatformLogin',
     'openXhsManualImageFolder',
     'readComputerUIA',
     'revokeMcpOAuth',
+    'setLocalSettingsPanel',
     'startMcpOAuth',
     'validateMcpConnection'
   ]);
@@ -71,8 +73,8 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')).sort(),
     ['actComputerUIA', 'captureLongImage', 'confirmBrowserPairing', 'focusBrowserTab', 'getBrowserPairingState',
      'getMcpOAuthStatus', 'invalidateComputerUIA', 'invokeComputerUIA', 'invokeInBrowse',
-     'listBrowserTabs', 'listComputerWindows', 'observeComputerUIA', 'openXhsManualImageFolder', 'readComputerUIA',
-     'revokeMcpOAuth', 'startMcpOAuth', 'validateMcpConnection']);
+     'listBrowserTabs', 'listComputerWindows', 'observeComputerUIA', 'openPlatformLogin', 'openXhsManualImageFolder',
+     'readComputerUIA', 'revokeMcpOAuth', 'setLocalSettingsPanel', 'startMcpOAuth', 'validateMcpConnection']);
   const buildId = '00000008-1111-4111-8111-111111111111';
   assert.deepEqual(await exposed.opsDesktopUI.captureLongImage(buildId), {
     ok: false, code: 'render_not_ready', message: '页面未就绪。'
@@ -894,5 +896,118 @@ test('OPT-U03: 主进程返回路径或多余字段时整份拒绝（不泄漏�
     ipcRenderer: { on() {}, removeListener() {}, invoke: async () => { throw new Error('no handler'); } } });
   assert.deepEqual(await exposedThrow.opsDesktopUI.openXhsManualImageFolder({ workId: 'work_1', files }), {
     ok: false, code: 'publish_pack_unavailable', message: '本机图片导出暂不可用，请重试。',
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OPT-U04（docs/43 §4）：桌面平台重登 / 本机设置面板的固定意图。
+// 参数本机校验（非法即回 invalid_argument 且不发 IPC）；返回值只允许
+// {ok:true} 或 {ok:false,code,message}；invoke 抛错压成 desktop_ui_unavailable。
+// ---------------------------------------------------------------------------
+
+test('OPT-U04: openPlatformLogin / setLocalSettingsPanel 参数本机拦截，非法一律不发 IPC', async () => {
+  const exposed = {};
+  const invokes = [];
+  const ipcRenderer = {
+    on() {},
+    removeListener() {},
+    invoke(channel, payload) { invokes.push({ channel, payload }); return Promise.resolve({ ok: true }); },
+  };
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposed[n] = v; } }, ipcRenderer });
+  const ui = exposed.opsDesktopUI;
+  const accountId = '00000003-1111-4111-8111-111111111111';
+  const loginCases = [
+    null,
+    'xhs',
+    {},
+    { accountId: 'not-a-uuid', platform: 'xhs' },
+    { accountId, platform: 'weibo' },
+    { accountId, platform: 1 },
+    { accountId, platform: 'xhs', remember: true },
+    { accountId, platform: 'xhs', account_id: accountId },
+  ];
+  for (const input of loginCases) {
+    const result = await ui.openPlatformLogin(input);
+    assert.equal(result.ok, false, `应拒绝 ${JSON.stringify(input)}`);
+    assert.equal(result.code, 'invalid_argument');
+  }
+  const panelCases = [
+    null,
+    'unknown',
+    'Connection',
+    { action: 'connection' },
+    7,
+    ['connection'],
+  ];
+  for (const input of panelCases) {
+    const result = await ui.setLocalSettingsPanel(input);
+    assert.equal(result.ok, false, `应拒绝 ${JSON.stringify(input)}`);
+    assert.equal(result.code, 'invalid_argument');
+  }
+  assert.deepEqual(invokes, [], '非法参数不得发起 IPC');
+});
+
+test('OPT-U04: 合法参数只透传白名单键，两条固定通道分别转发', async () => {
+  const exposed = {};
+  const invokes = [];
+  const ipcRenderer = {
+    on() {},
+    removeListener() {},
+    invoke(channel, payload) { invokes.push({ channel, payload }); return Promise.resolve({ ok: true }); },
+  };
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposed[n] = v; } }, ipcRenderer });
+  const ui = exposed.opsDesktopUI;
+  const accountId = '00000003-1111-4111-8111-111111111111';
+  assert.deepEqual(await ui.openPlatformLogin({ accountId, platform: 'toutiao' }), { ok: true });
+  assert.deepEqual(invokes.at(-1), { channel: 'desktop-ui:open-platform-login', payload: { accountId, platform: 'toutiao' } });
+  assert.deepEqual(Object.keys(invokes.at(-1).payload).sort(), ['accountId', 'platform']);
+  for (const action of ['connection', 'ai', 'account-device', 'diagnostics', 'detach', 'close']) {
+    assert.deepEqual(await ui.setLocalSettingsPanel(action), { ok: true });
+    assert.deepEqual(invokes.at(-1), { channel: 'desktop-ui:settings-panel', payload: { action } });
+    assert.deepEqual(Object.keys(invokes.at(-1).payload), ['action']);
+  }
+  assert.equal(invokes.length, 7);
+});
+
+test('OPT-U04: 主进程返回值收敛——只接受 {ok:true} 或 {ok:false,code,message}', async () => {
+  const invalidPanel = { ok: false, code: 'desktop_ui_invalid', message: 'Electron 返回的本机设置结果无效。' };
+  const invalidLogin = { ok: false, code: 'desktop_ui_invalid', message: 'Electron 返回的平台登录结果无效。' };
+  const refusal = { ok: false, code: 'not_business_window', message: '不允许此窗口调用本机设置。' };
+  const cases = [
+    { label: '成功但带多余键', raw: { ok: true, panel: 'ai' }, panel: invalidPanel, login: invalidLogin },
+    { label: '失败码超长', raw: { ok: false, code: 'x'.repeat(41), message: '原因' }, panel: invalidPanel, login: invalidLogin },
+    { label: '空结果', raw: null, panel: invalidPanel, login: invalidLogin },
+    { label: '非业务窗口失败原样透出', raw: refusal, panel: refusal, login: refusal },
+  ];
+  for (const item of cases) {
+    const exposed = {};
+    const ipcRenderer = { on() {}, removeListener() {}, invoke: async () => item.raw };
+    loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposed[n] = v; } }, ipcRenderer });
+    assert.deepEqual(await exposed.opsDesktopUI.setLocalSettingsPanel('connection'), item.panel, `${item.label}（本机设置）`);
+    assert.deepEqual(await exposed.opsDesktopUI.openPlatformLogin({
+      accountId: '00000003-1111-4111-8111-111111111111', platform: 'xhs',
+    }), item.login, `${item.label}（平台登录）`);
+  }
+  // 唯一合法成功形状必须原样返回。
+  const exposedOk = {};
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposedOk[n] = v; } },
+    ipcRenderer: { on() {}, removeListener() {}, invoke: async () => ({ ok: true }) } });
+  assert.deepEqual(await exposedOk.opsDesktopUI.setLocalSettingsPanel('connection'), { ok: true });
+  assert.deepEqual(await exposedOk.opsDesktopUI.openPlatformLogin({
+    accountId: '00000003-1111-4111-8111-111111111111', platform: 'xhs',
+  }), { ok: true });
+});
+
+test('OPT-U04: invoke 抛错压成 desktop_ui_unavailable，不把异常原文透出', async () => {
+  const exposed = {};
+  const ipcRenderer = { on() {}, removeListener() {}, invoke: async () => { throw new Error('No handler registered for desktop-ui:settings-panel'); } };
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposed[n] = v; } }, ipcRenderer });
+  assert.deepEqual(await exposed.opsDesktopUI.setLocalSettingsPanel('diagnostics'), {
+    ok: false, code: 'desktop_ui_unavailable', message: '本机设置面板暂不可用，请重试。',
+  });
+  assert.deepEqual(await exposed.opsDesktopUI.openPlatformLogin({
+    accountId: '00000003-1111-4111-8111-111111111111', platform: 'wechat_mp',
+  }), {
+    ok: false, code: 'desktop_ui_unavailable', message: '本机平台登录暂不可用，请重试。',
   });
 });

@@ -7,6 +7,9 @@ const PLATFORM_INTENT_RESULT_CHANNEL = 'desktop-ui:platform-intent-result';
 const CX_LONG_IMAGE_CAPTURE_CHANNEL = 'cx-long-image:capture';
 // OPT-U03（docs/43 §4）：小红书人工接管包的有序图片导出通道（参数与结果都在本侧先校验）。
 const PUBLISH_PACK_XHS_IMAGES_CHANNEL = 'publish-pack:open-xhs-images';
+// OPT-U04（docs/43 §4）：平台重登与本机设置面板的固定意图通道（不再依赖 window.open）。
+const DESKTOP_UI_OPEN_PLATFORM_LOGIN_CHANNEL = 'desktop-ui:open-platform-login';
+const DESKTOP_UI_SETTINGS_PANEL_CHANNEL = 'desktop-ui:settings-panel';
 
 type LocalSettingsState = { dirty: boolean; busy: boolean };
 type SettingsOpenListener = () => void;
@@ -40,6 +43,13 @@ type XhsManualImageFileInput = { ext: string; bytes: Uint8Array };
 type XhsManualImageExportResult =
   | { ok: false; code: string; message: string }
   | { ok: true; count: number; fileNames: string[] };
+
+// OPT-U04（docs/43 §4）：桌面平台登录 / 本机设置面板的固定意图。返回值只允许
+// {ok:true} 或 {ok:false,code,message}；本机路径、窗口句柄等多余键一律不进渲染器。
+type DesktopUiPlatform = 'wechat_mp' | 'xhs' | 'toutiao';
+type DesktopUiSettingsAction = 'connection' | 'ai' | 'account-device' | 'diagnostics' | 'detach' | 'close';
+type DesktopUiActionResult = { ok: false; code: string; message: string } | { ok: true };
+type DesktopPlatformLoginInput = { accountId: string; platform: DesktopUiPlatform };
 
 // DEV-AI27-17（W17b，A12）：本机选窗结果。handle 不透明，标题只在业务窗口内使用。
 type ComputerWindowView = { pid: number; handle: string; process: string; title: string; forbidden: boolean };
@@ -158,6 +168,12 @@ let latestLocalSettingsState: LocalSettingsState | null = null;
 let latestClientHealth: DesktopClientHealth | null = null;
 
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+// OPT-U04：桌面平台登录 / 本机设置面板的固定白名单（与主进程 ipc/desktop-ui.ts 同口径）。
+const DESKTOP_UI_PLATFORMS = new Set<DesktopUiPlatform>(['wechat_mp', 'xhs', 'toutiao']);
+const DESKTOP_UI_SETTINGS_ACTIONS = new Set<DesktopUiSettingsAction>([
+  'connection', 'ai', 'account-device', 'diagnostics', 'detach', 'close',
+]);
+const PLATFORM_LOGIN_KEYS = 'accountId,platform';
 
 function asRecord(raw: unknown): Record<string, unknown> | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
@@ -258,6 +274,36 @@ function parseXhsManualImageExportResult(raw: unknown): XhsManualImageExportResu
     fileNames.push(name);
   }
   return { ok: true, count, fileNames };
+}
+
+// OPT-U04：返回值白名单收敛——只允许 {ok:true} 或 {ok:false,code,message}，多余键整份拒绝。
+function parseDesktopUiActionResult(raw: unknown): DesktopUiActionResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.code === 'string' && value.code.length <= 40
+      && typeof value.message === 'string' && value.message.length <= 200
+      ? { ok: false, code: value.code, message: value.message }
+      : null;
+  }
+  return Object.keys(value).length === 1 ? { ok: true } : null;
+}
+
+// OPT-U04：平台登录入参本机校验（非法即回 invalid_argument 且不发 IPC）。
+function parseDesktopPlatformLoginInput(raw: unknown): DesktopPlatformLoginInput | null {
+  const value = asRecord(raw);
+  if (!value || Object.keys(value).sort().join(',') !== PLATFORM_LOGIN_KEYS) return null;
+  const accountId = value.accountId;
+  const platform = value.platform;
+  if (!isUuid(accountId)) return null;
+  if (typeof platform !== 'string' || !DESKTOP_UI_PLATFORMS.has(platform as DesktopUiPlatform)) return null;
+  return { accountId, platform: platform as DesktopUiPlatform };
+}
+
+// OPT-U04：本机设置面板入参本机校验（只接受六个固定动作字符串；非法即回 invalid_argument 且不发 IPC）。
+function parseDesktopSettingsAction(raw: unknown): DesktopUiSettingsAction | null {
+  if (typeof raw !== 'string' || !DESKTOP_UI_SETTINGS_ACTIONS.has(raw as DesktopUiSettingsAction)) return null;
+  return raw as DesktopUiSettingsAction;
 }
 
 function parseComputerWindowListResult(raw: unknown): ComputerWindowListResult | null {
@@ -743,6 +789,32 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
       return { ok: false, code: 'publish_pack_unavailable', message: '本机图片导出暂不可用，请重试。' };
     }
     return parseXhsManualImageExportResult(raw) ?? { ok: false, code: 'publish_pack_invalid', message: 'Electron 返回的图片导出结果无效。' };
+  },
+  // OPT-U04（docs/43 §4）：平台重登走固定 IPC——主进程直接打开平台登录窗并派发设置面板，
+  // 不再依赖 window.open（桌面 dev 构建会返回 null）。入口非法时本侧直接拒绝、不发 IPC。
+  async openPlatformLogin(rawInput: DesktopPlatformLoginInput): Promise<DesktopUiActionResult> {
+    const input = parseDesktopPlatformLoginInput(rawInput);
+    if (!input) return { ok: false, code: 'invalid_argument', message: '平台登录参数无效。' };
+    let raw: unknown;
+    try {
+      raw = await ipcRenderer.invoke(DESKTOP_UI_OPEN_PLATFORM_LOGIN_CHANNEL, input);
+    } catch {
+      return { ok: false, code: 'desktop_ui_unavailable', message: '本机平台登录暂不可用，请重试。' };
+    }
+    return parseDesktopUiActionResult(raw) ?? { ok: false, code: 'desktop_ui_invalid', message: 'Electron 返回的平台登录结果无效。' };
+  },
+  // OPT-U04（docs/43 §4）：本机设置面板（连接 / AI / 账号设备 / 诊断 / 脱离 / 关闭）同口径。
+  // 渲染器按平台登录同一入口传单个动作字符串，本侧转成 { action } 后才发 IPC。
+  async setLocalSettingsPanel(rawAction: DesktopUiSettingsAction): Promise<DesktopUiActionResult> {
+    const action = parseDesktopSettingsAction(rawAction);
+    if (!action) return { ok: false, code: 'invalid_argument', message: '本机设置面板参数无效。' };
+    let raw: unknown;
+    try {
+      raw = await ipcRenderer.invoke(DESKTOP_UI_SETTINGS_PANEL_CHANNEL, { action });
+    } catch {
+      return { ok: false, code: 'desktop_ui_unavailable', message: '本机设置面板暂不可用，请重试。' };
+    }
+    return parseDesktopUiActionResult(raw) ?? { ok: false, code: 'desktop_ui_invalid', message: 'Electron 返回的本机设置结果无效。' };
   },
   // DEV-AI27-17（W17b，A12）：本机窗口枚举——只在本机执行，渲染器拿到的是不透明 handle。
   async listComputerWindows(): Promise<ComputerWindowListResult> {

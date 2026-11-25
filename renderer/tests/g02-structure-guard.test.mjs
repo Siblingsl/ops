@@ -27,7 +27,7 @@ test('G-02：基线 manifest 可由基线 commit 复算，最终工作树全部�
   assert.equal(result.checkpointRoutes, 121)
   assert.equal(result.baselineMigrations, 111)
   assert.equal(result.checkpointMigrations, 141)
-  assert.equal(result.deltas, 47)
+  assert.equal(result.deltas, 48)
   assert.equal(result.exceptions, 2)
 
   const computed = collectDeltas(BASE, CURRENT)

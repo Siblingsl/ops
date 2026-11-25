@@ -41,10 +41,12 @@ const nav: { end?: boolean; path: string; icon: typeof LayoutDashboard; label: s
   { path: '/profile', icon: UserCircle2, label: '账号档案' },
 ]
 
+// OPT-U04（docs/43 §4）：桌面侧栏固定主入口 3 组——AI 对话升到第一组，
+// 创作只留 工作台/选题池/作品/内容日历；「运营」保留在资产与复盘组，不得丢入口。
 const desktopNavGroups = [
-  { label: '创作', items: [nav[0], nav[4], nav[1], nav[3]] },
-  { label: '资源', items: [nav[5], { to: '/images', icon: Images, label: '图片库' }] },
-  { label: '运营', items: [nav[2], nav[6], nav[7]] },
+  { label: 'AI 助手', items: [{ to: '/agent', icon: Bot, label: 'AI 对话' }] },
+  { label: '创作', items: [nav[0], nav[1], nav[4], nav[3]] },
+  { label: '资产与复盘', items: [nav[5], { to: '/images', icon: Images, label: '图片库' }, nav[2], nav[6], nav[7]] },
 ]
 
 // GL-01：移动端底部导航只放 4 个主入口，其余一级页收进「更多」抽屉。
@@ -1162,11 +1164,9 @@ export default function Shell() {
               本地开发 · 模拟接口
             </div>
           )}
-          {desktopPresentation
-            ? <NavItem to="/agent" icon={Bot}>AI 对话</NavItem>
-            : agentMode
-              ? <Link to={base} className="group flex items-center gap-3 rounded-2xl px-3 py-2.5 text-[14.5px] font-medium text-mist-600 transition-all hover:bg-mist-100/90 hover:text-mist-900"><ChevronLeft className="size-[18px] shrink-0 text-mist-400 group-hover:text-mist-600" strokeWidth={1.8} />返回工作台</Link>
-              : showAgent && <NavItem to="/agent" icon={Bot}>AI 对话</NavItem>}
+          {!desktopPresentation && (agentMode
+            ? <Link to={base} className="group flex items-center gap-3 rounded-2xl px-3 py-2.5 text-[14.5px] font-medium text-mist-600 transition-all hover:bg-mist-100/90 hover:text-mist-900"><ChevronLeft className="size-[18px] shrink-0 text-mist-400 group-hover:text-mist-600" strokeWidth={1.8} />返回工作台</Link>
+            : showAgent && <NavItem to="/agent" icon={Bot}>AI 对话</NavItem>)}
           {desktopPresentation && <NotificationBell sidebar>{(unread) => <UserMenu username={me?.username} onLogout={logout} unread={unread} />}</NotificationBell>}
         </div>
       </aside>

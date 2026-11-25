@@ -417,8 +417,19 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
   const canOpenToutiao = !adminOverride && accountStatus === 'active' && role !== 'viewer'
   const canConfirmObservations = !adminOverride && role !== 'viewer'
   const isToutiao = platform === 'toutiao'
-  const openPlatformLogin = () => {
-    window.open(`ops-desktop://ui/platform-login/${accountId}/${platform}`, '_blank', 'noopener,noreferrer')
+  // OPT-U04（docs/43 §4）：新宿主优先走固定 IPC 直接打开平台登录窗，绕开会返回 null 的 window.open；
+  // 只有旧宿主没有 openPlatformLogin 时才退回自定义协议深链。失败如实提示，不静默吞错。
+  const openPlatformLogin = async () => {
+    const loginPlatform = platform === 'wechat_mp' || platform === 'xhs' || platform === 'toutiao' ? platform : null
+    if (window.opsDesktopUI?.openPlatformLogin && loginPlatform) {
+      const res = await window.opsDesktopUI.openPlatformLogin({ accountId, platform: loginPlatform })
+      if (!res.ok) {
+        toast.error(res.message)
+        return
+      }
+    } else {
+      window.open(`ops-desktop://ui/platform-login/${accountId}/${platform}`, '_blank', 'noopener,noreferrer')
+    }
     window.dispatchEvent(new CustomEvent(DESKTOP_LOCAL_SETTINGS_REQUEST, { detail: { panel: 'account-device' } }))
   }
 

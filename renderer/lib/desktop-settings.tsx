@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useId } from 'react'
 import { desktopSettingsLabel, settingsEntries, settingsEntryFor, settingsGroupOf, type SettingsEntry } from './settings-registry'
 
 export { currentAccountSettingsPath } from './settings-registry'
+export { ADVANCED_SETTINGS_GROUP, SETTINGS_GROUP_ORDER } from './settings-registry'
 export type { SettingsEntry, SettingsGroupName, SettingsScope } from './settings-registry'
 export { settingsGroupOf }
 

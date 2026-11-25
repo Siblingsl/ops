@@ -1,5 +1,6 @@
 import { Keyboard } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button, Card, CardHeader, cn, PageHeader, Switch } from '@/components/ui'
 import { confirm } from '@/components/dialog'
@@ -38,6 +39,7 @@ function Choice<T extends string | number>({ value, options, onChange }: { value
 export default function Preferences() {
   const prefs = usePrefs()
   const save = useSavePrefs()
+  const navigate = useNavigate()
   const desktop = isElectronDesktop(navigator.userAgent)
   const [reducedMotion, setReducedMotion] = useState(() => document.documentElement.dataset.reducedMotion === 'true')
   const [health, setHealth] = useState<DesktopClientHealth | null>(null)
@@ -66,6 +68,14 @@ export default function Preferences() {
           </Row>
           <Row title="平台采集状态" desc={[health?.presence.message, health?.collection.message].filter(Boolean).join('；') || '等待客户端状态'}>
             <span className="text-sm text-mist-500">{health?.collection.status === 'partial' || health?.collection.status === 'failed' ? '采集需处理' : health?.collection.status === 'running' ? '正在采集' : health?.presence.status === 'online' ? '平台在线' : health?.presence.status === 'error' ? '平台异常' : health?.presence.status === 'offline' ? '采集未启用' : '读取中'}</span>
+          </Row>
+          {/* OPT-U04（docs/43 §4）：本机状态与诊断在偏好设置里一键直达，不必再猜设置入口。 */}
+          <Row title="本机客户端管理" desc="连接状态、平台登录与诊断信息都在本机设置中查看。">
+            <div className="flex flex-wrap justify-end gap-2" data-testid="desktop-local-settings-shortcuts">
+              <Button size="sm" variant="secondary" onClick={() => navigate('/settings/local/connection')}>客户端连接</Button>
+              <Button size="sm" variant="secondary" onClick={() => navigate('/settings/local/account-device')}>账号与设备</Button>
+              <Button size="sm" variant="secondary" onClick={() => navigate('/settings/local/diagnostics')}>诊断与关于</Button>
+            </div>
           </Row>
         </div>
       </Card>}

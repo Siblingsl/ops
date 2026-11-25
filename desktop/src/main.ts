@@ -33,6 +33,7 @@ import { registerVoiceIpcHandlers, setRealtimeBridge } from './ipc/voice';
 import { registerComputerIpcHandlers, setComputerWorkerHost } from './ipc/computer';
 import { registerCXIpcHandlers } from './ipc/cx';
 import { registerPublishPackIpcHandlers } from './ipc/publish-pack';
+import { registerDesktopUiIpcHandlers } from './ipc/desktop-ui';
 import { registerInBrowseIpcHandlers } from './ipc/inbrowse';
 import { registerBrowserIpcHandlers } from './ipc/browser';
 import { registerSettingsIpcHandlers } from './ipc/settings';
@@ -1067,6 +1068,9 @@ function registerIpcHandlers(): void {
   // OPT-U03（docs/43 §4）：小红书人工接管包的图片有序导出——通道整体在 ipc/publish-pack.ts，
   // 落盘根目录/大小上限/业务窗口守卫都在该模块内；main.ts 不内联通道。
   registerPublishPackIpcHandlers({ ipcHandle, businessWindow: () => businessWindow, isBusinessUrl });
+  // OPT-U04（docs/43 §4）：平台重登与本机设置面板的固定 IPC——通道与校验都在 ipc/desktop-ui.ts，
+  // 业务页不再依赖会被拦截的 window.open；原 setWindowOpenHandler 的 ops-desktop://ui/* 兼容保留。
+  registerDesktopUiIpcHandlers({ ipcHandle, businessWindow: () => businessWindow, isBusinessUrl, applyIntent: applyDesktopUiIntent });
   // DT-08 片 10：settings:* 28 通道 + local-state 事件拆至 ipc/settings.ts（确认弹窗
   // 文案与防线校验逐字节搬移；跨域依赖经 SettingsIpcDeps 注入）。
   registerSettingsIpcHandlers({

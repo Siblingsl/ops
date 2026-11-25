@@ -5,7 +5,7 @@ import { Routes, useLocation, useNavigate, type Location } from 'react-router-do
 import { toast } from 'sonner'
 import { confirm } from '@/components/dialog'
 import { ErrorBoundary } from '@/components/error-boundary'
-import { currentAccountSettingsPath, DESKTOP_ACCOUNT_CREATE_READY, DESKTOP_ACCOUNT_CREATE_REQUEST, DESKTOP_ACCOUNT_SWITCHER_FROM_SETTINGS_REQUEST, DESKTOP_ACCOUNT_SWITCHER_READY, DESKTOP_ACCOUNT_SWITCHER_REQUEST, DESKTOP_LEAVE_GUARD_RELEASE, DESKTOP_LEAVE_GUARD_REQUEST, DESKTOP_LOCAL_SETTINGS_REQUEST, DesktopSettingsContext, desktopSettingsEntries, desktopSettingsEntryLabel, desktopSettingsPanel, requestDesktopLeaveGuard, settingsGroupOf, type SettingsGroupName } from '@/lib/desktop-settings'
+import { currentAccountSettingsPath, DESKTOP_ACCOUNT_CREATE_READY, DESKTOP_ACCOUNT_CREATE_REQUEST, DESKTOP_ACCOUNT_SWITCHER_FROM_SETTINGS_REQUEST, DESKTOP_ACCOUNT_SWITCHER_READY, DESKTOP_ACCOUNT_SWITCHER_REQUEST, DESKTOP_LEAVE_GUARD_RELEASE, DESKTOP_LEAVE_GUARD_REQUEST, DESKTOP_LOCAL_SETTINGS_REQUEST, DesktopSettingsContext, desktopSettingsEntries, desktopSettingsEntryLabel, desktopSettingsPanel, requestDesktopLeaveGuard, settingsGroupOf, ADVANCED_SETTINGS_GROUP, SETTINGS_GROUP_ORDER, type SettingsGroupName } from '@/lib/desktop-settings'
 import { isElectronDesktop } from '@/lib/desktop-presentation.js'
 import { rememberAccount, useCurrentAccountSelection, useMe } from '@/lib/session'
 import type { Platform } from '@/lib/types'
@@ -13,6 +13,19 @@ import { platformLabel } from '@/components/ui'
 import DesktopSettingsContent from './DesktopSettingsContent'
 
 const locationPath = (location: Location) => location.pathname + location.search + location.hash
+
+/**
+ * OPT-U04（docs/43 §4）：本机设置面板的唯一触发口。
+ * 新宿主走 window.opsDesktopUI 固定 IPC，彻底绕开会返回 null 的 window.open；
+ * 只有旧宿主没有 setLocalSettingsPanel 时才退回自定义协议深链。
+ */
+function syncLocalSettingsPanel(action: 'connection' | 'ai' | 'account-device' | 'diagnostics' | 'detach' | 'close') {
+  if (window.opsDesktopUI?.setLocalSettingsPanel) {
+    void window.opsDesktopUI.setLocalSettingsPanel(action)
+    return
+  }
+  window.open(`ops-desktop://ui/settings/${action}`, '_blank', 'noopener,noreferrer')
+}
 
 /** 拥有路由离开保护与客户端设置呈现，业务表单/权限仍由既有页面和 API 拥有。 */
 export default function DesktopSettingsHost({ children, backdrop }: { children: ReactNode; backdrop: ReactNode }) {
@@ -93,9 +106,9 @@ export default function DesktopSettingsHost({ children, backdrop }: { children: 
   useEffect(() => {
     if (!desktop) return
     if (panel?.localPanel) {
-      window.open(`ops-desktop://ui/settings/${panel.localPanel}`, '_blank', 'noopener,noreferrer')
+      syncLocalSettingsPanel(panel.localPanel)
     } else if (previousLocalPanel.current) {
-      window.open(`ops-desktop://ui/settings/${panel ? 'detach' : 'close'}`, '_blank', 'noopener,noreferrer')
+      syncLocalSettingsPanel(panel ? 'detach' : 'close')
     }
     previousLocalPanel.current = panel?.localPanel
   }, [desktop, panel?.path, panel?.localPanel])
@@ -237,12 +250,12 @@ export default function DesktopSettingsHost({ children, backdrop }: { children: 
       const leavingPanel = !!panel && panel.path !== nextPanel?.path
       const changingAccount = panel?.scope === '当前账号' && nextPanel?.path === panel.path && currentTarget !== nextTarget
       if (panel && (leavingPanel || changingAccount)) {
-        if (panel.localPanel) window.open('ops-desktop://ui/settings/detach', '_blank', 'noopener,noreferrer')
+        if (panel.localPanel) syncLocalSettingsPanel('detach')
         const allowed = leavePermit.current ? (leavePermit.current = false, true) : await askBeforeLeaving()
         if (cancelled) return
         if (!allowed) {
           navigate(locationPath(shown), { replace: true, state: shown.state })
-          if (panel.localPanel) window.open(`ops-desktop://ui/settings/${panel.localPanel}`, '_blank', 'noopener,noreferrer')
+          if (panel.localPanel) syncLocalSettingsPanel(panel.localPanel)
           return
         }
         if (panel.localPanel) {
@@ -305,10 +318,17 @@ function SettingsWindow({ path, onClose, dirty, children }: { path: string; onCl
   closeRef.current = onClose
   const entry = desktopSettingsPanel(path)!
   const visible = desktopSettingsEntries.filter((item) => (!item.adminOnly || me?.is_system_admin) && `${desktopSettingsEntryLabel(item)} ${desktopSettingsGroup(item)} ${item.group} ${item.scope} ${item.tool ? '独立工具' : ''} ${item.keywords ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()))
-  const groups = [...new Set(visible.map(desktopSettingsGroup))]
+  const visibleGroups = new Set(visible.map(desktopSettingsGroup))
+  // OPT-U04：5 大常用组按固定顺序渲染，高级区永远最后（不依赖 entries 书写顺序）。
+  const groups = SETTINGS_GROUP_ORDER.filter((group) => visibleGroups.has(group))
+  const basicGroups = groups.filter((group) => group !== ADVANCED_SETTINGS_GROUP)
+  const advancedVisible = groups.includes(ADVANCED_SETTINGS_GROUP)
   const currentGroup = desktopSettingsGroup(entry)
   const [expandedGroup, setExpandedGroup] = useState<SettingsGroupName | ''>(currentGroup)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const searching = query.trim().length > 0
+  // 高级区默认折叠：仅在用户手动展开、搜索中或当前正位于高级组条目时展开。
+  const advancedExpanded = searching || advancedOpen || currentGroup === ADVANCED_SETTINGS_GROUP
 
   useEffect(() => { setExpandedGroup(currentGroup) }, [path, currentGroup])
 
@@ -339,20 +359,27 @@ function SettingsWindow({ path, onClose, dirty, children }: { path: string; onCl
     }
   }, [])
 
+  // OPT-U04：常用组与折叠高级区共用同一渲染体；高级区默认收起（aria-expanded 如实反映）。
+  const renderSettingsGroup = (group: SettingsGroupName, index: number, advanced = false) => {
+    const expanded = advanced ? advancedExpanded : searching || expandedGroup === group
+    const groupId = `desktop-settings-group-${index}`
+    return <div key={group} className="desktop-settings-group" data-testid={advanced ? 'desktop-settings-advanced-group' : undefined}>
+      <button type="button" className="desktop-settings-group-label" aria-expanded={expanded} aria-controls={groupId}
+        onClick={() => { if (advanced) setAdvancedOpen(!advancedOpen); else setExpandedGroup(expandedGroup === group ? '' : group) }}>
+        <span>{group}</span>{expanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
+      </button>
+      <div id={groupId} className="desktop-settings-group-items" hidden={!expanded}>{visible.filter((item) => desktopSettingsGroup(item) === group).map((item) => <button key={item.path} type="button" aria-current={path === item.path ? 'page' : undefined} aria-description={item.tool ? '在主窗口打开' : undefined} onClick={() => navigate(item.path)} title={item.tool ? `${desktopSettingsEntryLabel(item)} · 在主窗口打开` : desktopSettingsEntryLabel(item)}><span>{desktopSettingsEntryLabel(item)}</span>{item.tool && <ArrowUpRight aria-hidden="true" />}</button>)}</div>
+    </div>
+  }
+
   return createPortal(<div className="desktop-settings-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
     <div ref={ref} role="dialog" aria-modal="true" aria-labelledby="desktop-settings-title" className="desktop-settings-window" data-testid="desktop-settings-window">
       <aside className="desktop-settings-navigation">
         <div className="desktop-settings-search"><Search aria-hidden="true" /><input aria-label="搜索设置项" placeholder="搜索设置项" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
-        <nav aria-label="设置分类">{groups.map((group, index) => {
-          const expanded = searching || expandedGroup === group
-          const groupId = `desktop-settings-group-${index}`
-          return <div key={group} className="desktop-settings-group">
-            <button type="button" className="desktop-settings-group-label" aria-expanded={expanded} aria-controls={groupId} onClick={() => setExpandedGroup(expandedGroup === group ? '' : group)}>
-              <span>{group}</span>{expanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
-            </button>
-            <div id={groupId} className="desktop-settings-group-items" hidden={!expanded}>{visible.filter((item) => desktopSettingsGroup(item) === group).map((item) => <button key={item.path} type="button" aria-current={path === item.path ? 'page' : undefined} aria-description={item.tool ? '在主窗口打开' : undefined} onClick={() => navigate(item.path)} title={item.tool ? `${desktopSettingsEntryLabel(item)} · 在主窗口打开` : desktopSettingsEntryLabel(item)}><span>{desktopSettingsEntryLabel(item)}</span>{item.tool && <ArrowUpRight aria-hidden="true" />}</button>)}</div>
-          </div>
-        })}{!visible.length && <p className="desktop-settings-empty">没有匹配的设置项</p>}</nav>
+        <nav aria-label="设置分类">{basicGroups.map((group, index) => renderSettingsGroup(group, index))}{advancedVisible && <>
+          <div className="mx-3 mb-2 mt-2 border-t border-mist-200" data-testid="desktop-settings-advanced-separator" />
+          {renderSettingsGroup(ADVANCED_SETTINGS_GROUP, groups.indexOf(ADVANCED_SETTINGS_GROUP), true)}
+        </>}{!visible.length && <p className="desktop-settings-empty">没有匹配的设置项</p>}</nav>
       </aside>
       <section className="desktop-settings-pane">
         <header className="desktop-settings-heading"><div>

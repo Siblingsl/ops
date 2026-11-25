@@ -58,6 +58,10 @@ declare global {
       // OPT-U03（docs/43 §4）：小红书人工接管包——图片按序导出到本机临时目录并打开文件夹。
       // 参数只含 workId 与图片字节；返回值只含张数与安全文件名，本机绝对路径永不回传。
       openXhsManualImageFolder(input: DesktopXhsManualImageExportInput): Promise<DesktopXhsManualImageExportResult>
+      // OPT-U04（docs/43 §4）：平台重登 / 本机设置面板固定意图——主进程直接打开登录窗并派发面板，
+      // 业务页不再依赖会被拦截的 window.open（RC-03 桌面重登 null 的根治入口）。
+      openPlatformLogin(input: DesktopPlatformLoginInput): Promise<DesktopUiActionResult>
+      setLocalSettingsPanel(action: DesktopLocalSettingsAction): Promise<DesktopUiActionResult>
       // DEV-AI27-17（W17b，A12）：本机选窗器（枚举只在本机，handle 不透明）。
       listComputerWindows(): Promise<DesktopComputerWindowListResult>
       // DT-04（W17c / 27 §11.5.2）：UIA 主链路固定意图——结果按 C09 白名单逐控件校验，
@@ -131,6 +135,21 @@ export type DesktopXhsManualImageExportInput = {
 export type DesktopXhsManualImageExportResult =
   | { ok: false; code: string; message: string }
   | { ok: true; count: number; fileNames: string[] }
+
+// OPT-U04（docs/43 §4）：桌面平台登录与本机设置面板的固定意图。
+// 输入只含账号与平台 / 面板动作；返回值只允许 { ok: true } 或 { ok: false, code, message }。
+export type DesktopUiPlatform = 'wechat_mp' | 'xhs' | 'toutiao'
+
+export type DesktopPlatformLoginInput = {
+  accountId: string
+  platform: DesktopUiPlatform
+}
+
+export type DesktopLocalSettingsAction = 'connection' | 'ai' | 'account-device' | 'diagnostics' | 'detach' | 'close'
+
+export type DesktopUiActionResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true }
 
 // DEV-AI27-17（W17b，A12）：本机窗口摘要。handle 不透明，标题仅用于本机选择。
 // DEV-CU P5-2（用户选定方案①）：补 pid——observe/act 必填 pid，handle 不可逆无法反解；

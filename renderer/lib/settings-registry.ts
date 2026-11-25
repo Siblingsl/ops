@@ -74,18 +74,53 @@ export function desktopSettingsLabel(entry: SettingsEntry) {
   return entry.desktopLabel ?? entry.label
 }
 
-/** 桌面设置窗导航的五类分组。 */
-export type SettingsGroupName = '个人' | '当前账号' | '工作区' | '数据与工具' | '本机与系统'
+/** 桌面设置窗导航：5 大常用组 + 1 个折叠高级区（OPT-U04 / docs/43 §4）。 */
+export type SettingsGroupName =
+  | '账号与平台'
+  | 'AI 模型'
+  | '写作与风格'
+  | '团队与工作区'
+  | '本机客户端'
+  | '高级与诊断'
+
+/** 桌面设置窗固定渲染顺序：高级区永远最后，代码不依赖 settingsEntries 的书写顺序。 */
+export const SETTINGS_GROUP_ORDER: SettingsGroupName[] = [
+  '账号与平台', 'AI 模型', '写作与风格', '团队与工作区', '本机客户端', '高级与诊断',
+]
+
+/** 折叠高级区：默认收起，仅在用户手动展开、搜索中或当前项位于该组时展开。 */
+export const ADVANCED_SETTINGS_GROUP: SettingsGroupName = '高级与诊断'
 
 /**
- * 分组只由 scope/group 推导（GL-02）：设置窗渲染与验收脚本共用这一处，
- * 不要再各自维护「设置名 → 分组」的映射表。
+ * 分组只由这一处映射推导（GL-02）：设置窗渲染与验收脚本共用，28 项全部确定性命中，
+ * 不依赖 scope/group 的历史写法。冻结项与系统级工具统一落到高级区兜底。
  */
+const SETTINGS_GROUP_BY_PATH: Record<string, SettingsGroupName> = {
+  '/settings/accounts': '账号与平台',
+  '/settings/security': '账号与平台',
+  '/settings/models': 'AI 模型',
+  '/settings/agent': 'AI 模型',
+  '/settings/capabilities': 'AI 模型',
+  '/settings/budget': 'AI 模型',
+  '/settings/preferences': '写作与风格',
+  '/settings/skills': '写作与风格',
+  '/settings/memory': '写作与风格',
+  '/settings/words': '写作与风格',
+  '/settings/hot-sources': '写作与风格',
+  '/settings/daily': '写作与风格',
+  '/settings/members': '团队与工作区',
+  '/settings/export': '团队与工作区',
+  '/settings/trash': '团队与工作区',
+  '/settings/logs': ADVANCED_SETTINGS_GROUP,
+  '/settings/usage': ADVANCED_SETTINGS_GROUP,
+  '/settings/quality': ADVANCED_SETTINGS_GROUP,
+  '/settings/prompts': ADVANCED_SETTINGS_GROUP,
+  '/settings/admin': ADVANCED_SETTINGS_GROUP,
+}
+
 export function settingsGroupOf(entry: SettingsEntry): SettingsGroupName {
-  if (entry.scope === '个人') return '个人'
-  if (entry.scope === '当前账号') return '当前账号'
-  if (entry.scope === '此电脑') return '本机与系统'
-  return entry.group === '工作区设置' ? '工作区' : '数据与工具'
+  if (entry.scope === '此电脑') return '本机客户端'
+  return SETTINGS_GROUP_BY_PATH[entry.path] ?? ADVANCED_SETTINGS_GROUP
 }
 
 export function settingsEntryFor(pathname: string): SettingsEntry | undefined {

@@ -1452,6 +1452,15 @@
       ],
       "desktopNavGroups": [
         {
+          "label": "AI 助手",
+          "items": [
+            {
+              "path": "/agent",
+              "label": "AI 对话"
+            }
+          ]
+        },
+        {
           "label": "创作",
           "items": [
             {
@@ -1461,14 +1470,14 @@
               "end": true
             },
             {
-              "path": "/works",
-              "label": "作品",
-              "mobile": "作品"
-            },
-            {
               "path": "/topics",
               "label": "选题池",
               "mobile": "选题"
+            },
+            {
+              "path": "/works",
+              "label": "作品",
+              "mobile": "作品"
             },
             {
               "path": "/calendar",
@@ -1478,7 +1487,7 @@
           ]
         },
         {
-          "label": "资源",
+          "label": "资产与复盘",
           "items": [
             {
               "path": "/materials",
@@ -1488,12 +1497,7 @@
             {
               "path": "/images",
               "label": "图片库"
-            }
-          ]
-        },
-        {
-          "label": "运营",
-          "items": [
+            },
             {
               "path": "/ops",
               "label": "运营"
@@ -1958,6 +1962,14 @@
       "change": "added",
       "decision": "D-209",
       "reason": "REF41 A6/A7 默认开登记（对应 flag added 的另一半）"
+    },
+    {
+      "category": "shell",
+      "id": "desktopNavGroups",
+      "change": "changed",
+      "decision": "D-224",
+      "exception": false,
+      "reason": "OPT-U04：AI 对话上移主导航第一组，桌面侧栏收敛为 AI 助手/创作/资产与复盘三组（运营入口保留）"
     }
   ],
   "exceptions": [
