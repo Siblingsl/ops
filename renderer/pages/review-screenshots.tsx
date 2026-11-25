@@ -1,5 +1,6 @@
-import { Check, ScanText } from 'lucide-react'
+import { Check, ClipboardPaste, Loader2, ScanText } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import type { DragEvent as ReactDragEvent } from 'react'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
 import { Badge, Button, cn, Input, platformFormatLabel, Select } from '@/components/ui'
@@ -41,13 +42,20 @@ const matchText = (r: ShotRow) =>
     : r.match_type === 'hint' ? '截图里没有标题，默认为当前作品' : '没对上作品，请选择'
 
 // DEV-DR05（14 文档 4.4）：上传 1–9 张数据截图，模型识别后逐行核对、逐行导入；没有"全部导入"。
-export function ScreenshotImport({ accountId, platform, works, workId, onDone, label = '截图识别' }: {
+// OPT-U05：新增拖拽 / Ctrl+V 粘贴入口，全部复用既有 `/metrics/screenshots` 与逐行确认接口。
+export function ScreenshotImport({ accountId, platform, works, workId, onDone, label = '截图识别', variant = 'button', enableWindowPaste = false, highlightHint }: {
   accountId: string
   platform: Platform
   works: { id: string; title: string; content_format?: string }[]
   workId?: string
   onDone: () => void
   label?: string
+  /** 'dropzone' 是复盘页顶部常驻的拖拽 / 粘贴引导卡；默认 'button'，既有调用零改动。 */
+  variant?: 'button' | 'dropzone'
+  /** 只有页面唯一一张引导卡开启 window paste 监听，避免多个实例按一次 Ctrl+V 并发识别。 */
+  enableWindowPaste?: boolean
+  /** 个人号无 datacube / 小红书 / 未开自动同步时的场景说明。 */
+  highlightHint?: string
 }) {
   const input = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
@@ -55,19 +63,27 @@ export function ScreenshotImport({ accountId, platform, works, workId, onDone, l
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [previews, setPreviews] = useState<string[]>([])
   const [saving, setSaving] = useState<number | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const dragDepth = useRef(0)
   const fields = metricFields[platform]
   const ai = useAIStatus()
 
-  const pick = async () => {
+  // 点击选文件、拖拽释放、Ctrl+V 粘贴三种入口共用同一前置校验，避免任一路径绕过模型检查。
+  const ensureModelReady = async () => {
     if (ai && !ai.ready) {
       toast.error('还没有配置模型', { description: '截图识别需要模型。所有者可以在「设置 → 模型配置」用快速配置添加；也可以先手动录入。' })
-      return
+      return false
     }
     if (ai && !ai.vision_route && !(await confirm({
       title: '还没有指定图片识别模型',
       desc: '截图识别会使用默认模型；默认模型不支持图片输入时会识别失败。所有者可以在「设置 → 模型配置 → 快速配置」里填写图片识别模型。',
       confirmText: '仍要上传',
-    }))) return
+    }))) return false
+    return true
+  }
+
+  const pick = async () => {
+    if (!(await ensureModelReady())) return
     input.current?.click()
   }
 
@@ -102,6 +118,93 @@ export function ScreenshotImport({ accountId, platform, works, workId, onDone, l
     } finally {
       setBusy(false)
     }
+  }
+
+  // Windows 资源管理器拖拽、部分剪贴板来源会丢 MIME，只能回落到文件名；webp / gif 等其他图片格式一律不认。
+  const isSupportedShot = (file: File) => {
+    const mime = (file.type || '').toLowerCase()
+    if (mime === 'image/png' || mime === 'image/jpeg') return true
+    if (!mime || mime === 'application/octet-stream') return /\.(png|jpg|jpeg)$/i.test(file.name || '')
+    return false
+  }
+
+  // 拖拽、粘贴、选择文件共用同一套文件校验，识别请求仍然是既有的那一支。
+  // 选择文件这条路径的模型校验已由 pick() 提前完成，skipModelCheck 避免无 vision_route 时连弹两遍确认框。
+  const handleIncomingFiles = async (rawFiles: File[], skipModelCheck = false) => {
+    if (busy || !!upload) return
+    if (!rawFiles.length) return
+    const valid = rawFiles.filter(isSupportedShot)
+    if (!valid.length) {
+      toast.error('仅支持 PNG / JPEG 格式截图，请重新截取或转换后再试')
+      return
+    }
+    if (rawFiles.length > valid.length) toast.error('仅支持 PNG / JPEG 格式截图，请重新截取或转换后再试')
+    if (valid.length > MAX_SHOTS) {
+      toast.error(`一次最多识别 ${MAX_SHOTS} 张截图`)
+      return
+    }
+    if (!skipModelCheck && !(await ensureModelReady())) return
+    void recognize(valid)
+  }
+
+  // 粘贴监听挂在 window 上，闭包必须拿最新状态，否则一次识别后 busy/upload 会停留在旧值。
+  const liveRef = useRef({ busy, upload, handle: handleIncomingFiles })
+  useEffect(() => { liveRef.current = { busy, upload, handle: handleIncomingFiles } })
+
+  useEffect(() => {
+    if (!enableWindowPaste) return
+    // 输入框、可编辑区域、打开中的弹窗（粘贴回填 / 录入抽屉 / 核对弹窗）里的 Ctrl+V 绝不抢占。
+    const editing = (node: EventTarget | null) => {
+      const el = node instanceof HTMLElement ? node : (document.activeElement instanceof HTMLElement ? document.activeElement : null)
+      return !!el && (!!el.closest('input, textarea, [contenteditable="true"]') || !!el.closest('[role="dialog"]'))
+    }
+    const clipboardImages = (data: DataTransfer | null) => {
+      if (!data) return []
+      const files: File[] = []
+      const seen = new Set<string>()
+      const add = (file: File | null) => {
+        if (!file || !file.type.toLowerCase().startsWith('image/')) return
+        const key = `${file.name}|${file.size}|${file.lastModified}`
+        if (seen.has(key)) return
+        seen.add(key)
+        files.push(file)
+      }
+      Array.from(data.items ?? []).forEach((item) => { if (item.kind === 'file' && item.type.startsWith('image/')) add(item.getAsFile()) })
+      Array.from(data.files ?? []).forEach(add)
+      return files
+    }
+    const onPaste = (event: ClipboardEvent) => {
+      if (editing(event.target) || editing(document.activeElement)) return
+      const live = liveRef.current
+      if (live.busy || !!live.upload) return
+      const images = clipboardImages(event.clipboardData)
+      if (!images.length) return // 纯文本粘贴直接放过，不改动默认行为
+      event.preventDefault()
+      void live.handle(images)
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [enableWindowPaste])
+
+  const onDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  const onDragEnter = (event: ReactDragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    dragDepth.current += 1
+    setDragging(true)
+  }
+  const onDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    dragDepth.current = Math.max(0, dragDepth.current - 1)
+    if (dragDepth.current === 0) setDragging(false)
+  }
+  const onDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    dragDepth.current = 0
+    setDragging(false)
+    void handleIncomingFiles(Array.from(event.dataTransfer?.files ?? []))
   }
 
   const confirmRow = async (i: number) => {
@@ -149,9 +252,32 @@ export function ScreenshotImport({ accountId, platform, works, workId, onDone, l
 
   return (
     <>
-      <Button size="sm" variant="secondary" icon={<ScanText className="size-3.5" />} loading={busy} onClick={() => void pick()}>{label}</Button>
+      {variant === 'dropzone' ? (
+        <div data-testid="review-screenshot-dropzone" data-dragging={dragging ? 'true' : 'false'}
+          onDragOver={onDragOver} onDragEnter={onDragEnter} onDragLeave={onDragLeave} onDrop={onDrop}
+          className={cn('rounded-xl border border-dashed px-4 py-3.5 transition-colors',
+            dragging ? 'border-ink-400 bg-ink-50 ring-2 ring-ink-200' : 'border-mist-200 bg-white')}>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 text-[13.5px] font-medium text-mist-800">
+                <ClipboardPaste className="size-3.5 text-ink-600" />截图粘贴 / 拖拽一键识图录入
+              </div>
+              <p className="mt-1 text-[12.5px] leading-relaxed text-mist-500">
+                用微信 / QQ / Win+Shift+S 截完数据页后，直接在本页按 Ctrl+V 粘贴，或将 1–9 张 PNG/JPEG 截图拖到这里；识别后仍逐行核对确认，无「全部导入」。
+              </p>
+              {highlightHint && <p className="mt-1.5 rounded-md bg-ink-50 px-2.5 py-1.5 text-[12.5px] leading-relaxed text-ink-800">{highlightHint}</p>}
+            </div>
+            <Button size="sm" variant="secondary" icon={<ScanText className="size-3.5" />} loading={busy} onClick={() => void pick()}>选择截图文件</Button>
+          </div>
+          {busy
+            ? <p className="mt-2 flex items-center gap-1.5 text-[12px] text-ink-700"><Loader2 className="size-3.5 animate-spin" />正在识别截图数据…</p>
+            : dragging && <p className="mt-2 text-[12px] text-ink-700">松开即可识别，识别后仍逐行核对确认</p>}
+        </div>
+      ) : (
+        <Button size="sm" variant="secondary" icon={<ScanText className="size-3.5" />} loading={busy} onClick={() => void pick()}>{label}</Button>
+      )}
       <input ref={input} type="file" accept="image/png,image/jpeg" multiple hidden
-        onChange={(e) => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) void recognize(fs) }} />
+        onChange={(e) => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) void handleIncomingFiles(fs, true) }} />
       <Dialog open={!!upload} onClose={close} title="核对截图识别结果" width="max-w-5xl"
         desc="对照左边的截图逐行核对，改对数字后点「导入这一行」；没导入的行不会保存。"
         footer={<Button variant="ghost" onClick={close}>完成</Button>}>

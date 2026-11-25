@@ -699,6 +699,20 @@ export default function Review() {
   const desktopStats: [string, MetricKey][] = acc.platform === 'toutiao'
     ? [['近 7 天展现', 'impressions'], ['近 7 天阅读', 'reads'], ['点赞', 'likes'], ['收藏', 'favorites']]
     : [['近 7 天阅读', 'reads'], ['收藏', 'favorites'], ['分享', 'shares'], ['粉丝净增', 'follows_gained']]
+  // OPT-U05：个人号复盘零障碍。只在确实需要手动录入的场景置顶「截图粘贴 / 拖拽一键识图录入」，
+  // 已开启公众号 datacube 自动同步时保持界面清爽；viewer 只读角色不展示写入口。
+  const screenshotDropzoneReason = acc.platform === 'xhs' ? 'xhs'
+    : acc.platform === 'wechat_mp' && acc.datacube_state === 'no_permission' ? 'wechat_no_datacube'
+      : acc.platform === 'wechat_mp' && !acc.metrics_wechat_auto?.enabled ? 'wechat_no_auto'
+        : ''
+  const showScreenshotDropzone = canWrite && screenshotDropzoneReason !== ''
+  const screenshotHint = screenshotDropzoneReason === 'wechat_no_datacube'
+    ? '当前公众号无数据统计接口权限，直接 Ctrl+V 粘贴或拖入后台数据截图即可识别录入（与 CSV 表格导入并列）。'
+    : screenshotDropzoneReason === 'xhs'
+      ? '小红书创作者后台数据页截图可直接 Ctrl+V 粘贴或拖入识别，逐行核对后入库。'
+      : screenshotDropzoneReason === 'wechat_no_auto'
+        ? '当前未开启自动同步，可直接 Ctrl+V 粘贴或拖入数据截图快速录入。'
+        : ''
   const runReview = async () => {
     setRunning(true)
     try {
@@ -762,6 +776,13 @@ export default function Review() {
           <div className="desktop-review-stat" key={label}><small>{label}</small><strong>{summaryValue(key)}</strong></div>
         ))}
       </div>}
+      {showScreenshotDropzone && (
+        <div className="mb-5" data-testid="review-screenshot-dropzone-slot">
+          <ScreenshotImport variant="dropzone" enableWindowPaste accountId={acc.id} platform={acc.platform} works={rows}
+            highlightHint={screenshotHint}
+            onDone={() => { board.refetch(); inv(['board']); inv(['data-preferences', acc.id]) }} />
+        </div>
+      )}
       {desktopPresentation && <div className="desktop-review-board-heading">
         <h2>作品数据 · 发布后第 7 天</h2>
         <div className="flex flex-wrap items-center gap-3">{boardSortControls}{boardActions}</div>
