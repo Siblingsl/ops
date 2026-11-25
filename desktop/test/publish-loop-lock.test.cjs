@@ -5,6 +5,11 @@ const test = require('node:test');
 
 const { PublishLoopLock, PUBLISH_LOOP_LOCK_MAX_AGE_MS } = require('../.build/publish-loop-lock.js');
 
+const readLoopSources = () => [
+  fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'publish-loop.ts'), 'utf8'),
+  fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'platform-loop.ts'), 'utf8')
+].join('\n');
+
 test('发布锁：同一时刻只有一个持有者，重复 acquire 返回 null', () => {
   const lock = new PublishLoopLock();
   const first = lock.acquire();
@@ -45,7 +50,7 @@ test('发布锁：过期强制释放后，旧 tick 的 release 不能清掉新 t
 });
 
 test('发布循环源码守卫：锁复位不依赖 pageSession.close，且有超时收尸', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8');
+  const source = readLoopSources();
   assert.match(source, /new PublishLoopLock\(/);
   assert.match(source, /stopStuckPublishSession\(/);
   assert.match(source, /publishLock\.isExpired\(\)/);
@@ -57,7 +62,7 @@ test('发布循环源码守卫：锁复位不依赖 pageSession.close，且有�
 });
 
 test('采集循环源码守卫：发布锁占用时短延迟重试，不永久跳过 claim', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8');
+  const source = readLoopSources();
   const claimLoop = source.slice(source.indexOf('function startPlatformClaimLoop'), source.indexOf('function stopPlatformClaimLoop'));
   assert.match(claimLoop, /const scheduleClaimRetry = \(\) => \{/);
   assert.match(claimLoop, /claimRetryTimer = setTimeout\(/);

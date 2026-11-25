@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { loadFunction } = require('./support/source-function.cjs');
 
-const loadContentItem = () => loadFunction('src/main.ts', 'platformV2ContentItem');
+const loadContentItem = () => loadFunction('src/main/platform-collect.ts', 'platformV2ContentItem');
 const input = (body, extra = {}) => ({
   externalID: '6f0000000000000000000001', accountKey: 'xhs_user_id:fixture',
   contentRevision: 3, contentType: 'image_note',

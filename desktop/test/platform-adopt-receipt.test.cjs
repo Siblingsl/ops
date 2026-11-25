@@ -5,7 +5,10 @@ const test = require('node:test');
 
 const srcDir = path.join(__dirname, '..', 'src');
 const clientSrc = fs.readFileSync(path.join(srcDir, 'platform-client.ts'), 'utf8');
-const mainSrc = fs.readFileSync(path.join(srcDir, 'main.ts'), 'utf8');
+const mainSrc = [
+  fs.readFileSync(path.join(srcDir, 'main', 'platform-collect.ts'), 'utf8'),
+  fs.readFileSync(path.join(srcDir, 'main', 'platform-loop.ts'), 'utf8')
+].join('\n');
 
 // DEV-PS48 源码契约：客户端必须消费服务端回执里的 adopt_errors / adopt_reason。
 //

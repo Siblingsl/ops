@@ -11,9 +11,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { loadFunction } = require('./support/source-function.cjs');
 
-const loadStartPage = () => loadFunction('src/main.ts', 'platformV2StartPage');
-const loadUpperBound = () => loadFunction('src/main.ts', 'platformV2ScopeUpperBound');
-const loadCatalogItem = () => loadFunction('src/main.ts', 'platformV2CatalogItem');
+const loadStartPage = () => loadFunction('src/main/platform-collect.ts', 'platformV2StartPage');
+const loadUpperBound = () => loadFunction('src/main/platform-collect.ts', 'platformV2ScopeUpperBound');
+const loadCatalogItem = () => loadFunction('src/main/platform-collect.ts', 'platformV2CatalogItem');
 
 test('PS-T41：断点续采的起始页只认非负整数', () => {
   const startPage = loadStartPage();

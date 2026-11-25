@@ -143,7 +143,7 @@ test('DT-05: tick 返回本轮执行的命令数（退避判定输入，既有�
 
 test('DT-05: 主进程使用自适应间隔排程（源码契约）', () => {
   const fs = require('node:fs');
-  const mainSource = fs.readFileSync(require('node:path').join(__dirname, '..', 'src', 'main.ts'), 'utf8');
+  const mainSource = fs.readFileSync(require('node:path').join(__dirname, '..', 'src', 'main', 'executors.ts'), 'utf8');
   assert.ok(mainSource.includes('scheduleNextMs'), '主进程应使用 scheduleNextMs 滚动排程');
   assert.ok(mainSource.includes('BROWSER_EXECUTOR_IDLE_MAX_MS'), '应声明空闲退避上限常量');
   assert.ok(!mainSource.includes('setInterval(() => { void executor.tick(); }, BROWSER_EXECUTOR_INTERVAL_MS)'),
@@ -152,7 +152,7 @@ test('DT-05: 主进程使用自适应间隔排程（源码契约）', () => {
 
 test('DT-05: 环境变量可切回固定间隔（L2 回退分支存在）', () => {
   const fs = require('node:fs');
-  const mainSource = fs.readFileSync(require('node:path').join(__dirname, '..', 'src', 'main.ts'), 'utf8');
+  const mainSource = fs.readFileSync(require('node:path').join(__dirname, '..', 'src', 'main', 'executors.ts'), 'utf8');
   assert.ok(mainSource.includes('OPS_BROWSER_EXECUTOR_FIXED_INTERVAL_MS'),
     '应支持环境变量切回固定间隔（回退 L2，docs/33 12.2）');
 });

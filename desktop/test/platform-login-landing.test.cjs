@@ -66,7 +66,7 @@ test('PS-T39：读不到 URL 时回退到导航目标，不抛错', async () => 
 });
 
 test('PS-T40：落点判定必须把两个平台的登录页判成未登录', () => {
-  const isLoggedInLanding = loadFunction('src/main.ts', 'isLoggedInLanding');
+  const isLoggedInLanding = loadFunction('src/main/platform-collect.ts', 'isLoggedInLanding');
   // 小红书：/login 及其子路径都是未登录。
   assert.equal(isLoggedInLanding('xhs', 'https://creator.xiaohongshu.com/new/note-manager'), true);
   assert.equal(isLoggedInLanding('xhs', 'https://creator.xiaohongshu.com/login'), false);
@@ -85,7 +85,7 @@ test('PS-T40：落点判定必须把两个平台的登录页判成未登录', ()
 });
 
 test('PS-T40：登录落点判定只按域名与路径，不做内容嗅探', () => {
-  const source = readSource('src/main.ts');
+  const source = readSource('src/main/platform-collect.ts');
   const body = extractFunction(source, 'isLoggedInLanding');
   for (const forbidden of ['document.cookie', 'fetch(', 'innerText', 'querySelector', 'localStorage']) {
     assert.ok(!body.includes(forbidden), `落点判定不应包含 ${forbidden}`);
@@ -100,7 +100,7 @@ test('PS-T40：登录落点判定只按域名与路径，不做内容嗅探', ()
 // 采集路径因此走 login_required 终批，而不是继续翻页。
 test('CF-PS-03：JS 异步跳 login?redirectReason=401 后稳定 URL 必须判未登录', async () => {
   const waitForStableURL = loadFunction('src/platform-login.ts', 'waitForStableURL', ['delay']);
-  const isLoggedInLanding = loadFunction('src/main.ts', 'isLoggedInLanding');
+  const isLoggedInLanding = loadFunction('src/main/platform-collect.ts', 'isLoggedInLanding');
   const manager = 'https://creator.xiaohongshu.com/new/note-manager';
   const login = 'https://creator.xiaohongshu.com/login?source=&redirectReason=401';
   const session = sessionWithHrefs([manager, manager, login, login, login, login, login, login]);

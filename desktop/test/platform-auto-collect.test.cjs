@@ -4,7 +4,11 @@ const path = require('node:path');
 const test = require('node:test');
 
 const srcDir = path.join(__dirname, '..', 'src');
-const mainSrc = fs.readFileSync(path.join(srcDir, 'main.ts'), 'utf8');
+const mainSrc = [
+  fs.readFileSync(path.join(srcDir, 'main.ts'), 'utf8'),
+  fs.readFileSync(path.join(srcDir, 'main', 'platform-loop.ts'), 'utf8'),
+  fs.readFileSync(path.join(srcDir, 'main', 'platform-collect.ts'), 'utf8')
+].join('\n');
 const loginRuntimeSrc = fs.readFileSync(path.join(srcDir, 'platform-login-runtime.ts'), 'utf8');
 const clientSrc = fs.readFileSync(path.join(srcDir, 'desktop-client.ts'), 'utf8');
 const platformClientSrc = fs.readFileSync(path.join(srcDir, 'platform-client.ts'), 'utf8');
