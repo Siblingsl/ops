@@ -1,0 +1,24 @@
+{
+  "generated_at": "2026-11-26T03:22:57.989Z",
+  "app": {
+    "version": "44.9.1",
+    "electron": "44.9.1",
+    "node": "24.22.0",
+    "platform": "win32",
+    "architecture": "x64"
+  },
+  "service": "http://127.0.0.1:<port>",
+  "business_connection": "online",
+  "client": {
+    "signed_in": true,
+    "reauth_required": true,
+    "secure_storage_available": true,
+    "local_config_available": true,
+    "device_registered": false,
+    "model_count": 0,
+    "active_model_requests": 0,
+    "channel_state": "disconnected",
+    "mode": "server",
+    "route_revision": 0
+  }
+}
