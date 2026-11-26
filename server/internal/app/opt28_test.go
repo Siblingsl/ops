@@ -76,7 +76,7 @@ func TestOPT28WorkQueriesAndPushPreviewPayload(t *testing.T) {
 		route := chi.NewRouteContext()
 		route.URLParams.Add("id", id)
 		ctx := context.WithValue(context.Background(), chi.RouteCtxKey, route)
-		return context.WithValue(ctx, ctxMember, &identity{WorkspaceID: workspaceID})
+		return context.WithValue(ctx, ctxMember, &identity{WorkspaceID: workspaceID, Role: "owner"})
 	}
 	workResponse := httptest.NewRecorder()
 	workRequest := httptest.NewRequest("GET", "/api/v1/works/"+cardWork.ID.String(), nil).WithContext(requestContext(cardWork.ID.String()))

@@ -65,7 +65,7 @@ cleanup() {
     fi
   fi
   [[ -z "$runtime_compose" ]] || rm -f -- "$runtime_compose"
-  unset OPS_MASTER_KEY POSTGRES_PASSWORD OPS_PUBLIC_IP OPS_COOKIE_SECURE
+  unset OPS_MASTER_KEY POSTGRES_PASSWORD OPS_PUBLIC_IP OPS_COOKIE_SECURE OPS_COOKIE_SAMESITE
   exit "$status"
 }
 trap cleanup EXIT
@@ -78,6 +78,10 @@ export OPS_PUBLIC_IP=127.0.0.1
 export OPS_MASTER_KEY="$(openssl rand -base64 32 | tr -d '\n')"
 export POSTGRES_PASSWORD="$(openssl rand -hex 32)"
 export OPS_COOKIE_SECURE=0
+# 恢复演练只把临时应用发布到 127.0.0.1 回环端口，用 Lax 即可；
+# 否则 compose 默认 OPS_COOKIE_SAMESITE:-none 与这里强制 OPS_COOKIE_SECURE=0
+# 同时生效会被 config 校验判定为非法组合，应用直接退出。
+export OPS_COOKIE_SAMESITE=lax
 
 awk '
   { sub(/\r$/, "") }

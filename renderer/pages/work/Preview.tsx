@@ -7,7 +7,7 @@ import { AIFeedback } from '@/components/refs'
 import { Button, Card, cn, Notice } from '@/components/ui'
 import { aiError } from '@/lib/ai-error'
 import { errorMessage, get, patch, post } from '@/lib/api'
-import { assetHtml } from '@/lib/api-base'
+import { assetHtml, publicPreviewUrl } from '@/lib/api-base'
 import { fmtBytes } from '@/lib/format'
 import { CUSTOM_THEME_ID, customTheme, HTML_BYTE_LIMIT, HTML_CHAR_LIMIT, htmlStats, renderWechat, themeById, themes } from '@/lib/render'
 import { setCustomTheme } from '@/lib/custom-theme-state'
@@ -155,7 +155,7 @@ function WechatPreview() {
   const [themeId, setThemeId] = useState(work.theme === CUSTOM_THEME_ID ? CUSTOM_THEME_ID : themeById(work.theme).id)
   const allThemes = ct ? [...themes, { ...customTheme(ct), id: CUSTOM_THEME_ID, name: '我的主题', desc: '账号自定义主题，可在账号档案中调整' }] : themes
   const { html, chars, bytes } = useWechatHtml(work, themeId)
-  const previewURL = previewLink ? `${window.location.origin}/preview/${previewLink.token}` : ''
+  const previewURL = previewLink ? publicPreviewUrl(previewLink.token) : ''
   const over = chars >= HTML_CHAR_LIMIT || bytes >= HTML_BYTE_LIMIT
   const createPreviewLink = async () => {
     setCreatingPreviewLink(true)

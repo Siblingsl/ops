@@ -8,7 +8,7 @@ import { BackfillForm, PostPushTodos } from '@/components/backfill'
 import { PublishStatePanel } from '@/components/publish-state'
 import { Button, Card, Empty, HumanGate, Notice, PageLoading, Textarea } from '@/components/ui'
 import { ApiError, errorMessage, get, post, rawRequest } from '@/lib/api'
-import { assetUrl } from '@/lib/api-base'
+import { assetUrl, publicPreviewUrl } from '@/lib/api-base'
 import { copyText, fmtTime } from '@/lib/format'
 import type { Work } from '@/lib/types'
 import { useCanWrite } from '@/lib/session'
@@ -252,7 +252,7 @@ export function ToutiaoPack({ work, setWork, refresh }: { work: Work; setWork: (
       })
     } finally { setShareBusy(false) }
   }
-  const shareURL = shareLink ? `${window.location.origin}/preview/${shareLink.token}` : ''
+  const shareURL = shareLink ? publicPreviewUrl(shareLink.token) : ''
 
   return (
     <main className="mx-auto w-full max-w-[1200px] px-4 py-6 sm:px-6 sm:py-8 2xl:max-w-[1400px]">

@@ -14,6 +14,16 @@ export function apiUrl(path: string): string {
 }
 
 /**
+ * publicPreviewUrl 返回公开预览页的绝对地址（二维码与分享链接共用）。
+ * 打包桌面端渲染在 ops-desktop://business 自定义协议下，origin 不是可扫码地址，
+ * 必须用构建期注入的 API 域名；只有本地同源开发态（apiBase 为空）才回退当前 origin。
+ */
+export function publicPreviewUrl(token: string): string {
+  const origin = apiBase() || (typeof window !== 'undefined' ? window.location.origin : '')
+  return `${origin}/preview/${token}`
+}
+
+/**
  * assetUrl 把后端返回的相对资产地址（/api/v1/assets/...）拼成可访问地址。
  * 后端所有资产 URL 都是相对路径（assets.go、comic.go 等），跨源时必须拼基址；
  * 已经是绝对地址（外链图片、data: URL）的原样返回。

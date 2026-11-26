@@ -32,6 +32,10 @@ func (s *Server) todayPushCount(ctx context.Context, accountID uuid.UUID) (int, 
 }
 
 func (s *Server) pushPreview(w http.ResponseWriter, r *http.Request) error {
+	// RC-17 / D1：预览是写入草稿的前置数据，权限须与写入一致，viewer 只读不能读取。
+	if err := s.requireEditor(r.Context()); err != nil {
+		return err
+	}
 	m, err := s.workMetaFromPath(r)
 	if err != nil {
 		return err

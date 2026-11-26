@@ -63,7 +63,7 @@ export default function Push() {
   const canManage = me?.role === 'owner' || me?.role === 'editor'
   // D-048：图文卡片与漫画一样写入图片消息草稿。
   const comic = work.content_format === 'comic' || work.content_format === 'card_post'
-  const pv = useQuery({ queryKey: ['push-preview', work.id, work.status, work.revision], queryFn: () => get<PushPreview>(`/works/${work.id}/wechat/push-preview`), enabled: work.platform === 'wechat_mp' })
+  const pv = useQuery({ queryKey: ['push-preview', work.id, work.status, work.revision], queryFn: () => get<PushPreview>(`/works/${work.id}/wechat/push-preview`), enabled: work.platform === 'wechat_mp' && canWrite })
   const { html, chars, bytes } = useWechatHtml(work)
   const htmlTooLarge = !comic && (chars >= HTML_CHAR_LIMIT || bytes >= HTML_BYTE_LIMIT)
   const [fields, setFields] = useState<WechatDefaults | null>(null)
@@ -95,6 +95,26 @@ export default function Push() {
             </div>
           </Card>
           <div className="mt-6"><ConversionLinkCard work={work} canManage={canWrite} /></div>
+        </div>
+      </>
+    )
+  }
+  // D1：viewer 只读不能写入草稿，后端 push-preview 也会返回 403；
+  // 这里不再发出注定失败的请求，直接给只读说明与返回预览的出口。
+  if (me && !canWrite) {
+    return (
+      <>
+        <WorkHeaderAction>
+          <Button size="sm" variant="secondary" onClick={() => nav(`/works/${work.id}/preview`)}>看排版</Button>
+        </WorkHeaderAction>
+        <div className="mx-auto max-w-2xl px-6 py-12">
+          <Card className="p-6">
+            <h2 className="font-display text-[18px] font-bold text-mist-900">观察者只读，不能写入草稿</h2>
+            <p className="mt-1.5 text-[13px] leading-relaxed text-mist-500">当前账号是观察者，只能浏览作品内容与排版；写入公众号草稿需要 owner 或 editor 权限。</p>
+            <div className="mt-5">
+              <Button variant="primary" onClick={() => nav(`/works/${work.id}/preview`)}>返回作品预览</Button>
+            </div>
+          </Card>
         </div>
       </>
     )
