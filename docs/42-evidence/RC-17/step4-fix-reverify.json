@@ -1,0 +1,239 @@
+{
+  "meta": {
+    "task": "RC-17 FIX / Step B：线上真实复验 D8 与 D1",
+    "title": "公网复验 254dab49：桌面公开预览公网 HTTPS 链接（D8）与 viewer 禁止 push-preview / 前端只读卡（D1）",
+    "executed_at": "2026-11-26T19:53:42+08:00/2026-11-26T20:06:03+08:00",
+    "base_url": "https://ops-api.88813888.xyz",
+    "repo_head": "254dab499d063c920ca106c720c2d45aa869aefc",
+    "production_commit_deployed": "254dab4",
+    "environment": {
+      "os": "Windows 11 10.0.26200",
+      "node": "22.23.2",
+      "packaged_electron": "44.9.1 / OPS Desktop 0.1.1",
+      "desktop_user_data": "%TEMP%\\ops-verify05-fix-userdata",
+      "cdp_port": 19226
+    },
+    "tooling": [
+      "Node.js 22.23.2 fetch（undici，AbortSignal.timeout）",
+      "Playwright 1.64：connectOverCDP 连接打包 Electron；独立无浏览器会话凭据的 BrowserContext 手机视口 390×844、DPR 2",
+      "打包 Electron 44.9.1 / OPS Desktop 0.1.1"
+    ],
+    "prohibited_tools": [
+      "Windows curl.exe 全程未使用"
+    ],
+    "data_protection": {
+      "isolated_desktop_user_data": "%TEMP%\\ops-verify05-fix-userdata（已删除）",
+      "real_user_data_untouched": true,
+      "existing_production_data_untouched": "未修改或删除线上任何既有用户、工作区、作品；仅新增带时间后缀的复验账号与其测试账号/作品",
+      "test_data_prefix": "rc17fix_owner_1958 / rc17fix_editor_1958 / rc17fix_viewer_1958 / RC17FIX-公众号-1958 / RC17FIX-D1-D8-复验稿-1958",
+      "secrets_in_this_file": "none：无明文密码、浏览器会话凭据值、会话令牌、有效 preview token、明文公网 IP、主机名或本机用户绝对路径"
+    },
+    "scope_note": "本步仅线上实测与取证；未修改 server/renderer/desktop/shared/deploy 任何源码，未修改 docs/43、docs/08、docs/35，未 git commit / git push。"
+  },
+  "task1_package": {
+    "command": "pnpm package（desktop/）",
+    "exit_code": 0,
+    "renderer_build": "build:desktop（vite --mode desktop）成功，2062 modules transformed",
+    "desktop_api_base_injected": "https://ops-api.88813888.xyz（desktop 模式构建期注入，运行期二维码 href 已实测验证）",
+    "packaged_exe": "desktop/out/OPS Desktop-win32-x64/OPS Desktop.exe",
+    "exe_bytes": 246588416,
+    "exe_last_write": "2026-11-26T19:57:22+08:00",
+    "git_diff_business_dirs": {
+      "paths": "server/ renderer/ desktop/ shared/ deploy/",
+      "result": "empty"
+    },
+    "verdict": "PASS"
+  },
+  "task2_d1": {
+    "accounts": {
+      "owner": "rc17fix_owner_1958",
+      "editor": "rc17fix_editor_1958",
+      "viewer": "rc17fix_viewer_1958",
+      "registration": "POST /api/v1/auth/register，全部 200；editor/viewer 先各自注册，再经产品邀请码加入 owner 工作区"
+    },
+    "workspace": {
+      "id": "687c5d20-c977-4743-9fcf-602317f09ac9",
+      "name": "rc17fix_owner_1958 的工作区",
+      "owner_role": "owner"
+    },
+    "platform_account": {
+      "id": "ff5a08dd-a749-451f-a05d-33447329a8c2",
+      "platform": "wechat_mp",
+      "content_format": "long_article",
+      "name": "RC17FIX-公众号-1958"
+    },
+    "work": {
+      "id": "81278416-2cab-4352-94b3-90081219db67",
+      "title": "RC17FIX-D1-D8-复验稿-1958",
+      "revision": 1,
+      "revision_after_content": 4,
+      "section_id": "82491b4c-64b5-4d61-957f-ae7bd1b5f822",
+      "section_heading": "01 复验正文",
+      "body_chars": 56
+    },
+    "invite_flow": {
+      "editor_invite_role": "editor",
+      "viewer_invite_role": "viewer",
+      "editor_join_status": 200,
+      "viewer_join_status": 200,
+      "editor_final_role": "editor",
+      "viewer_final_role": "viewer",
+      "all_joined_same_workspace": true
+    },
+    "api_matrix": {
+      "request": "GET /api/v1/works/81278416-2cab-4352-94b3-90081219db67/wechat/push-preview",
+      "owner": {
+        "http_status": 200,
+        "error_code": null,
+        "credential_state": "not_configured"
+      },
+      "editor": {
+        "http_status": 200,
+        "error_code": null,
+        "credential_state": "not_configured"
+      },
+      "viewer": {
+        "http_status": 403,
+        "error_code": "forbidden",
+        "error_message": "观察者仅可浏览，不能修改内容"
+      },
+      "assertions": {
+        "owner_200": true,
+        "editor_200": true,
+        "viewer_403_forbidden": true,
+        "all_pass": true
+      }
+    },
+    "desktop_viewer": {
+      "client": "desktop/out/OPS Desktop-win32-x64/OPS Desktop.exe，--user-data-dir=%TEMP%\\ops-verify05-fix-userdata",
+      "login": "viewer 登录后默认进入其自有工作区（role=owner），随后经产品接口 POST /workspaces/{shared}/switch 切到复验工作区，刷新后 role=viewer",
+      "route": "/works/81278416-2cab-4352-94b3-90081219db67/push",
+      "heading_text": "观察者只读，不能写入草稿",
+      "button_text": "返回作品预览",
+      "load_failure_text_count": 0,
+      "push_preview_request_count": 0,
+      "api_requests_in_window": 47,
+      "console_error_count": 0,
+      "page_error_count": 0,
+      "body_contains_role_banner": "当前为观察者：可浏览内容，不能创建、编辑或推送。"
+    },
+    "screenshot": {
+      "path": "docs/42-evidence/RC-17/08-d1-viewer-push-readonly.png",
+      "bytes": 104718,
+      "pixel_size": "1803x1020",
+      "sha256": "5f52e7bd3f5627794fe238f05f83e3fc0a1fd555d15ea2ee47e9716b30889653"
+    },
+    "verdict": "PASS：viewer API 403 forbidden；打包桌面端渲染只读卡片且未发出任何 push-preview 请求"
+  },
+  "task3_d8": {
+    "client": "同一隔离打包客户端：先 POST /auth/logout 退出 viewer，再在登录页以 owner 登录",
+    "owner_workspace_matches": true,
+    "route": "/works/81278416-2cab-4352-94b3-90081219db67/preview",
+    "preview_link_post": {
+      "request": "POST /api/v1/works/{id}/preview-link",
+      "http_status": 200
+    },
+    "qr": {
+      "rendered": true,
+      "svg_count": 1,
+      "aria_label": "手机扫码预览二维码"
+    },
+    "open_link": {
+      "text": "打开手机预览",
+      "href_protocol": "https",
+      "href_host": "ops-api.88813888.xyz",
+      "href_prefix": "https://ops-api.88813888.xyz/preview/",
+      "href_prefix_matches": true,
+      "contains_ops_desktop_scheme": false,
+      "href_masked": "https://ops-api.88813888.xyz/preview/<token:215chars>",
+      "token_length": 215,
+      "token_value_written_to_repo": false
+    },
+    "screenshot": {
+      "path": "docs/42-evidence/RC-17/07-d8-desktop-qr-public-https.png",
+      "bytes": 89781,
+      "pixel_size": "1803x1020",
+      "sha256": "6dd056a8aefb8f28ab1c0d4cca59f0c4af75c4b4b6f8d0ca2bc1c35c68a066a8",
+      "scope": "打包桌面端排版预览页：作品标题与「手机扫码预览」卡片标题、生成按钮、二维码、「打开手机预览」链接均在可视区"
+    },
+    "mobile_without_credentials": {
+      "context": "全新 Playwright BrowserContext，未携带任何浏览器会话凭据",
+      "viewport": "390x844",
+      "device_scale_factor": 2,
+      "http_status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "referrer_policy": "no-referrer",
+      "cache_control": "no-store",
+      "x_content_type_options": "nosniff",
+      "title_visible": true,
+      "body_visible": true,
+      "body_chars": 161,
+      "console_error_count": 0
+    },
+    "console": {
+      "preview_phase_error_count": 0,
+      "page_error_count": 0,
+      "logout_transition_note": "退出 viewer 的会话失效阶段出现过 1 条 401 console 记录；不计入预览页阶段，预览页阶段为 0"
+    },
+    "verdict": "PASS：二维码已渲染，链接精确指向公网 https://ops-api.88813888.xyz/preview/，无 ops-desktop://；无会话凭据手机视口 200 且 no-referrer"
+  },
+  "cleanup": {
+    "close_method": "WM_CLOSE 触发原生「退出 OPS Desktop」确认框，点击「退出客户端」完成优雅退出",
+    "residual_processes": 0,
+    "cdp_port_19226": "closed",
+    "isolated_userdata_deleted": true,
+    "isolated_userdata_files_before_delete": 94,
+    "real_user_data": {
+      "real_ops_desktop_dir": {
+        "file_count": 19374,
+        "latest_write": "2026-11-26T12:58:40+08:00",
+        "untouched": true
+      },
+      "real_ops_dir": {
+        "file_count": 1129,
+        "latest_write": "2026-11-26T13:23:48+08:00",
+        "untouched": true
+      }
+    },
+    "stray_workspace_artifact_removed": "debug.log（Electron crashpad 噪声，294B，启动期生成，已删除）",
+    "verdict": "PASS"
+  },
+  "sanitization_scan": {
+    "run_at": "2026-11-26T20:11:00+08:00",
+    "json_valid": true,
+    "line_endings": "LF",
+    "forbidden_literals": 0,
+    "public_ip_literals": 0,
+    "long_token_literals": 0,
+    "png_forbidden_strings": 0,
+    "new_files_count": 3,
+    "source_diff_business_dirs": "empty",
+    "result": "CLEAN"
+  },
+  "verdict": {
+    "task1_package": "PASS",
+    "task2_d1": "PASS",
+    "task3_d8": "PASS",
+    "cleanup": "PASS",
+    "repo_source_diff": "none",
+    "docs_42_43_08_35_modified": "only new evidence files under docs/42-evidence/RC-17; no existing doc modified",
+    "committed": false,
+    "pending": "none：P1（真实公众号凭据白名单出站）与 P2（宿主机定时备份 cron）均已实测通过，RC-17 正式闭环"
+  },
+  "evidence_files": [
+    {
+      "path": "docs/42-evidence/RC-17/07-d8-desktop-qr-public-https.png",
+      "bytes": 89781,
+      "sha256": "6dd056a8aefb8f28ab1c0d4cca59f0c4af75c4b4b6f8d0ca2bc1c35c68a066a8"
+    },
+    {
+      "path": "docs/42-evidence/RC-17/08-d1-viewer-push-readonly.png",
+      "bytes": 104718,
+      "sha256": "5f52e7bd3f5627794fe238f05f83e3fc0a1fd555d15ea2ee47e9716b30889653"
+    },
+    {
+      "path": "docs/42-evidence/RC-17/step4-fix-reverify.json",
+      "note": "本文件自身；自哈希不写入自身，避免循环引用"
+    }
+  ]
+}
