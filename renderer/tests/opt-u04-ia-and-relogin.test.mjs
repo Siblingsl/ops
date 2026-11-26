@@ -114,7 +114,7 @@ test('OPT-U04：settingsGroupOf 对 28 项逐一命中且无漏项，冻结项�
     '/settings/admin=高级与诊断',
     '/settings/plugins=高级与诊断',
     '/settings/desktop-ai=高级与诊断',
-    '/settings/mail=高级与诊断',
+    '/settings/mail=团队与工作区',
     '/settings/crawl=高级与诊断',
     '/settings/local/connection=本机客户端',
     '/settings/local/ai=本机客户端',

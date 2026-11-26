@@ -50,7 +50,8 @@ export const settingsEntries: SettingsEntry[] = [
   { path: '/settings/words', label: '敏感词库', group: '工作区设置', scope: '工作区', icon: ShieldAlert, keywords: '自定义词 通用词' },
   { path: '/settings/hot-sources', label: '热点来源', group: '工作区设置', scope: '工作区', icon: Activity, keywords: 'RSS 联网 搜索 订阅' },
   { path: '/settings/daily', label: '每日推荐设置', group: '工作区设置', scope: '工作区', icon: Activity, keywords: '后台 时间 主推 备选' },
-  { path: '/settings/mail', label: '邀请邮件', group: '工作区设置', scope: '工作区', icon: Users, keywords: 'SMTP 邮箱', webHidden: true, frozenHidden: true },
+  // D-225：解冻邀请邮件入口（保留 webHidden），归入「团队与工作区」，供 RC-11 小团队邀请邮件使用。
+  { path: '/settings/mail', label: '邀请邮件', group: '工作区设置', scope: '工作区', icon: Users, keywords: 'SMTP 邮箱', webHidden: true },
   { path: '/settings/export', label: '数据导出', group: '数据与工具', scope: '工作区', icon: Gauge, keywords: 'CSV Markdown 下载' },
   { path: '/settings/prompts', label: '提示词模板', desktopLabel: '提示词模板与测试集', group: '数据与工具', scope: '工作区', icon: ScrollText, keywords: '独立工具', tool: true },
   { path: '/settings/logs', label: '操作日志', group: '数据与工具', scope: '工作区', icon: ScrollText, keywords: '独立工具', tool: true },
@@ -109,6 +110,7 @@ const SETTINGS_GROUP_BY_PATH: Record<string, SettingsGroupName> = {
   '/settings/hot-sources': '写作与风格',
   '/settings/daily': '写作与风格',
   '/settings/members': '团队与工作区',
+  '/settings/mail': '团队与工作区',
   '/settings/export': '团队与工作区',
   '/settings/trash': '团队与工作区',
   '/settings/logs': ADVANCED_SETTINGS_GROUP,

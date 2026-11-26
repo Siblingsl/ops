@@ -88,11 +88,15 @@ test('D-136 Electron 设置窗按 OPT-U04 5+1 分组折叠导航并展开搜索�
   await expect(nav.getByRole('button', { name: '写作与风格', exact: true })).toHaveAttribute('aria-expanded', 'false')
   await expect(nav.getByRole('button', { name: '平台账号与凭证', exact: true })).toBeVisible()
 
+  // D-225：邀请邮件解冻并归入「团队与工作区」，展开后可见并可直达 /settings/mail。
+  await nav.getByRole('button', { name: '团队与工作区', exact: true }).click()
+  await expect(nav.getByRole('button', { name: '团队与工作区', exact: true })).toHaveAttribute('aria-expanded', 'true')
+  await expect(nav.getByRole('button', { name: '邀请邮件', exact: true })).toBeVisible()
+
   await advanced.getByRole('button', { name: '高级与诊断', exact: true }).click()
   await expect(advanced.getByRole('button', { name: '高级与诊断', exact: true })).toHaveAttribute('aria-expanded', 'true')
   await expect(advanced.getByRole('button', { name: '完整用量报表', exact: true })).toBeVisible()
-  // D-224 软冻结项不属于可见导航，即使高级区已展开也不出现。
-  await expect(nav.getByRole('button', { name: '邀请邮件', exact: true })).toHaveCount(0)
+  // D-224 仍需保持软冻结的三项不属于可见导航，即使高级区已展开也不出现。
   await expect(nav.getByRole('button', { name: '桌面 AI 策略', exact: true })).toHaveCount(0)
 
   await settings.getByRole('textbox', { name: '搜索设置项' }).fill('RSS')
@@ -104,8 +108,7 @@ test('D-136 Electron 设置窗按 OPT-U04 5+1 分组折叠导航并展开搜索�
   await expect(nav.getByRole('button', { name: '客户端连接', exact: true })).toBeVisible()
   await expect(nav.getByRole('button', { name: '本机 AI 配置', exact: true })).toBeVisible()
   await settings.getByRole('textbox', { name: '搜索设置项' }).fill('邀请邮件')
-  await expect(nav.getByRole('button', { name: '邀请邮件', exact: true })).toHaveCount(0)
-  await expect(settings.getByText('没有匹配的设置项')).toBeVisible()
+  await expect(nav.getByRole('button', { name: '邀请邮件', exact: true })).toBeVisible()
   await settings.getByRole('textbox', { name: '搜索设置项' }).fill('桌面 AI 策略')
   await expect(nav.getByRole('button', { name: '桌面 AI 策略', exact: true })).toHaveCount(0)
   await expect(settings.getByText('没有匹配的设置项')).toBeVisible()
@@ -149,7 +152,7 @@ test('D-126 全部配置分类、搜索、工具分流与窄窗主题', async ({
   await selectDesktopSetting(page, '登录与安全')
   await expect(settings.getByLabel('当前密码')).toBeVisible()
   await expect(settings.getByLabel('SMTP 主机')).toHaveCount(0)
-  // OPT-S03 / D-224：邀请邮件已软冻结，导航不可见，但 /settings/mail 深链仍须可用。
+  // D-225：邀请邮件导航可见，且可按 D-224 深链语义直达 /settings/mail。
   await page.goto('/settings/mail')
   await expect(settings.getByRole('heading', { name: '邀请邮件', exact: true })).toBeVisible()
   await expect(settings.getByLabel('SMTP 主机')).toBeVisible()

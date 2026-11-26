@@ -36,25 +36,26 @@ test('OPT-S03：SettingsEntry 提供 frozenHidden 可选字段，未落库到类
   assert.match(registry, /frozenHidden\?: boolean/, '缺少 frozenHidden?: boolean 字段声明')
 })
 
-test('OPT-S03：仅 plugins / desktop-ai / mail / crawl 四个真实条目被标记软冻结', () => {
-  const frozen = ['/settings/plugins', '/settings/desktop-ai', '/settings/mail', '/settings/crawl']
+test('OPT-S03：仅 plugins / desktop-ai / crawl 三个真实条目被标记软冻结（D-225 解冻 mail）', () => {
+  const frozen = ['/settings/plugins', '/settings/desktop-ai', '/settings/crawl']
   for (const path of frozen) {
     const chunk = entryChunk(literal, path)
     assert.ok(chunk, `settingsEntries 缺少条目 ${path}`)
     assert.match(chunk, /frozenHidden: true/, `${path} 未标记 frozenHidden: true`)
   }
   const allFrozen = [...literal.matchAll(/frozenHidden: true/g)].length
-  assert.equal(allFrozen, frozen.length, 'frozenHidden 标记数必须正好 4 项，不得误伤其他设置项')
+  assert.equal(allFrozen, frozen.length, 'frozenHidden 标记数必须正好 3 项，不得误伤其他设置项')
 })
 
-test('OPT-S03：未引入 feishu / parser-diagnostics 条目，memory 与 skills 不冻结', () => {
+test('OPT-S03：未引入 feishu / parser-diagnostics 条目，memory / skills / mail 不冻结', () => {
   for (const path of ['/settings/feishu', '/settings/parser-diagnostics']) {
     assert.equal(entryChunk(literal, path), null, `${path} 本不在 settingsEntries，不得新增`)
   }
-  for (const path of ['/settings/memory', '/settings/skills']) {
+  // D-225 / RC-11：恢复小团队邀请邮件入口，/settings/mail 解冻并归入「团队与工作区」。
+  for (const path of ['/settings/memory', '/settings/skills', '/settings/mail']) {
     const chunk = entryChunk(literal, path)
     assert.ok(chunk, `settingsEntries 缺少条目 ${path}`)
-    assert.doesNotMatch(chunk, /frozenHidden/, `${path} 不得被软冻结（D-151 / OPT-W02 已放开）`)
+    assert.doesNotMatch(chunk, /frozenHidden/, `${path} 不得被软冻结（D-151 / OPT-W02 / D-225 已放开）`)
   }
 })
 
@@ -73,7 +74,7 @@ test('OPT-S03：desktopSettingsPanel 不参与冻结过滤，冻结项深链仍�
   assert.ok(start >= 0, '缺少 desktopSettingsPanel')
   const body = desktopSettings.slice(start, desktopSettings.indexOf('\n}', start) + 2)
   assert.match(body, /return entry\?\.tool \|\| entry\?\.desktopHidden \? undefined : entry/)
-  assert.doesNotMatch(body, /frozenHidden/, 'desktopSettingsPanel 加入 frozenHidden 会让 /settings/desktop-ai 与 /settings/mail 深链失效')
+  assert.doesNotMatch(body, /frozenHidden/, 'desktopSettingsPanel 加入 frozenHidden 会让 /settings/desktop-ai、/settings/plugins、/settings/crawl 深链失效')
 })
 
 test('OPT-S03：命令面板冻结项对管理员同样不下发', () => {
