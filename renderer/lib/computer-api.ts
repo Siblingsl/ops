@@ -9,6 +9,7 @@ import type {
   DesktopComputerUiaInvalidateResult,
   DesktopComputerUiaObserveResult,
 } from './desktop-presentation'
+import { getDesktopBridge } from './platform-bridge'
 import { ApiError, del, errorMessage, get, post } from './api'
 
 /** §4.2 十六个错误码，顺序与规格表一致；字面不得增删改。 */
@@ -201,7 +202,7 @@ export const computerLocal = {
     pid: number; target_summary: string; grant_id: string; generation: number
     max_depth?: number; root_ref?: string; interactive_only?: boolean; compact?: boolean
   }): Promise<DesktopComputerUiaObserveResult> {
-    const bridge = typeof window === 'undefined' ? undefined : window.opsDesktopUI
+    const bridge = getDesktopBridge()
     if (!bridge?.observeComputerUIA) {
       return { ok: false, code: 'computer_ui_unsupported', message: '需要 OPS Desktop 客户端：界面观察只在本机进行。' }
     }
@@ -211,14 +212,14 @@ export const computerLocal = {
     pid: number; ref: string; grant_id: string; generation: number
     action: string; value?: string | null; target_summary: string
   }): Promise<DesktopComputerUiaActResult> {
-    const bridge = typeof window === 'undefined' ? undefined : window.opsDesktopUI
+    const bridge = getDesktopBridge()
     if (!bridge?.actComputerUIA) {
       return { ok: false, code: 'computer_ui_unsupported', message: '需要 OPS Desktop 客户端：界面操作只在本机执行。' }
     }
     return bridge.actComputerUIA(input)
   },
   async invalidate(grantId: string): Promise<DesktopComputerUiaInvalidateResult> {
-    const bridge = typeof window === 'undefined' ? undefined : window.opsDesktopUI
+    const bridge = getDesktopBridge()
     if (!bridge?.invalidateComputerUIA) {
       return { ok: false, code: 'computer_ui_unsupported', message: '需要 OPS Desktop 客户端：快照只能在本机撤销。' }
     }

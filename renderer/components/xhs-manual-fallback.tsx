@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { Button } from './ui'
 import { errorMessage as readError, get, rawRequest } from '@/lib/api'
 import { copyText } from '@/lib/format'
+import { hasDesktopBridgeMethod, openXhsManualImageFolder } from '@/lib/platform-bridge'
 
 // OPT-U03（docs/43 §4）：小红书填草稿失败「一键人工接管兜底包」。
 // 只提供「复制标题 / 复制正文（含内联 #话题）/ 打开有序图片文件夹」三件事；
@@ -251,8 +252,7 @@ export function XhsManualFallbackBar({ workId, errorCode, errorMessage, state }:
     setBusy('images')
     try {
       // 非 Electron 浏览器态没有本机文件夹能力：直接下发布包 zip，不先白下载最多 18 张原图。
-      const desktop = window.opsDesktopUI
-      if (!desktop?.openXhsManualImageFolder) {
+      if (!hasDesktopBridgeMethod('openXhsManualImageFolder')) {
         await downloadXhsPackZip(workId)
         toast.info('当前不是桌面端，已改为下载发布包 zip；解压后按编号顺序上传即可')
         return
@@ -285,7 +285,7 @@ export function XhsManualFallbackBar({ workId, errorCode, errorMessage, state }:
         toast.error(skipped > 0 ? '没有可导出的有效图片（0 字节或超过 20MB），请检查素材' : '图片下载失败，请稍后重试')
         return
       }
-      const result = await desktop.openXhsManualImageFolder({ workId, files })
+      const result = await openXhsManualImageFolder({ workId, files })
       if (result.ok) toast.success(`已按序导出 ${result.count} 张图片并打开文件夹（01_封面 起）`)
       else toast.error(result.message)
     } catch (e: unknown) {

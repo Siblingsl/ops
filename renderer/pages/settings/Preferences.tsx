@@ -10,6 +10,7 @@ import type { UserPrefs } from '@/lib/types'
 import { ghostKeys, usePrefs, useSavePrefs } from '@/lib/v3'
 import { useSettingsDraft } from '@/lib/desktop-settings'
 import { isElectronDesktop, setDesktopMotion, type DesktopClientHealth, type DesktopUpdateStatus } from '@/lib/desktop-presentation.js'
+import { checkDesktopUpdate, getDesktopUpdateStatus, hasDesktopBridgeMethod, invokeDesktopInBrowse, subscribeDesktopClientHealth, subscribeDesktopUpdateStatus } from '@/lib/platform-bridge'
 import DesktopUpdateDialog from '@/components/desktop-update-dialog'
 
 function Row({ title, desc, children }: { title: string; desc?: React.ReactNode; children: React.ReactNode }) {
@@ -55,21 +56,20 @@ export default function Preferences() {
   const [checkingUpdate, setCheckingUpdate] = useState(false)
   useEffect(() => {
     if (!desktop) return
-    const unsubscribe = window.opsDesktopUI?.onClientHealth(setHealth)
+    const unsubscribe = subscribeDesktopClientHealth(setHealth)
     const syncMotion = (event: Event) => setReducedMotion(Boolean((event as CustomEvent<boolean>).detail))
     window.addEventListener('ops:desktop-motion', syncMotion)
-    return () => { unsubscribe?.(); window.removeEventListener('ops:desktop-motion', syncMotion) }
+    return () => { unsubscribe(); window.removeEventListener('ops:desktop-motion', syncMotion) }
   }, [desktop])
   useEffect(() => {
     if (!desktop) return
-    const ui = window.opsDesktopUI
-    if (!ui?.onUpdateStatus) return
+    if (!hasDesktopBridgeMethod('onUpdateStatus')) return
     let alive = true
-    const unsubscribe = ui.onUpdateStatus(setUpdateStatus)
-    void ui.getUpdateStatus?.().then((result) => {
+    const unsubscribe = subscribeDesktopUpdateStatus(setUpdateStatus)
+    void getDesktopUpdateStatus().then((result) => {
       if (alive && result.ok) setUpdateStatus(result.status)
     }).catch(() => undefined)
-    return () => { alive = false; unsubscribe?.() }
+    return () => { alive = false; unsubscribe() }
   }, [desktop])
   useSettingsDraft(false, save.isPending)
   const set = (p: Partial<UserPrefs>) => save.mutate(p, { onError: (e) => toast.error(errorMessage(e)), onSuccess: () => toast.success('已保存', { duration: 1200 }) })
@@ -88,14 +88,13 @@ export default function Preferences() {
     : '尚未检查'
   const currentVersionText = updateStatus?.currentVersion ? `v${updateStatus.currentVersion}` : '未知'
   const checkUpdate = async () => {
-    const ui = window.opsDesktopUI
-    if (!ui?.checkUpdate) {
+    if (!hasDesktopBridgeMethod('checkUpdate')) {
       toast.info('当前环境不支持客户端更新检查')
       return
     }
     setCheckingUpdate(true)
     try {
-      const result = await ui.checkUpdate()
+      const result = await checkDesktopUpdate()
       if (!result.ok) {
         toast.error(result.message)
         return
@@ -221,8 +220,8 @@ function InBrowseDataCard() {
   const [busy, setBusy] = useState(false)
   const refresh = useCallback(async () => {
     try {
-      const s = await window.opsDesktopUI?.invokeInBrowse('inbrowse:data-stats')
-      if (s && typeof s === 'object') setStats(s as { cacheBytes: number | null; cookiesCount: number | null })
+      const result = await invokeDesktopInBrowse('inbrowse:data-stats')
+      if (result.ok && result.data && typeof result.data === 'object') setStats(result.data as { cacheBytes: number | null; cookiesCount: number | null })
     } catch { /* Web 或旧宿主：卡片本就不渲染 */ }
   }, [])
   useEffect(() => { void refresh() }, [refresh])
@@ -238,7 +237,11 @@ function InBrowseDataCard() {
     if (!ok) return
     setBusy(true)
     try {
-      await window.opsDesktopUI?.invokeInBrowse('inbrowse:clear-data', kind)
+      const result = await invokeDesktopInBrowse('inbrowse:clear-data', kind)
+      if (!result.ok) {
+        toast.error(result.message)
+        return
+      }
       toast.success(kind === 'cache' ? '已清理浏览缓存' : '已清理浏览 Cookies 与站点数据', { duration: 1600 })
       await refresh()
     } catch (e) {

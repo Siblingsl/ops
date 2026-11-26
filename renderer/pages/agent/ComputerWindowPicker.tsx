@@ -6,6 +6,7 @@ import { Button, cn } from '@/components/ui'
 import { post } from '@/lib/api'
 import { computerApi, computerErrorHint } from '@/lib/computer-api'
 import type { ComputerGrantAccepted } from '@/lib/computer-api'
+import { hasDesktopBridgeMethod, listDesktopComputerWindows } from '@/lib/platform-bridge'
 import {
   applyComputerObserve,
   beginComputerAuthorize,
@@ -61,15 +62,14 @@ export function ComputerWindowPicker({
   const [observe, setObserve] = useState(initialComputerObserveState)
 
   const load = useCallback(async () => {
-    const bridge = window.opsDesktopUI
-    if (!bridge?.listComputerWindows) {
+    if (!hasDesktopBridgeMethod('listComputerWindows')) {
       setState('unsupported')
       setMessage('需要 OPS Desktop 客户端：窗口枚举只在本机进行，浏览器版无法读取本机窗口。')
       return
     }
     setState('loading')
     setMessage('')
-    const result = await bridge.listComputerWindows()
+    const result = await listDesktopComputerWindows()
     if (!result.ok) {
       setState('failed')
       setMessage(result.message)

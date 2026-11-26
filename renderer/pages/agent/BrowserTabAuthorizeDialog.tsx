@@ -5,6 +5,7 @@ import { Dialog } from '@/components/dialog'
 import { Button, cn } from '@/components/ui'
 import { ApiError, errorMessage, post } from '@/lib/api'
 import type { DesktopBrowserTab } from '@/lib/desktop-presentation'
+import { hasDesktopBridgeMethod, listDesktopBrowserTabs } from '@/lib/platform-bridge'
 
 // DEV-AI27-A30：浏览器标签授权弹窗（浏览器侧镜像 A12 选窗器，27 §13 发送时序）。
 // 决策 A：模型请求标签时才弹窗——租约只有 30 秒，发消息前预创建会在模型真正操作前过期。
@@ -62,8 +63,7 @@ export function BrowserTabAuthorizeDialog({
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
-    const bridge = window.opsDesktopUI
-    if (!bridge?.listBrowserTabs) {
+    if (!hasDesktopBridgeMethod('listBrowserTabs')) {
       setState('unsupported')
       setMessage('需要 OPS Desktop 客户端：标签列表只在本机读取，浏览器版无法枚举本机 Chrome 标签。')
       return
@@ -80,7 +80,7 @@ export function BrowserTabAuthorizeDialog({
       }
     } catch { /* 绑定读取失败留给授权时报错，不阻断标签枚举 */ }
     setBindings(readyBindings)
-    const result = await bridge.listBrowserTabs()
+    const result = await listDesktopBrowserTabs()
     if (!result.ok) {
       setState('failed')
       setMessage(result.message)

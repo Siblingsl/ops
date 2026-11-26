@@ -41,6 +41,7 @@ const shell = read('layout/Shell.tsx')
 const host = read('layout/DesktopSettingsHost.tsx')
 const connection = read('components/platform-connection.tsx')
 const preferences = read('pages/settings/Preferences.tsx')
+const bridge = read('lib/platform-bridge.ts')
 
 test('OPT-U04：桌面侧栏第一组为「AI 助手 → AI 对话」，三组顺序与成员确定', async () => {
   const { buildSnapshot } = await import('../../scripts/g02-structure-guard.mjs')
@@ -147,7 +148,11 @@ test('OPT-U04：DesktopSettingsHost 按固定顺序渲染 5+1 分组，高级区
 
 test('OPT-U04：本机设置面板优先走固定 IPC，window.open 只保留旧宿主降级一处', () => {
   assert.match(host, /function syncLocalSettingsPanel\(action: 'connection' \| 'ai' \| 'account-device' \| 'diagnostics' \| 'detach' \| 'close'\)/)
-  assert.match(host, /window\.opsDesktopUI\.setLocalSettingsPanel\(action\)/)
+  // POLISH-01 双层断言：宿主走平台桥封装，桥接层再落到固定 IPC。
+  assert.match(host, /from '@\/lib\/platform-bridge'/)
+  assert.match(host, /hasDesktopBridgeMethod\('setLocalSettingsPanel'\)/)
+  assert.match(host, /setDesktopLocalSettingsPanel\(action\)/)
+  assert.match(bridge, /\.setLocalSettingsPanel\(action\)/)
   // 1 处定义 + 4 处调用点（进入面板、离开 detach/close、离开前 detach、取消后恢复）。
   assert.ok((host.match(/syncLocalSettingsPanel\(/g) ?? []).length >= 5, '四处 window.open 调用必须全部替换')
   assert.equal((host.match(/window\.open\(/g) ?? []).length, 1, '只允许 helper 内的旧宿主降级 window.open')
@@ -156,13 +161,16 @@ test('OPT-U04：本机设置面板优先走固定 IPC，window.open 只保留旧
 
 test('OPT-U04：平台重登 async 优先走 opsDesktopUI.openPlatformLogin，失败如实提示并保留旧宿主深链', () => {
   assert.match(connection, /const openPlatformLogin = async \(\) => \{/)
-  assert.match(connection, /window\.opsDesktopUI\?\.openPlatformLogin && loginPlatform/)
-  assert.match(connection, /const res = await window\.opsDesktopUI\.openPlatformLogin\(\{ accountId, platform: loginPlatform \}\)/)
+  // POLISH-01 双层断言：优先分支走平台桥封装（且该封装先于旧宿主深链出现），桥接层再落到 IPC。
+  assert.match(connection, /from '@\/lib\/platform-bridge'/)
+  assert.match(connection, /hasDesktopBridgeMethod\('openPlatformLogin'\) && loginPlatform/)
+  assert.match(connection, /const res = await openDesktopPlatformLogin\(\{ accountId, platform: loginPlatform \}\)/)
+  assert.match(bridge, /\.openPlatformLogin\(input\)/)
   assert.match(connection, /if \(!res\.ok\) \{[\s\S]{0,80}toast\.error\(res\.message\)[\s\S]{0,40}return/)
   // 旧宿主降级的自定义协议深链原样保留（platform-ui.test.mjs 仍按该字符串断言）。
   assert.match(connection, /window\.open\(`ops-desktop:\/\/ui\/platform-login\/\$\{accountId\}\/\$\{platform\}`/)
   // 优先分支必须在 window.open 之前出现：先取 IPC，再决定是否降级。
-  assert.ok(connection.indexOf('window.opsDesktopUI?.openPlatformLogin') < connection.indexOf('window.open(`ops-desktop://ui/platform-login'))
+  assert.ok(connection.indexOf('openDesktopPlatformLogin({') < connection.indexOf('window.open(`ops-desktop://ui/platform-login'))
   // 成功后统一派发本机设置事件，让账号与设备面板接管扫码。
   assert.match(connection, /window\.dispatchEvent\(new CustomEvent\(DESKTOP_LOCAL_SETTINGS_REQUEST, \{ detail: \{ panel: 'account-device' \} \}\)\)/)
 })

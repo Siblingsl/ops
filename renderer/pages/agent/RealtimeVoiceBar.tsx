@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Square, Waves } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { ApiError, patch, post } from '@/lib/api'
+import { getDesktopInBrowseInvoker, isDesktopBridgeAvailable, subscribeDesktopRealtimeEvent } from '@/lib/platform-bridge'
 
 // A2（27 §11.4.5 / V08）：实时语音渲染器。
 // 分工：渲染器只做麦克风采集、PCM 编解码与播放；WebSocket 与供应商密钥全在桌面主进程
@@ -109,7 +110,7 @@ export function RealtimeVoiceBar({ conversationId, enabled, onInsert }: {
   }, [])
 
   const releaseBridge = useCallback(async (endSession: boolean) => {
-    try { await window.opsDesktopUI?.invokeInBrowse('voice:realtime-stop') } catch { /* 已断开 */ }
+    try { await getDesktopInBrowseInvoker()?.('voice:realtime-stop') } catch { /* 已断开 */ }
     if (endSession && sessionRef.current) {
       const id = sessionRef.current
       sessionRef.current = null
@@ -119,7 +120,7 @@ export function RealtimeVoiceBar({ conversationId, enabled, onInsert }: {
 
   useEffect(() => () => {
     teardownAudio()
-    void window.opsDesktopUI?.invokeInBrowse('voice:realtime-stop')
+    void getDesktopInBrowseInvoker()?.('voice:realtime-stop')
     // 离开页面时尽力结束会话，避免下次 start 撞上 409（失败也不阻塞卸载）。
     if (sessionRef.current) {
       const id = sessionRef.current
@@ -129,8 +130,8 @@ export function RealtimeVoiceBar({ conversationId, enabled, onInsert }: {
   }, [teardownAudio])
 
   useEffect(() => {
-    if (!enabled || !window.opsDesktopUI) return
-    return window.opsDesktopUI.onRealtimeEvent((event: BridgeEvent) => {
+    if (!enabled || !isDesktopBridgeAvailable()) return
+    return subscribeDesktopRealtimeEvent((event: BridgeEvent) => {
       switch (event.type) {
         case 'state':
           if (event.state === 'ready' && phaseRef.current === 'connecting') setPhaseBoth('live')
@@ -198,7 +199,7 @@ export function RealtimeVoiceBar({ conversationId, enabled, onInsert }: {
       sessionRef.current = session.id
       const token = await post<{ token: string; proxy_url?: string; model: string; provider: string; proxy_endpoint: string }>(
         `/agent/voice-sessions/${session.id}/realtime-token`, {})
-      const result = await window.opsDesktopUI?.invokeInBrowse('voice:realtime-start', {
+      const result = await getDesktopInBrowseInvoker()?.('voice:realtime-start', {
         session_id: session.id, token: token.token,
         proxy_url: token.proxy_url, proxy_endpoint: token.proxy_endpoint,
         model: token.model, provider: token.provider,
@@ -233,7 +234,7 @@ export function RealtimeVoiceBar({ conversationId, enabled, onInsert }: {
             const value = Math.max(-1, Math.min(1, chunk[i]))
             pcm[i] = value < 0 ? value * 0x8000 : value * 0x7fff
           }
-          void window.opsDesktopUI?.invokeInBrowse('voice:realtime-append', { dataBase64: int16ToBase64(pcm) })
+          void getDesktopInBrowseInvoker()?.('voice:realtime-append', { dataBase64: int16ToBase64(pcm) })
           offset += CHUNK_SAMPLES
         }
         pendingRef.current = merged.slice(offset)
@@ -259,7 +260,7 @@ export function RealtimeVoiceBar({ conversationId, enabled, onInsert }: {
     playback?.sources.forEach((source) => { try { source.stop() } catch { /* 已结束 */ } })
     playback?.sources.clear()
     if (playback) playback.nextTime = 0
-    try { await window.opsDesktopUI?.invokeInBrowse('voice:realtime-interrupt') } catch { /* 无活动响应 */ }
+    try { await getDesktopInBrowseInvoker()?.('voice:realtime-interrupt') } catch { /* 无活动响应 */ }
   }, [])
 
   const reset = useCallback(() => {
@@ -272,7 +273,7 @@ export function RealtimeVoiceBar({ conversationId, enabled, onInsert }: {
     setPhaseBoth('idle')
   }, [setPhaseBoth, teardownAudio])
 
-  if (!enabled || !window.opsDesktopUI) return null
+  if (!enabled || !isDesktopBridgeAvailable()) return null
 
   const mm = String(Math.floor(elapsed / 60)).padStart(2, '0')
   const ss = String(elapsed % 60).padStart(2, '0')

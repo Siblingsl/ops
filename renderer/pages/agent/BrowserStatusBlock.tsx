@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui'
 import { ApiError, errorMessage, post } from '@/lib/api'
 import type { DesktopBrowserPairingSnapshot } from '@/lib/desktop-presentation'
+import { confirmDesktopBrowserPairing, getDesktopBrowserPairingState, hasDesktopBridgeMethod } from '@/lib/platform-bridge'
 
 // DEV-AI27-07（W07）：工作视图"浏览器"页签的连接状态块（27 §5.3/§5.5）。
 // 状态来源只有两个真实事实：工作区开关（bootstrap.features.browser_workspace）与
@@ -174,9 +175,8 @@ function PairingWizard() {
   const readState = useCallback(async (): Promise<
     { kind: 'unsupported' } | { kind: 'bridge-down' } | { kind: 'ok'; snapshot: DesktopBrowserPairingSnapshot }
   > => {
-    const bridge = window.opsDesktopUI
-    if (!bridge?.getBrowserPairingState) return { kind: 'unsupported' }
-    const result = await bridge.getBrowserPairingState()
+    if (!hasDesktopBridgeMethod('getBrowserPairingState')) return { kind: 'unsupported' }
+    const result = await getDesktopBrowserPairingState()
     if (!result.ok) return { kind: 'bridge-down' }
     return { kind: 'ok', snapshot: result.snapshot }
   }, [])
@@ -239,9 +239,8 @@ function PairingWizard() {
       if (r.kind !== 'ok') throw new Error('浏览器桥状态不可用；请重试。')
       let extensionId = r.snapshot.extension_instance_id
       if (r.snapshot.state === 'pairing') {
-        const bridge = window.opsDesktopUI
-        if (!bridge?.confirmBrowserPairing) throw new Error('需要 OPS Desktop 客户端。')
-        const confirmed = await bridge.confirmBrowserPairing()
+        if (!hasDesktopBridgeMethod('confirmBrowserPairing')) throw new Error('需要 OPS Desktop 客户端。')
+        const confirmed = await confirmDesktopBrowserPairing()
         if (!confirmed.ok) throw new Error(confirmed.message || '桥侧配对确认失败；短码可能已过期，等待扩展重连后重试。')
         extensionId = confirmed.extension_instance_id
       } else if (r.snapshot.state !== 'paired') {

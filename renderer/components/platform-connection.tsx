@@ -11,6 +11,7 @@ import type { PlatformAccountSnapshot, PlatformAvailability, PlatformConnection,
 import { useMe } from '@/lib/session'
 import { DESKTOP_LOCAL_SETTINGS_REQUEST, useSettingsDraft } from '@/lib/desktop-settings'
 import { requestDesktopPlatformIntent } from '@/lib/desktop-platform-intent'
+import { hasDesktopBridgeMethod, openDesktopPlatformLogin } from '@/lib/platform-bridge'
 import { getPlatformCollectionDisabledInfo, useDesktopCapabilities } from '@/lib/desktop-capabilities'
 import { PlatformSyncDetails } from './platform-sync-details'
 import { Badge, Button, Card, CardHeader, cn, Field, MoreMenu, Notice, platformLabel, roleReadOnlyHint, Switch } from './ui'
@@ -425,8 +426,8 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
   // 只有旧宿主没有 openPlatformLogin 时才退回自定义协议深链。失败如实提示，不静默吞错。
   const openPlatformLogin = async () => {
     const loginPlatform = platform === 'wechat_mp' || platform === 'xhs' || platform === 'toutiao' ? platform : null
-    if (window.opsDesktopUI?.openPlatformLogin && loginPlatform) {
-      const res = await window.opsDesktopUI.openPlatformLogin({ accountId, platform: loginPlatform })
+    if (hasDesktopBridgeMethod('openPlatformLogin') && loginPlatform) {
+      const res = await openDesktopPlatformLogin({ accountId, platform: loginPlatform })
       if (!res.ok) {
         toast.error(res.message)
         return
@@ -490,7 +491,7 @@ export function PlatformConnectionCard({ accountId, platform, canManage, role = 
   const availability = availabilityLabel[connection.availability]
   const syncReason = (kind: 'account_sync' | 'metrics_refresh'): string | null => {
     if (!desktopPresentation) return '请在 OPS 桌面客户端发起本机平台读取。'
-    if (!window.opsDesktopUI?.onPlatformIntentResult) return kind === 'account_sync'
+    if (!hasDesktopBridgeMethod('onPlatformIntentResult')) return kind === 'account_sync'
       ? '当前 OPS 桌面客户端不支持账号同步，请重启客户端后重试。'
       : '当前 OPS 桌面客户端不支持指标刷新，请重启客户端后重试。'
     if (adminOverride) return '系统管理员代入工作区时只能查看，不能发起平台读取。'

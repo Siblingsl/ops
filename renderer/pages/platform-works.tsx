@@ -8,6 +8,7 @@ import { errorMessage, get, post, put } from '@/lib/api'
 import { relTime } from '@/lib/format'
 import { contentStateLabel, fieldNameLabel, fieldStateLabel, platformErrorCopy } from '@/lib/platform-errors'
 import { requestDesktopPlatformIntent } from '@/lib/desktop-platform-intent'
+import { hasDesktopBridgeMethod } from '@/lib/platform-bridge'
 import { useMe } from '@/lib/session'
 import type { Account, PlatformConnection, PlatformSyncOperation, PlatformWorkMirror, PlatformWorkMirrorListItem, PlatformWorkMirrorPage, Work, WorkListItem } from '@/lib/types'
 
@@ -324,7 +325,7 @@ export function PlatformWorksView({ account, canWrite }: { account: Account; can
     Number.isFinite(accountSync.counters.failed) && accountSync.counters.failed > 0 ? `未完成 ${accountSync.counters.failed} 项` : '',
   ].filter(Boolean).join(' · ')
   const metricRefreshReason = !desktopPresentation ? '请在 OPS 桌面客户端刷新平台指标。'
-    : !window.opsDesktopUI?.onPlatformIntentResult ? '当前 OPS 桌面客户端不支持指标刷新，请重启客户端后重试。'
+    : !hasDesktopBridgeMethod('onPlatformIntentResult') ? '当前 OPS 桌面客户端不支持指标刷新，请重启客户端后重试。'
     : me?.admin_override ? '系统管理员代入工作区时只能查看，不能读取平台数据。'
       : !canWrite ? '当前角色为只读，不能发起平台指标刷新。'
         : account.status !== 'active' ? '此账号已停用，不能刷新平台指标。'

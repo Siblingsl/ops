@@ -4,9 +4,10 @@ import { toast } from 'sonner'
 
 import { post } from '@/lib/api'
 import { tabLabel } from '@/lib/agent-ui.js'
+import { getDesktopInBrowseInvoker, subscribeDesktopInBrowseSnapshot } from '@/lib/platform-bridge'
 
 // DEV-AI27-08（W08，D-172）：工作视图"应用内"浏览 UI（27 §7.8 功能表第一批）。
-// 固定意图经 window.opsDesktopUI?.invokeInBrowse（preload 桥），渲染器无 view 对象。
+// 固定意图经平台桥的 invokeInBrowse（preload 桥），渲染器无 view 对象。
 // 状态来源为主进程快照推送（inbrowse-snapshot），UI 不伪造加载/URL 状态。
 // 导航代数与 detach 状态由主进程维护；detached 时显示"已被浮层遮蔽"如实状态。
 
@@ -84,16 +85,8 @@ const pickerErrorLabel: Record<string, string> = {
   invalid_result: '没有读到有效元素，请重试。',
 }
 
-type InvokeFn = (channel: string, payload?: unknown) => Promise<unknown>
-
-function useInBrowseInvoke(): InvokeFn | null {
-  // desktop-presentation.d.ts 声明的桥；Web 端无此对象（T-AI27-22：Web 无本机能力）。
-  const bridge = (window as unknown as { opsDesktopUI?: { invokeInBrowse?: InvokeFn } }).opsDesktopUI
-  return bridge?.invokeInBrowse ?? null
-}
-
 export function InBrowsePanel({ visible, conversationId, onTabsChange }: { visible: boolean; conversationId?: string; onTabsChange?: (count: number) => void }) {
-  const invoke = useInBrowseInvoke()
+  const invoke = getDesktopInBrowseInvoker()
   const viewportRef = useRef<HTMLDivElement>(null)
   const [snapshot, setSnapshot] = useState<InBrowseSnapshot>(EMPTY)
   const [addressInput, setAddressInput] = useState('')
@@ -115,11 +108,7 @@ export function InBrowsePanel({ visible, conversationId, onTabsChange }: { visib
   useEffect(() => {
     if (!invoke || !visible) return
     // 订阅主进程快照推送。
-    const off = (window as unknown as { opsDesktopUI?: { onInBrowseSnapshot?: (cb: (s: InBrowseSnapshot) => void) => () => void } })
-      .opsDesktopUI?.onInBrowseSnapshot
-    if (off) {
-      return off((s) => setSnapshot(s))
-    }
+    return subscribeDesktopInBrowseSnapshot<InBrowseSnapshot>((s) => setSnapshot(s))
   }, [invoke, visible])
 
   // BR-07：把 DOM 占位区同步给主进程 WebContentsView；rAF 合并 resize，宽度为 0 时跳过。

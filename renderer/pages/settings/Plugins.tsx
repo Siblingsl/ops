@@ -3,6 +3,7 @@ import { KeyRound, Loader2 } from 'lucide-react'
 import { Button, Notice } from '@/components/ui'
 import { api } from '@/lib/api'
 import type { DesktopMcpOAuthInput, DesktopMcpOAuthStatus } from '@/lib/desktop-presentation'
+import { getDesktopMcpOAuthStatus, hasDesktopBridgeMethod, isUnsupportedBridgeResult, revokeDesktopMcpOAuth, startDesktopMcpOAuth, validateDesktopMcpConnection } from '@/lib/platform-bridge'
 
 // DEV-AI27-14 第二批（W14b）：插件/MCP 管理页（27 §11.2.1）。
 // 连接列表/添加（stdio/http）/状态机操作（enable/disable/revoke）/目录/最近错误。
@@ -85,11 +86,10 @@ function OAuthSection({ conn, onRevoked }: { conn: PluginConnection; onRevoked: 
   const [message, setMessage] = useState('')
 
   const load = useCallback(async () => {
-    const bridge = window.opsDesktopUI
-    if (!bridge?.getMcpOAuthStatus || !conn.url) return
+    if (!hasDesktopBridgeMethod('getMcpOAuthStatus') || !conn.url) return
     const s = readStoredOAuth(conn.id)
     setStored(s)
-    setStatus(await bridge.getMcpOAuthStatus(oauthInput(conn, s.client_id, s.scopes)))
+    setStatus(await getDesktopMcpOAuthStatus(oauthInput(conn, s.client_id, s.scopes)))
   }, [conn.id, conn.url])
 
   useEffect(() => {
@@ -107,31 +107,29 @@ function OAuthSection({ conn, onRevoked }: { conn: PluginConnection; onRevoked: 
     setBusy(true)
     setMessage('')
     writeStoredOAuth(conn.id, clientId.trim(), scopes.trim())
-    const bridge = window.opsDesktopUI
-    if (!bridge?.startMcpOAuth) {
+    if (!hasDesktopBridgeMethod('startMcpOAuth')) {
       setMessage('需要 OPS Desktop 客户端：授权只在桌面端进行。')
       setBusy(false)
       return
     }
-    const result = await bridge.startMcpOAuth(oauthInput(conn, clientId.trim(), scopes.trim()))
+    const result = await startDesktopMcpOAuth(oauthInput(conn, clientId.trim(), scopes.trim()))
     setBusy(false)
     if (result.ok) {
       setShowForm(false)
       setMessage('')
     } else {
-      setMessage(result.reason ? `授权未完成：${result.reason}` : '授权未完成。')
+      setMessage(isUnsupportedBridgeResult(result) ? result.message : result.reason ? `授权未完成：${result.reason}` : '授权未完成。')
     }
     await load()
   }
 
   const revoke = async () => {
     setBusy(true)
-    const bridge = window.opsDesktopUI
-    if (!bridge?.revokeMcpOAuth) {
+    if (!hasDesktopBridgeMethod('revokeMcpOAuth')) {
       setBusy(false)
       return
     }
-    await bridge.revokeMcpOAuth(oauthInput(conn, stored.client_id, stored.scopes))
+    await revokeDesktopMcpOAuth(oauthInput(conn, stored.client_id, stored.scopes))
     setBusy(false)
     setMessage('')
     await load()
@@ -243,12 +241,11 @@ export default function Plugins() {
   const validate = async (conn: PluginConnection) => {
     setBusy(true)
     try {
-      const bridge = window.opsDesktopUI
-      if (!bridge?.validateMcpConnection) {
+      if (!hasDesktopBridgeMethod('validateMcpConnection')) {
         setError('需要 OPS Desktop 客户端：MCP 连接只在本机验证（stdio 子进程与远程握手都在桌面端进行）。')
         return
       }
-      const result = await bridge.validateMcpConnection({
+      const result = await validateDesktopMcpConnection({
         connection_id: conn.id,
         transport: conn.transport,
         command: conn.command,
@@ -284,11 +281,10 @@ export default function Plugins() {
     setBusy(true)
     try {
       // A3 第二片：撤销连接前先清本机 OAuth 令牌（连接删除即令牌零残留）。
-      const bridge = window.opsDesktopUI
       const conn = connections.find((item) => item.id === id)
-      if (bridge?.revokeMcpOAuth && conn?.transport === 'http' && conn.url) {
+      if (hasDesktopBridgeMethod('revokeMcpOAuth') && conn?.transport === 'http' && conn.url) {
         const stored = readStoredOAuth(id)
-        await bridge.revokeMcpOAuth(oauthInput(conn, stored.client_id, stored.scopes))
+        await revokeDesktopMcpOAuth(oauthInput(conn, stored.client_id, stored.scopes))
       }
       await api('DELETE', `/agent/plugin-connections/${id}`)
       await reload()

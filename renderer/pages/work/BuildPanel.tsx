@@ -5,6 +5,8 @@ import { ApiError, errorMessage, get, post, rawRequest } from '@/lib/api'
 import { customTheme, renderWechatSections, createStableWechatHTML, themes as renderThemes, type FrozenWechatImage, type Theme } from '@/lib/render'
 import { builtinThemeResources, wechatHTMLRendererContractVersion } from '@/lib/cx-render-contract'
 import { OFFICE_TEMPLATE_VERSION, type OfficeKind } from '@/lib/office-export'
+import type { CXLongImageCaptureResult } from '@/lib/desktop-presentation.js'
+import { captureDesktopLongImage, hasDesktopBridgeMethod } from '@/lib/platform-bridge'
 import type { Section, Work } from '@/lib/types'
 import type { WorkSaveCoordinator } from './work-save'
 
@@ -234,12 +236,12 @@ export function BuildPanel({ work, coordinator, setWork, canWrite }: { work: Wor
       const stableArtifact = await uploadArtifact(buildID, 'stable_html', `revision-${snapshot.work.revision}-stable.html`, new TextEncoder().encode(stableHTML), 'text/html; charset=utf-8')
       byKind.set('stable_html', stableArtifact)
     }
-    let longImageReceipt: Extract<NonNullable<Awaited<ReturnType<NonNullable<Window['opsDesktopUI']>['captureLongImage']>>>, { ok: true }> | null = null
+    let longImageReceipt: Extract<CXLongImageCaptureResult, { ok: true }> | null = null
     if (requestedTargets.includes('long_image')) {
-      if (!stableHTML || !window.opsDesktopUI?.captureLongImage) throw new Error('当前桌面客户端不支持安全长图，请升级客户端后重试。')
+      if (!stableHTML || !hasDesktopBridgeMethod('captureLongImage')) throw new Error('当前桌面客户端不支持安全长图，请升级客户端后重试。')
       const source = mountLongImageSource(buildID, build.source_hash, stableHTML)
       try {
-        const capture = await window.opsDesktopUI.captureLongImage(buildID)
+        const capture = await captureDesktopLongImage(buildID)
         if (!capture.ok) throw new Error(capture.message)
         if (capture.buildId !== buildID || capture.sourceHash !== build.source_hash || capture.width !== 780 || capture.dpr !== 2) {
           throw new Error('长图与当前冻结构建版本不一致，原稿保持不变。')

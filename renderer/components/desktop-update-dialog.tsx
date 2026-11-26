@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { Button, Notice } from '@/components/ui'
 import { Dialog } from '@/components/dialog'
 import type { DesktopUpdateStatus } from '@/lib/desktop-presentation.js'
+import { hasDesktopBridgeMethod, openDesktopUpdateDownload } from '@/lib/platform-bridge'
 
 // OPT-E02（docs/43 §5）：更新详情弹窗只在用户主动点击底栏提示或设置页「查看更新」时打开，
 // 绝不自动弹出打断写稿。下载按钮只调用主进程固定意图，不直接 window.open 任意 URL。
@@ -20,14 +21,13 @@ export default function DesktopUpdateDialog({ open, onClose, status }: {
   const sha256 = status?.sha256 || ''
 
   const openDownload = async () => {
-    const ui = window.opsDesktopUI
-    if (!ui?.openUpdateDownload) {
+    if (!hasDesktopBridgeMethod('openUpdateDownload')) {
       toast.error('当前环境不支持打开下载链接')
       return
     }
     setOpening(true)
     try {
-      const result = await ui.openUpdateDownload()
+      const result = await openDesktopUpdateDownload()
       if (!result.ok) toast.error(result.message)
     } catch {
       toast.error('打开下载链接失败，请稍后重试')

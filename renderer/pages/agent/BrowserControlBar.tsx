@@ -2,6 +2,7 @@ import { Eye, Hand, Square } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { get } from '@/lib/api'
+import { focusDesktopBrowserTab, hasDesktopBridgeMethod } from '@/lib/platform-bridge'
 
 // BR-08 / 27 AI27-17：浏览器控制条（36 高）——目标、控制者、接管、停止。
 // 状态全部来自真实运行与租约：没有活动租约时接管按钮禁用并说明原因，不伪造“已接管”。
@@ -51,11 +52,11 @@ export function BrowserControlBar({
 
   async function viewOperation() {
     if (agentTabID === null) return
-    const result = await window.opsDesktopUI?.focusBrowserTab?.(agentTabID)
-    if (!result) {
+    if (!hasDesktopBridgeMethod('focusBrowserTab')) {
       toast.error('无法切换标签', { description: '需要 OPS 桌面端才能查看 Agent 正在操作的后台标签。' })
       return
     }
+    const result = await focusDesktopBrowserTab(agentTabID)
     if (!result.ok) toast.error('无法切换标签', { description: result.message })
   }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui'
 import type { DesktopBrowserTab } from '@/lib/desktop-presentation'
+import { hasDesktopBridgeMethod, listDesktopBrowserTabs } from '@/lib/platform-bridge'
 
 // DEV-AI27-07 第二批（W07b）：浏览器页签内容——连接实例列表+标签选择器（27 §7.3）。
 // BR-01：标签枚举走桌面桥真实 IPC（browser:list-tabs），不再误用只属于 Agent run
@@ -28,13 +29,12 @@ export function BrowserTabSelector({ bindings, onTabSelected }: BrowserTabSelect
     setLoading(true)
     setError('')
     try {
-      const bridge = window.opsDesktopUI
-      if (!bridge?.listBrowserTabs) {
+      if (!hasDesktopBridgeMethod('listBrowserTabs')) {
         setTabs([])
         setError('需要 OPS 桌面端才能读取 Chrome 标签；浏览器版不会伪造标签列表。')
         return
       }
-      const result = await bridge.listBrowserTabs()
+      const result = await listDesktopBrowserTabs()
       if (!result.ok) {
         setTabs([])
         setError(result.message || '标签枚举失败；请确认 Chrome 与 OPS 扩展正在运行后重试。')

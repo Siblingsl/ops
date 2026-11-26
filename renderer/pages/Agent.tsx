@@ -28,6 +28,7 @@ import {
   useAgentBootstrap,
 } from '@/lib/agent'
 import { trackAgentEvent } from '@/lib/agent-telemetry-client'
+import { hasDesktopBridgeMethod, subscribeDesktopSidepanelDraft, subscribeDesktopSidepanelStop } from '@/lib/platform-bridge'
 import { ComputerControlBar } from '@/pages/agent/ComputerControlBar'
 import { ArtifactPanel } from '@/pages/agent/ArtifactPanel'
 import { browserStore, clearPartial, type PartialStream, readPartial, savePartial } from '@/pages/agent/partial-stream'
@@ -182,22 +183,16 @@ export default function Agent() {
   // DEV-AI27-10（W10b）：Chrome 侧栏草稿填入输入台待用户发送；停止与主界面同语义。
   useEffect(() => {
     if (!desktopPresentation) return
-    const bridge = (window as unknown as {
-      opsDesktopUI?: {
-        onSidepanelDraft?: (cb: (draft: { text: string }) => void) => () => void
-        onSidepanelStop?: (cb: () => void) => () => void
-      }
-    }).opsDesktopUI
-    if (!bridge?.onSidepanelDraft) return
-    const offDraft = bridge.onSidepanelDraft((draft) => {
+    if (!hasDesktopBridgeMethod('onSidepanelDraft')) return
+    const offDraft = subscribeDesktopSidepanelDraft((draft) => {
       if (draft.text) setText((old) => (old ? `${old}
 ${draft.text}` : draft.text))
       toast.info('侧栏草稿已填入输入框；确认后发送。')
       window.setTimeout(() => inputRef.current?.focus(), 0)
     })
-    const offStop = bridge.onSidepanelStop?.(() => {
+    const offStop = subscribeDesktopSidepanelStop(() => {
       void stop()
-    }) ?? (() => {})
+    })
     return () => { offDraft(); offStop() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desktopPresentation])

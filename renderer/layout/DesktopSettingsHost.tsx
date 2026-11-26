@@ -7,6 +7,7 @@ import { confirm } from '@/components/dialog'
 import { ErrorBoundary } from '@/components/error-boundary'
 import { currentAccountSettingsPath, DESKTOP_ACCOUNT_CREATE_READY, DESKTOP_ACCOUNT_CREATE_REQUEST, DESKTOP_ACCOUNT_SWITCHER_FROM_SETTINGS_REQUEST, DESKTOP_ACCOUNT_SWITCHER_READY, DESKTOP_ACCOUNT_SWITCHER_REQUEST, DESKTOP_LEAVE_GUARD_RELEASE, DESKTOP_LEAVE_GUARD_REQUEST, DESKTOP_LOCAL_SETTINGS_REQUEST, DesktopSettingsContext, desktopSettingsEntries, desktopSettingsEntryLabel, desktopSettingsPanel, requestDesktopLeaveGuard, settingsGroupOf, ADVANCED_SETTINGS_GROUP, SETTINGS_GROUP_ORDER, type SettingsGroupName } from '@/lib/desktop-settings'
 import { isElectronDesktop } from '@/lib/desktop-presentation.js'
+import { hasDesktopBridgeMethod, isDesktopBridgeAvailable, setDesktopLocalSettingsPanel, subscribeDesktopLocalSettingsState, subscribeDesktopOpenSettings } from '@/lib/platform-bridge'
 import { rememberAccount, useCurrentAccountSelection, useMe } from '@/lib/session'
 import type { Platform } from '@/lib/types'
 import { platformLabel } from '@/components/ui'
@@ -16,12 +17,12 @@ const locationPath = (location: Location) => location.pathname + location.search
 
 /**
  * OPT-U04（docs/43 §4）：本机设置面板的唯一触发口。
- * 新宿主走 window.opsDesktopUI 固定 IPC，彻底绕开会返回 null 的 window.open；
+ * 新宿主走平台桥固定 IPC，彻底绕开会返回 null 的 window.open；
  * 只有旧宿主没有 setLocalSettingsPanel 时才退回自定义协议深链。
  */
 function syncLocalSettingsPanel(action: 'connection' | 'ai' | 'account-device' | 'diagnostics' | 'detach' | 'close') {
-  if (window.opsDesktopUI?.setLocalSettingsPanel) {
-    void window.opsDesktopUI.setLocalSettingsPanel(action)
+  if (hasDesktopBridgeMethod('setLocalSettingsPanel')) {
+    void setDesktopLocalSettingsPanel(action)
     return
   }
   window.open(`ops-desktop://ui/settings/${action}`, '_blank', 'noopener,noreferrer')
@@ -72,15 +73,15 @@ export default function DesktopSettingsHost({ children, backdrop }: { children: 
   }, [])
 
   useEffect(() => {
-    if (!desktop || !window.opsDesktopUI) return
-    const unsubscribeOpen = window.opsDesktopUI.onOpenSettings(() => {
+    if (!desktop || !isDesktopBridgeAvailable()) return
+    const unsubscribeOpen = subscribeDesktopOpenSettings(() => {
       if (panel?.localPanel) {
         navigate(background.current ? locationPath(background.current) : selectedAccountId ? `/a/${selectedAccountId}` : '/login', { replace: true })
       } else {
         navigate('/settings/local/connection')
       }
     })
-    const unsubscribeState = window.opsDesktopUI.onLocalSettingsState((state) => {
+    const unsubscribeState = subscribeDesktopLocalSettingsState((state) => {
       localStateRef.current = state
       setLocalState(state)
     })

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useConnectionState } from '@/lib/connection-state'
 import { isElectronDesktop, type DesktopUpdateStatus } from '@/lib/desktop-presentation.js'
+import { getDesktopUpdateStatus, hasDesktopBridgeMethod, subscribeDesktopUpdateStatus } from '@/lib/platform-bridge'
 import { CloudOff, LoaderCircle } from 'lucide-react'
 import DesktopUpdateDialog from '@/components/desktop-update-dialog'
 
@@ -19,14 +20,13 @@ export default function DesktopStatusBar({ workspaceName, accountName }: { works
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
 
   useEffect(() => {
-    const ui = window.opsDesktopUI
-    if (!ui?.onUpdateStatus) return
+    if (!hasDesktopBridgeMethod('onUpdateStatus')) return
     let alive = true
-    const unsubscribe = ui.onUpdateStatus(setUpdateStatus)
-    void ui.getUpdateStatus?.().then((result) => {
+    const unsubscribe = subscribeDesktopUpdateStatus(setUpdateStatus)
+    void getDesktopUpdateStatus().then((result) => {
       if (alive && result.ok) setUpdateStatus(result.status)
     }).catch(() => undefined)
-    return () => { alive = false; unsubscribe?.() }
+    return () => { alive = false; unsubscribe() }
   }, [])
 
   return (
