@@ -15,6 +15,16 @@
 | 4 | 真实 run 记录 prompt/completion tokens、cost_micros/currency，无价不估算 | **PASS** | 7 个作品共 41 次调用，31 次 ok 且均有 token、10 次 failed 为 0 token：prompt 23,501 / completion 53,047 / total 76,548；两个供应商价格均为 0，`cost_micros=0`、币种 CNY。`ai_call` 原表无 cost 字段、免费模型 `agent_run.cost_micros` 为空，已在 `usage.json` 注明，不估算。 |
 | 5 | 实测 403/429/超时，桌面端可读报错，切模型重试恢复 | **PASS** | 真实 OpenCode 429 经产品段落起稿返回 `ai_rate_limited` + 中文“额度已用尽，请重试或切换备用模型；内容没有被改动”；切回 WorkBuddy 后同一段落重试成功（465 字）。桌面端真实 429 自检弹窗显示 0/6 与上游原文；切回 WorkBuddy 后自检显示核心三项通过。 |
 
+## 2026-11-26 VERIFY-04（5+5 扩展盲测补齐）
+
+- 隔离环境：临时库 `ops_verify04`（PostgreSQL :5440）＋ 真实 Go 后端 `127.0.0.1:18084`；供应商为 `http://127.0.0.1:3425/v1` 的 `workbuddy-ai/hy4flash-free`。产品自检 chat/json/stream/tools/vision 通过；`ai_call` 全部记录 `3425 Real Gateway (VERIFY-04)`，无 Dev Mock / 18094。
+- 新增真稿：`wc-04`（1849 字，4 段）、`wc-05`（1815 字，4 段）、`xhs-05`（421 字，3 段 + 7 个标题候选 + 10 个话题）、`xhs-06`（292 字，5 段 + 8 个标题候选 + 10 个话题，`OPT-U02` 快写）。
+- 真实账单：本批 4 篇 27 次调用（23 ok / 4 failed），prompt 25,741 / completion 85,180 / total 110,921，`cost_micros=0`（免费模型）。
+- 5+5 汇总：既有质量集 6 篇 68,747 + 本批 110,921 = **179,668 tokens**（64 次调用 / 50 ok / 14 failed）；含 xhs-01 占位符样本的“76,548 + 本批”口径为 187,469，两种口径已在 `writing-real/usage-5x5-ext.json` 分列。
+- 质量结论：10 篇结构化自评 **6 篇达修改率 ≤20%、4 篇需返工**；`wc-04` 标题四栏只写一栏、`xhs-05` 三处只详写台灯、`xhs-06` 快写把一级标题写进正文且偏提纲。原文全部归档，未人工补写。
+- 失败与恢复：`wc-04` outline 2 次 `ai_timeout`（默认首 token 15s，调至 120s 后重试成功）；`xhs-06` title 2 次上游 403（退避后成功）。失败调用 token 均为 0。
+- 边界不变：本机 HTTP 网关不等同生产 HTTPS（归 RC-17）；免费模型无网关账单；本表为开发侧自评，无第三方人类主编签字。
+
 ## 真实通道盘点
 
 | 模型 | 结果 | 用途 |
@@ -33,6 +43,9 @@
 | `aw13/aw13-journeys.jsonl` / `aw13/summary.json` | 六旅程真实模型 21 条迭代记录；J1–J6 最终迭代 6/6 PASS。 |
 | `aw13-journey1.log`、`aw13-journeys-final.log`、`aw13-j2-final4.log`、`aw13-j3-final3.log`、`aw13-j6-final2.log` | 各旅程最终 PASS 原始日志；保留早期失败迭代。 |
 | `writing-real/wc-01..03.md`、`xhs-01..04.md` | 3 篇公众号 + 4 篇小红书真稿；质量集取 wc-01..03 + xhs-02/03/04，xhs-01 为占位符清理样本。`works.json` 记录作品 ID、段落 ID、字数与清理说明。 |
+| `writing-real/wc-04.md`、`wc-05.md`、`xhs-05.md`、`xhs-06.md` | VERIFY-04 新增 4 篇真稿原始文本；小红书两篇含真实生成的标题候选与话题建议。 |
+| `writing-real/usage-5x5-ext.json` | 本批 4 篇 27 次调用与 5+5 两种汇总口径的真实 tokens、免费价格 0 与失败说明。 |
+| `writing-real/blind-review-5x5.md` | 10 篇质量集结构化评测：字数、段数、占位符、AI 套话、产品检查、修改率与客观扣分点。 |
 | `writing-real/usage.json` | 7 个作品 41 次调用的真实 tokens、免费价格 0、cost_micros=0 与限制说明。 |
 | `reviews-real/cxef05-real-final.jsonl` | 评论拟稿最终 5/5 真实样本，类别合法、无链接、≤80 字、无占位符；首轮含占位符样本保留在 `cxef05-real-sampling.jsonl` 供根因追踪。 |
 | `skills-real/real-model-results.json` / `summary.json` | 技能真实模型 6 场景 × 2 形态 × 3 次 = 36/36 PASS；原 6.2MB 明细保留。 |
@@ -60,9 +73,9 @@ $env:OPS_AW13_REAL_ACCEPTANCE='1'; go test ./internal/app -run 'TestAW13Journeys
 ## 未验证 / 不冒充
 
 - 网关为 HTTP 回环，生产 HTTPS/WSS、固定出口 IP 未验，归 `RC-17`；不把本机闭环当生产发布完成。
-- `docs/43` 原写 OPT-A03 “5 篇公众号 + 5 篇小红书”盲测；本轮按用户 RC-08 指令执行 ≥3+3，实际 3+3（另有 xhs-01 占位符样本）。5+5 扩展盲测未执行，未用 3+3 冒充 5+5。
-- 稿件质量采用结构化自评 + 人工清理/补写；没有第三方人类评审签署“修改率 ≤20%”，当前可量化依据是 xhs-04 新增 93 字/终稿 480 字=19.4%、wc-01 清理 39 字/终稿 1741 字=2.2%，其余质量集样本未改写原句。
+- `docs/43` 原写 OPT-A03 “5 篇公众号 + 5 篇小红书”盲测；2026-11-24 本轮按用户 RC-08 指令执行 ≥3+3（另有 xhs-01 占位符样本）。5+5 扩展盲测已于 2026-11-26 经 VERIFY-04 补齐：`wc-04/05` + `xhs-05/06` 经隔离库真实链路产出，与既有 6 篇组成完整 10 篇质量集；结构化自评 **6/10 达 ≤20%，4 篇需返工**，详见 `writing-real/blind-review-5x5.md`。
+- 稿件质量采用结构化自评 + 人工清理/补写；没有第三方人类评审签署“修改率 ≤20%”。既有 6 篇的可量化依据是 xhs-04 新增 93 字/终稿 480 字=19.4%、wc-01 清理 39 字/终稿 1741 字=2.2%，其余样本未改写原句。VERIFY-04 的 4 篇保留模型原文，未做人工补写；`wc-04` 的结构缺口、`xhs-05` 的覆盖不足与 `xhs-06` 的快写标题泄漏均如实计入盲评表。
 - 真实计价字段为 0（免费模型）；没有网关侧账单可核对，不把 0 当成付费成本。
 - `POST /works/{id}/sections` 在当前桌面会话仍返回 `csrf_invalid`，`xhs-01` 以合并段落达到 3 段，未新增第 4 段；该 CSRF 问题未在本轮修复。`xhs-04` 使用既有 3 段，不依赖新增段接口。
 - HC03/HC28 仍是既有基线失败：RC-01/D-221 的 `GET /accounts/{id}/wechat/drafts` 等三条路由未归类；未改测试、未新增目录工具（AG04 固定 323 条）。
-- 当前工作区的真实供应商通过“隔离测试工作区创建后复制加密 `api_key_enc` 密文”写入，不是产品常规 reauth 流程；属本地 dev 配置，生产部署需走正常供应商配置。
+- 2026-11-24 轮的 Provider 通过“隔离测试工作区创建后复制加密密钥字段密文”写入，不是产品常规 reauth 流程；属本地 dev 配置，生产部署需走正常供应商配置。VERIFY-04（2026-11-26）已改用产品常规供应商配置，不再复制密文。

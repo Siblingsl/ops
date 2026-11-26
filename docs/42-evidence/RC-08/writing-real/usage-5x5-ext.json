@@ -1,0 +1,183 @@
+{
+  "generated_at": "2026-11-26T13:44:00+08:00",
+  "batch": "VERIFY-04（RC-08 + OPT-A03 5+5 扩展盲测）",
+  "source": "隔离库 ops_verify04.ai_call，按本批 4 个真实作品 work_id 聚合；自检探针不进 ai_call，单列说明",
+  "currency": "CNY",
+  "pricing": {
+    "provider": "3425 Real Gateway (VERIFY-04) / workbuddy-ai/hy4flash-free",
+    "input_price_micros_per_1k": 0,
+    "output_price_micros_per_1k": 0,
+    "price_updated_at": null,
+    "note": "免费模型，价格登记为 0；cost_micros 按 0 记，不代表网关侧真实账单。completion_tokens 含推理 token（上游 usage 口径）。"
+  },
+  "selftest": {
+    "endpoint": "POST /api/v1/model-providers/{id}/selftest",
+    "model": "workbuddy-ai/hy4flash-free",
+    "core_ok": true,
+    "chat_ok": true,
+    "tools_ok": true,
+    "vision_ok": true,
+    "probes_ok": ["chat", "json", "stream", "tools", "vision"],
+    "probes_failed": ["image（模型不在文生图端点，HTTP 400）"],
+    "probes_skipped": ["search（该网关无已核验原生联网搜索契约）"],
+    "ai_call_rows": 0,
+    "note": "自检接口不写 ai_call，故不计入下表 tokens；仅证明供应商真实可用。"
+  },
+  "totals": {
+    "calls": 27,
+    "ok_calls": 23,
+    "failed_calls": 4,
+    "prompt_tokens": 25741,
+    "completion_tokens": 85180,
+    "total_tokens": 110921,
+    "avg_latency_ms": 22272,
+    "cost_micros": 0,
+    "cost_formula": "25741/1000*0 + 85180/1000*0 = 0",
+    "calls_with_tokens": 23,
+    "zero_token_calls": 4
+  },
+  "works": [
+    {
+      "label": "wc-04",
+      "work_id": "7f3df528-9ad4-4c40-823c-b5e5c27e22c4",
+      "title": "把团队周报从“流水账”改回“决策单”：我们删掉了哪四栏",
+      "mode": "structured_4_sections",
+      "chars": 1849,
+      "sections": 4,
+      "calls": 8,
+      "ok_calls": 6,
+      "failed_calls": 2,
+      "prompt_tokens": 7627,
+      "completion_tokens": 30761,
+      "total_tokens": 38388,
+      "avg_latency_ms": 25110,
+      "cost_micros": 0
+    },
+    {
+      "label": "wc-05",
+      "work_id": "8d1724eb-7c7b-47a3-8ce1-bc9a90e4fa04",
+      "title": "一个人同时做公众号和小红书，为什么别把同一篇稿子直接复制",
+      "mode": "structured_4_sections",
+      "chars": 1815,
+      "sections": 4,
+      "calls": 6,
+      "ok_calls": 6,
+      "failed_calls": 0,
+      "prompt_tokens": 8448,
+      "completion_tokens": 22902,
+      "total_tokens": 31350,
+      "avg_latency_ms": 22296,
+      "cost_micros": 0
+    },
+    {
+      "label": "xhs-05",
+      "work_id": "2fbe6be3-cc13-40fd-b9e1-792facb464cc",
+      "title": "租房书桌改造｜300 块预算，我只花了这三处",
+      "mode": "structured_3_sections + titles + tags",
+      "chars": 421,
+      "sections": 3,
+      "title_candidates": 7,
+      "ai_tags": 10,
+      "calls": 7,
+      "ok_calls": 7,
+      "failed_calls": 0,
+      "prompt_tokens": 6533,
+      "completion_tokens": 16064,
+      "total_tokens": 22597,
+      "avg_latency_ms": 14989,
+      "cost_micros": 0
+    },
+    {
+      "label": "xhs-06",
+      "work_id": "502d0121-6892-45c8-b7d2-a4ce528262b6",
+      "title": "通勤 40 分钟攒出 3 个选题库",
+      "mode": "quick（OPT-U02 organize-notes → apply）+ titles + tags",
+      "chars": 292,
+      "sections": 5,
+      "title_candidates": 8,
+      "ai_tags": 10,
+      "calls": 6,
+      "ok_calls": 4,
+      "failed_calls": 2,
+      "prompt_tokens": 3133,
+      "completion_tokens": 15453,
+      "total_tokens": 18586,
+      "avg_latency_ms": 17453,
+      "cost_micros": 0
+    }
+  ],
+  "existing_baseline": {
+    "source": "docs/42-evidence/RC-08/writing-real/usage.json（2026-11-24）",
+    "quality_set_3_plus_3": {
+      "works": ["wc-01", "wc-02", "wc-03", "xhs-02", "xhs-03", "xhs-04"],
+      "calls": 37,
+      "ok_calls": 27,
+      "failed_calls": 10,
+      "prompt_tokens": 20794,
+      "completion_tokens": 47953,
+      "total_tokens": 68747,
+      "avg_latency_ms": 12628,
+      "cost_micros": 0,
+      "note": "由 usage.json 分作品数据重新求和；avg_latency_ms 按各作品原均值按调用数加权推算。"
+    },
+    "all_7_archived_works": {
+      "works": ["wc-01", "wc-02", "wc-03", "xhs-01", "xhs-02", "xhs-03", "xhs-04"],
+      "calls": 41,
+      "ok_calls": 31,
+      "failed_calls": 10,
+      "prompt_tokens": 23501,
+      "completion_tokens": 53047,
+      "total_tokens": 76548,
+      "avg_latency_ms": 12371,
+      "cost_micros": 0,
+      "note": "usage.json 原口径 76,548 含 xhs-01（占位符清理样本，7,801 tokens），不是纯 3+3 质量集。"
+    }
+  },
+  "summary_5x5": {
+    "definition": "既有质量集 6 篇（wc-01..03 + xhs-02..04）＋ 本批 4 篇（wc-04/05 + xhs-05/06）",
+    "works": 10,
+    "calls": 64,
+    "ok_calls": 50,
+    "failed_calls": 14,
+    "prompt_tokens": 46535,
+    "completion_tokens": 133133,
+    "total_tokens": 179668,
+    "avg_latency_ms": 16697,
+    "cost_micros": 0
+  },
+  "summary_5x5_including_placeholder_sample": {
+    "definition": "按“既有 76,548 + 本批 4 篇”口径，含 xhs-01 占位符清理样本（仅用于与用户指定口径对齐）",
+    "works": 11,
+    "calls": 68,
+    "ok_calls": 54,
+    "failed_calls": 14,
+    "prompt_tokens": 49242,
+    "completion_tokens": 138227,
+    "total_tokens": 187469,
+    "avg_latency_ms": 16302,
+    "cost_micros": 0
+  },
+  "failures": [
+    {
+      "label": "wc-04",
+      "task": "outline",
+      "count": 2,
+      "code": "ai_timeout / HTTP 504",
+      "detail": "首 token 默认 15s 超时；设置 OPS_FIRST_TOKEN_TIMEOUT=120s 重启后同一作品重试成功。两次失败 token 均为 0。"
+    },
+    {
+      "label": "xhs-06",
+      "task": "title",
+      "count": 2,
+      "code": "ai_key_invalid / HTTP 502（上游 403 request illegal）",
+      "detail": "上游 WorkBuddy 瞬时 403；30s/60s 退避后第 3 次成功，说明密钥仍有效、非鉴权失效。两次失败 token 均为 0。"
+    }
+  ],
+  "notes": [
+    "本批 27 次调用全部记录为供应商 3425 Real Gateway (VERIFY-04)、模型 workbuddy-ai/hy4flash-free；无 Dev Mock / 18094 记录。",
+    "4 次失败调用 token 为 0，不计入 token 求和；成功调用 23 次均带 token。",
+    "成本按 0 记（免费模型）；ai_call 原表无 cost 字段，不做估算。",
+    "5+5 主汇总采用纯质量集口径 179,668 tokens（6 篇既有 + 4 篇本批）；另列含 xhs-01 的 187,469，便于与“76,548 + 本批”口径对齐。",
+    "token 统计包含大纲、分段起草、标题、话题、事实核查等全部 ok 调用，不按最终正文切分。"
+  ]
+}
