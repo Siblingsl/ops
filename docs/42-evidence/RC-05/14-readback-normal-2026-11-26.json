@@ -1,0 +1,40 @@
+{
+  "captured_at": "2026-11-26T13:41:45+08:00",
+  "platform": "xhs",
+  "account_alias": "造境",
+  "browser": "用户正常 Chrome（非虚拟桌面）",
+  "note_id": "6b05138a000000002b010011",
+  "title": "工位上的松弛感",
+  "published_at": "2026-11-24T12:33:00+08:00",
+  "age_at_capture": "49h08m",
+  "metrics": {
+    "views": 91,
+    "likes": 3,
+    "collects": 2,
+    "comments": 0,
+    "shares": 0
+  },
+  "previous_capture": {
+    "captured_at": "2026-11-24T12:44:00+08:00",
+    "views": 40,
+    "likes": 0,
+    "collects": 0,
+    "comments": 0,
+    "shares": 0
+  },
+  "delta_since_previous": {
+    "views": 51,
+    "likes": 3,
+    "collects": 2,
+    "comments": 0,
+    "shares": 0
+  },
+  "source": "https://creator.xiaohongshu.com/new/note-manager",
+  "public_page_cross_check": {
+    "url": "https://www.xiaohongshu.com/explore/6b05138a000000002b010011",
+    "likes": 3,
+    "collects": 2,
+    "comments": 0
+  },
+  "note": "这是发布后约 49h08m 的当前累计回读，不是精确 24 小时快照；24 小时节点（2026-11-25 12:33）已过。"
+}
