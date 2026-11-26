@@ -17,6 +17,7 @@ import {
   type WebContents
 } from 'electron';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { ensureProductBridge, startBrowserBridgeDiagnostics, stopActiveBridge } from './browser-bridge';
 import type { McpHostManager } from './mcp-host';
@@ -29,6 +30,8 @@ import { registerDesktopUiIpcHandlers } from './ipc/desktop-ui';
 // OPT-E02（docs/43 §5）：只读版本更新检查——通道在 ipc/update.ts，检查器在 update-check.ts。
 import { registerDesktopUpdateIpcHandlers, DESKTOP_UI_UPDATE_STATUS_CHANNEL } from './ipc/update';
 import { createDesktopUpdateChecker, type DesktopUpdateChecker } from './update-check';
+// POLISH-02（docs/43 §4 第 3.2 条）：本机连接/运行/版本诊断——只读 16 键摘要与脱敏导出。
+import { registerClientDiagnosticsIpcHandlers } from './ipc/client-diagnostics';
 import { registerInBrowseIpcHandlers } from './ipc/inbrowse';
 import { registerBrowserIpcHandlers } from './ipc/browser';
 import { registerSettingsIpcHandlers } from './ipc/settings';
@@ -829,6 +832,50 @@ function registerIpcHandlers(): void {
       openExternal: (url) => shell.openExternal(url),
     });
   }
+  // POLISH-02（docs/43 §4 第 3.2 条）：本机诊断两通道。摘要只读、无参；导出复用
+  // settings:export-diagnostics 的脱敏报告结构，保存框与落盘都在这里，路径不回传。
+  registerClientDiagnosticsIpcHandlers({
+    ipcHandle,
+    businessWindow: () => businessWindow,
+    isBusinessUrl,
+    getDiagnosticsSource: async () => {
+      const client = desktopClient;
+      if (!client) return null;
+      const state = await client.getPublicState();
+      applyNativeClientStatus(state);
+      return {
+        appVersion: app.getVersion(),
+        electronVersion: process.versions.electron ?? '',
+        nodeVersion: process.versions.node ?? '',
+        platform: os.platform(),
+        arch: os.arch(),
+        service: apiOrigin,
+        connectionState: getConnectionState(),
+        mode: state.mode,
+        channelState: state.channelState,
+        channelMessage: state.channelMessage,
+        routeRevision: state.routeRevision,
+        signedIn: state.signedIn,
+        reauthRequired: state.reauthRequired,
+        storageAvailable: state.storageAvailable,
+        localConfigAvailable: state.localConfigAvailable,
+        deviceRegistered: state.deviceRegistered,
+        modelCount: state.modelCount,
+        activeModelRequests: state.activeModelRequests,
+      };
+    },
+    saveDiagnosticsFile: async (window, defaultName, content) => {
+      const { canceled, filePath } = await dialog.showSaveDialog(window, {
+        title: '导出脱敏诊断信息',
+        buttonLabel: '保存诊断文件',
+        defaultPath: defaultName,
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (canceled || !filePath) return { canceled: true };
+      await fs.writeFile(filePath, content, { encoding: 'utf8' });
+      return { canceled: false };
+    },
+  });
   // DT-08 片 10：settings:* 28 通道 + local-state 事件拆至 ipc/settings.ts（确认弹窗
   // 文案与防线校验逐字节搬移；跨域依赖经 SettingsIpcDeps 注入）。
   registerSettingsIpcHandlers({

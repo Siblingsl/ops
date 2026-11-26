@@ -1,7 +1,7 @@
 // POLISH-01（docs/43 §1.1 / §1.2）：桌面能力唯一收口层。
 // 业务 UI 只经过本模块访问桌面桥：桌面端走 IPC，浏览器环境统一安全降级为 supported: false；
 // 环境探针与订阅必须 SSR / Node 安全——window / navigator 缺失时一律不抛错。
-import { isElectronDesktop, type CXLongImageCaptureResult, type DesktopBrowserPairingConfirmResult, type DesktopBrowserPairingStateResult, type DesktopBrowserTabFocusResult, type DesktopBrowserTabListResult, type DesktopClientHealth, type DesktopComputerUiaActResult, type DesktopComputerUiaInvalidateResult, type DesktopComputerUiaObserveResult, type DesktopComputerUiaViewResult, type DesktopComputerUiaInvokeResult, type DesktopComputerWindowListResult, type DesktopLocalSettingsAction, type DesktopMcpOAuthInput, type DesktopMcpOAuthStartResult, type DesktopMcpOAuthStatus, type DesktopMcpValidateInput, type DesktopMcpValidateResult, type DesktopPlatformIntentResult, type DesktopPlatformLoginInput, type DesktopUiActionResult, type DesktopUpdateOpenResult, type DesktopUpdateStatus, type DesktopUpdateStatusResult, type DesktopXhsManualImageExportInput, type DesktopXhsManualImageExportResult } from './desktop-presentation.js'
+import { isElectronDesktop, type CXLongImageCaptureResult, type DesktopBrowserPairingConfirmResult, type DesktopBrowserPairingStateResult, type DesktopBrowserTabFocusResult, type DesktopBrowserTabListResult, type DesktopClientDiagnosticsExportResult, type DesktopClientDiagnosticsResult, type DesktopClientHealth, type DesktopComputerUiaActResult, type DesktopComputerUiaInvalidateResult, type DesktopComputerUiaObserveResult, type DesktopComputerUiaViewResult, type DesktopComputerUiaInvokeResult, type DesktopComputerWindowListResult, type DesktopLocalSettingsAction, type DesktopMcpOAuthInput, type DesktopMcpOAuthStartResult, type DesktopMcpOAuthStatus, type DesktopMcpValidateInput, type DesktopMcpValidateResult, type DesktopPlatformIntentResult, type DesktopPlatformLoginInput, type DesktopUiActionResult, type DesktopUpdateOpenResult, type DesktopUpdateStatus, type DesktopUpdateStatusResult, type DesktopXhsManualImageExportInput, type DesktopXhsManualImageExportResult } from './desktop-presentation.js'
 
 export type DesktopBridge = NonNullable<Window['opsDesktopUI']>
 export type DesktopUnsupportedResult = { ok: false; supported: false; code: 'desktop_only'; message: string }
@@ -121,6 +121,20 @@ export async function openDesktopUpdateDownload(): Promise<DesktopBridgeResult<D
   const bridge = getDesktopBridge()
   if (!bridge?.openUpdateDownload) return unsupportedBridgeResult('当前 OPS 桌面客户端不支持打开更新下载页，请重启客户端后重试。')
   return bridge.openUpdateDownload()
+}
+
+// POLISH-02（docs/43 §4 第 3.2 条）：本机诊断摘要与脱敏导出——桥或方法缺失时统一 unsupported，
+// 存在时原样透传（主进程已把失败收敛为 { ok: false, code, message }）。
+export async function getDesktopClientDiagnostics(): Promise<DesktopBridgeResult<DesktopClientDiagnosticsResult>> {
+  const bridge = getDesktopBridge()
+  if (!bridge?.getClientDiagnostics) return unsupportedBridgeResult('当前 OPS 桌面客户端不支持读取本机诊断状态，请重启客户端后重试。')
+  return bridge.getClientDiagnostics()
+}
+
+export async function exportDesktopClientDiagnostics(): Promise<DesktopBridgeResult<DesktopClientDiagnosticsExportResult>> {
+  const bridge = getDesktopBridge()
+  if (!bridge?.exportClientDiagnostics) return unsupportedBridgeResult('当前 OPS 桌面客户端不支持导出脱敏诊断信息，请重启客户端后重试。')
+  return bridge.exportClientDiagnostics()
 }
 
 export async function openDesktopPlatformLogin(input: DesktopPlatformLoginInput): Promise<DesktopBridgeResult<DesktopUiActionResult>> {

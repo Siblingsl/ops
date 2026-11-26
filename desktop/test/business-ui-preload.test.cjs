@@ -40,8 +40,10 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
     'captureLongImage',
     'checkUpdate',
     'confirmBrowserPairing',
+    'exportClientDiagnostics',
     'focusBrowserTab',
     'getBrowserPairingState',
+    'getClientDiagnostics',
     'getMcpOAuthStatus',
     'getUpdateStatus',
     'invalidateComputerUIA',
@@ -75,8 +77,8 @@ test('exposes one-shot long-image capture intent with a build ID and read-only s
   // DEV-AI27-A3：MCP 验证与 OAuth 生命周期为独立固定意图（握手/授权在本机，秘密不进 IPC）。
   // DT-04（W17c）：UIA 读/调用同口径独立固定意图（C09 白名单逐控件校验）。
   assert.deepEqual(Object.keys(exposed.opsDesktopUI).filter((key) => !key.startsWith('on')).sort(),
-    ['actComputerUIA', 'captureLongImage', 'checkUpdate', 'confirmBrowserPairing', 'focusBrowserTab', 'getBrowserPairingState',
-     'getMcpOAuthStatus', 'getUpdateStatus', 'invalidateComputerUIA', 'invokeComputerUIA', 'invokeInBrowse',
+    ['actComputerUIA', 'captureLongImage', 'checkUpdate', 'confirmBrowserPairing', 'exportClientDiagnostics', 'focusBrowserTab', 'getBrowserPairingState',
+     'getClientDiagnostics', 'getMcpOAuthStatus', 'getUpdateStatus', 'invalidateComputerUIA', 'invokeComputerUIA', 'invokeInBrowse',
      'listBrowserTabs', 'listComputerWindows', 'observeComputerUIA', 'openPlatformLogin', 'openUpdateDownload', 'openXhsManualImageFolder',
      'readComputerUIA', 'revokeMcpOAuth', 'setLocalSettingsPanel', 'startMcpOAuth', 'validateMcpConnection']);
   const buildId = '00000008-1111-4111-8111-111111111111';
@@ -1132,4 +1134,133 @@ test('OPT-E02: onUpdateStatus 缓存回放、非法推送丢弃、退订生效',
   unsubscribe();
   emit(handlers, channel, validUpdateStatus());
   assert.equal(seen.length, 2);
+});
+
+// ---------------------------------------------------------------------------
+// POLISH-02（docs/43 §4 第 3.2 条）：本机诊断——16 键摘要与导出结果的白名单收敛。
+// 多余键（apiKey/filePath/deviceId/cookie/apiOrigin…）整份拒绝；枚举/长度/非负整数逐项校验；
+// invoke 抛错压成 desktop_diagnostics_unavailable，不把异常原文透出。
+// ---------------------------------------------------------------------------
+
+function validDiagnostics(over = {}) {
+  return {
+    appVersion: '0.1.0',
+    electronVersion: '44.9.1',
+    platform: 'win32',
+    arch: 'x64',
+    connectionState: 'online',
+    mode: 'server',
+    channelState: 'ready',
+    channelMessage: '连接正常',
+    routeRevision: 3,
+    signedIn: true,
+    reauthRequired: false,
+    storageAvailable: true,
+    localConfigAvailable: true,
+    deviceRegistered: true,
+    modelCount: 2,
+    activeModelRequests: 0,
+    ...over,
+  };
+}
+
+function loadDiagnosticsPreload(respond) {
+  const exposed = {};
+  const invokes = [];
+  const ipcRenderer = {
+    on() {},
+    removeListener() {},
+    invoke(channel, payload) {
+      invokes.push({ channel, payload });
+      return Promise.resolve(respond(channel));
+    },
+  };
+  loadPreload({ contextBridge: { exposeInMainWorld(n, v) { exposed[n] = v; } }, ipcRenderer });
+  return { exposed, invokes };
+}
+
+test('POLISH-02: getClientDiagnostics / exportClientDiagnostics 合法透传且无参', async () => {
+  const { exposed, invokes } = loadDiagnosticsPreload((channel) => (channel === 'desktop-ui:export-client-diagnostics'
+    ? { ok: true, canceled: false }
+    : { ok: true, diagnostics: validDiagnostics() }));
+  assert.deepEqual(await exposed.opsDesktopUI.getClientDiagnostics(), { ok: true, diagnostics: validDiagnostics() });
+  assert.deepEqual(invokes.at(-1), { channel: 'desktop-ui:get-client-diagnostics', payload: undefined });
+  assert.deepEqual(await exposed.opsDesktopUI.exportClientDiagnostics(), { ok: true, canceled: false });
+  assert.deepEqual(invokes.at(-1), { channel: 'desktop-ui:export-client-diagnostics', payload: undefined });
+  assert.equal(invokes.length, 2);
+  // 取消也是合法结果，原样透出（渲染器据此静默返回）。
+  const canceled = loadDiagnosticsPreload(() => ({ ok: true, canceled: true }));
+  assert.deepEqual(await canceled.exposed.opsDesktopUI.exportClientDiagnostics(), { ok: true, canceled: true });
+});
+
+test('POLISH-02: 摘要夹带任何越界字段都整份拒绝（apiKey/filePath/deviceId/cookie/apiOrigin）', async () => {
+  for (const key of ['apiKey', 'filePath', 'deviceId', 'cookie', 'apiOrigin', 'service']) {
+    const leaked = validDiagnostics({ [key]: 'SHOULD-NOT-LEAK' });
+    const { exposed } = loadDiagnosticsPreload(() => ({ ok: true, diagnostics: leaked }));
+    assert.deepEqual(await exposed.opsDesktopUI.getClientDiagnostics(), {
+      ok: false, code: 'desktop_diagnostics_invalid', message: 'Electron 返回的客户端诊断状态无效。',
+    }, `多余字段 ${key} 必须整份拒绝`);
+  }
+});
+
+test('POLISH-02: 非法枚举 / 超长字符串 / 非布尔 / 负整数一律拒绝', async () => {
+  const cases = [
+    validDiagnostics({ connectionState: 'up' }),
+    validDiagnostics({ connectionState: 'ONLINE' }),
+    validDiagnostics({ mode: 'local' }),
+    validDiagnostics({ channelState: 'idle' }),
+    validDiagnostics({ appVersion: 'v'.repeat(65) }),
+    validDiagnostics({ electronVersion: 'v'.repeat(65) }),
+    validDiagnostics({ platform: 'p'.repeat(33) }),
+    validDiagnostics({ arch: 'a'.repeat(33) }),
+    validDiagnostics({ channelMessage: 'm'.repeat(201) }),
+    validDiagnostics({ signedIn: 'true' }),
+    validDiagnostics({ reauthRequired: 1 }),
+    validDiagnostics({ storageAvailable: null }),
+    validDiagnostics({ localConfigAvailable: undefined }),
+    validDiagnostics({ deviceRegistered: 'yes' }),
+    validDiagnostics({ routeRevision: -1 }),
+    validDiagnostics({ activeModelRequests: 1.5 }),
+    validDiagnostics({ modelCount: -3 }),
+  ];
+  for (const diagnostics of cases) {
+    const { exposed } = loadDiagnosticsPreload(() => ({ ok: true, diagnostics }));
+    assert.deepEqual(await exposed.opsDesktopUI.getClientDiagnostics(), {
+      ok: false, code: 'desktop_diagnostics_invalid', message: 'Electron 返回的客户端诊断状态无效。',
+    }, `应拒绝 ${JSON.stringify(diagnostics).slice(0, 90)}`);
+  }
+  // null 是合法值（读不到设备登记 / 模型数时如实透出），不能被误判为非法。
+  const { exposed: nullable } = loadDiagnosticsPreload(() => ({
+    ok: true, diagnostics: validDiagnostics({ deviceRegistered: null, modelCount: null }),
+  }));
+  assert.equal((await nullable.opsDesktopUI.getClientDiagnostics()).ok, true);
+});
+
+test('POLISH-02: 导出结果只接受 {ok, canceled}，失败码超长或多余键拒绝', async () => {
+  for (const raw of [
+    { ok: true, canceled: 'no' },
+    { ok: true, canceled: false, filePath: 'C:\\Users\\me\\diag.json' },
+    { ok: false, code: 'x'.repeat(41), message: '原因' },
+    { ok: false, code: 'export_failed' },
+  ]) {
+    const { exposed } = loadDiagnosticsPreload(() => raw);
+    assert.deepEqual(await exposed.opsDesktopUI.exportClientDiagnostics(), {
+      ok: false, code: 'desktop_diagnostics_invalid', message: 'Electron 返回的诊断导出结果无效。',
+    }, `应拒绝 ${JSON.stringify(raw).slice(0, 80)}`);
+  }
+  // 主进程收敛后的失败码原样透出（渲染器再加中文提示）。
+  const { exposed } = loadDiagnosticsPreload(() => ({ ok: false, code: 'export_failed', message: '导出脱敏诊断信息失败，请稍后重试。' }));
+  assert.deepEqual(await exposed.opsDesktopUI.exportClientDiagnostics(), {
+    ok: false, code: 'export_failed', message: '导出脱敏诊断信息失败，请稍后重试。',
+  });
+});
+
+test('POLISH-02: 诊断两通道 invoke 抛错压成 desktop_diagnostics_unavailable', async () => {
+  const { exposed } = loadDiagnosticsPreload(() => { throw new Error('No handler registered for desktop-ui:get-client-diagnostics'); });
+  assert.deepEqual(await exposed.opsDesktopUI.getClientDiagnostics(), {
+    ok: false, code: 'desktop_diagnostics_unavailable', message: '本机客户端诊断状态暂不可用，请重试。',
+  });
+  assert.deepEqual(await exposed.opsDesktopUI.exportClientDiagnostics(), {
+    ok: false, code: 'desktop_diagnostics_unavailable', message: '本机诊断信息导出暂不可用，请重试。',
+  });
 });

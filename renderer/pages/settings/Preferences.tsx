@@ -9,9 +9,14 @@ import { getPlatformCollectionDisabledInfo, useDesktopCapabilities } from '@/lib
 import type { UserPrefs } from '@/lib/types'
 import { ghostKeys, usePrefs, useSavePrefs } from '@/lib/v3'
 import { useSettingsDraft } from '@/lib/desktop-settings'
-import { isElectronDesktop, setDesktopMotion, type DesktopClientHealth, type DesktopUpdateStatus } from '@/lib/desktop-presentation.js'
-import { checkDesktopUpdate, getDesktopUpdateStatus, hasDesktopBridgeMethod, invokeDesktopInBrowse, subscribeDesktopClientHealth, subscribeDesktopUpdateStatus } from '@/lib/platform-bridge'
+import { isElectronDesktop, setDesktopMotion, type DesktopClientDiagnostics, type DesktopClientHealth, type DesktopUpdateStatus } from '@/lib/desktop-presentation.js'
+import { checkDesktopUpdate, exportDesktopClientDiagnostics, getDesktopClientDiagnostics, getDesktopUpdateStatus, hasDesktopBridgeMethod, invokeDesktopInBrowse, subscribeDesktopClientHealth, subscribeDesktopUpdateStatus } from '@/lib/platform-bridge'
 import DesktopUpdateDialog from '@/components/desktop-update-dialog'
+
+// POLISH-02（docs/43 §4 第 3.2 条）：诊断摘要的中文映射——只做展示，不改写任何状态的真实含义，
+// 读不到的状态一律如实显示「不可读」，绝不伪造成在线或健康。
+const diagnosticsConnectionLabels = { online: '已连接', offline: '离线', unknown: '状态未知' } as const
+const diagnosticsChannelLabels = { disconnected: '未连接', connecting: '连接中', ready: '已连接', error: '通道异常' } as const
 
 function Row({ title, desc, children }: { title: string; desc?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -54,6 +59,56 @@ export default function Preferences() {
   const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus | null>(null)
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
+  // POLISH-02（docs/43 §4 第 3.2 条）：本机连接/运行/版本诊断只读摘要与脱敏导出。
+  // 摘要来自主进程 16 键白名单通道；读不到就显示错误，不伪造在线或健康状态。
+  const [clientDiagnostics, setClientDiagnostics] = useState<DesktopClientDiagnostics | null>(null)
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
+  const [refreshingDiagnostics, setRefreshingDiagnostics] = useState(false)
+  const [exportingDiagnostics, setExportingDiagnostics] = useState(false)
+  const refreshClientDiagnostics = useCallback(async () => {
+    if (!hasDesktopBridgeMethod('getClientDiagnostics')) return
+    setRefreshingDiagnostics(true)
+    try {
+      const result = await getDesktopClientDiagnostics()
+      if (!result.ok) {
+        setClientDiagnostics(null)
+        setDiagnosticsError(result.message)
+        return
+      }
+      setClientDiagnostics(result.diagnostics)
+      setDiagnosticsError(null)
+    } catch {
+      setClientDiagnostics(null)
+      setDiagnosticsError('读取本机诊断状态失败，请稍后重试')
+    } finally {
+      setRefreshingDiagnostics(false)
+    }
+  }, [])
+  useEffect(() => {
+    if (!desktop || !hasDesktopBridgeMethod('getClientDiagnostics')) return
+    void refreshClientDiagnostics()
+  }, [desktop, refreshClientDiagnostics])
+  const exportDiagnostics = async () => {
+    if (!hasDesktopBridgeMethod('exportClientDiagnostics')) {
+      toast.info('当前环境不支持导出脱敏诊断信息')
+      return
+    }
+    setExportingDiagnostics(true)
+    try {
+      const result = await exportDesktopClientDiagnostics()
+      if (!result.ok) {
+        toast.error(result.message)
+        return
+      }
+      // 用户取消保存时静默返回：既不算成功，也不报错。
+      if (result.canceled) return
+      toast.success('已导出脱敏诊断信息', { duration: 1500 })
+    } catch {
+      toast.error('导出脱敏诊断信息失败，请稍后重试')
+    } finally {
+      setExportingDiagnostics(false)
+    }
+  }
   useEffect(() => {
     if (!desktop) return
     const unsubscribe = subscribeDesktopClientHealth(setHealth)
@@ -149,13 +204,45 @@ export default function Preferences() {
             </div>
           </Row>
           {/* OPT-U04（docs/43 §4）：本机状态与诊断在偏好设置里一键直达，不必再猜设置入口。 */}
-          <Row title="本机客户端管理" desc="连接状态、平台登录与诊断信息都在本机设置中查看。">
+          <Row title="本机客户端管理" desc="连接状态、账号设备与详细诊断仍在独立的本机设置页查看；密钥、模型配置与平台扫码也只在那里完成。">
             <div className="flex flex-wrap justify-end gap-2" data-testid="desktop-local-settings-shortcuts">
               <Button size="sm" variant="secondary" onClick={() => navigate('/settings/local/connection')}>客户端连接</Button>
               <Button size="sm" variant="secondary" onClick={() => navigate('/settings/local/account-device')}>账号与设备</Button>
               <Button size="sm" variant="secondary" onClick={() => navigate('/settings/local/diagnostics')}>诊断与关于</Button>
             </div>
           </Row>
+          {/* POLISH-02（docs/43 §4 第 3.2 条）：本机连接/运行/版本诊断只读摘要 + 一键导出脱敏诊断。
+              只经平台桥访问桌面能力；读不到就如实报错，不伪造在线或健康。 */}
+          <div data-testid="desktop-client-diagnostics-row">
+            <Row
+              title="本机连接与诊断"
+              desc={(
+                <span className="block" data-testid="desktop-client-diagnostics-summary">
+                  {diagnosticsError
+                    ? <span className="block text-gamboge-700">{diagnosticsError}</span>
+                    : clientDiagnostics ? (
+                      <>
+                        <span className="block">业务连接：{diagnosticsConnectionLabels[clientDiagnostics.connectionState]} · 客户端 v{clientDiagnostics.appVersion} · Electron {clientDiagnostics.electronVersion} · {clientDiagnostics.platform}/{clientDiagnostics.arch}</span>
+                        <span className="block">AI 执行模式：{clientDiagnostics.mode === 'desktop' ? `此客户端 AI（映射 v${clientDiagnostics.routeRevision}）` : '服务器 AI'} · 本机通道：{diagnosticsChannelLabels[clientDiagnostics.channelState]}{clientDiagnostics.channelMessage ? `（${clientDiagnostics.channelMessage}）` : ''}</span>
+                        <span className="block">安全加密存储：{clientDiagnostics.storageAvailable ? '可用' : '不可用'} · 本机配置：{clientDiagnostics.localConfigAvailable ? '正常' : '无法读取'} · 设备登记：{clientDiagnostics.deviceRegistered === null ? '不可读' : clientDiagnostics.deviceRegistered ? '已登记' : '未登记'} · 本机模型：{clientDiagnostics.modelCount === null ? '不可读' : `${clientDiagnostics.modelCount} 个`} · 在途模型请求：{clientDiagnostics.activeModelRequests}</span>
+                        {clientDiagnostics.reauthRequired && <span className="block text-gamboge-700">需重新验证：请到「账号与设备」重新登录后恢复本机任务。</span>}
+                      </>
+                    ) : (
+                      <span className="block">
+                        {hasDesktopBridgeMethod('getClientDiagnostics') ? '正在读取本机诊断状态…' : '当前客户端不支持本机诊断摘要，请升级客户端后重试。'}
+                      </span>
+                    )}
+                </span>
+              )}
+            >
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button size="sm" variant="secondary" loading={refreshingDiagnostics} onClick={() => void refreshClientDiagnostics()}
+                  data-testid="desktop-refresh-diagnostics-btn">刷新状态</Button>
+                <Button size="sm" variant="secondary" loading={exportingDiagnostics} onClick={() => void exportDiagnostics()}
+                  data-testid="desktop-export-diagnostics-btn">导出脱敏诊断</Button>
+              </div>
+            </Row>
+          </div>
         </div>
       </Card>}
       <Card className="mb-5">

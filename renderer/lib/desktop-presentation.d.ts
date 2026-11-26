@@ -68,6 +68,10 @@ declare global {
       getUpdateStatus(): Promise<DesktopUpdateStatusResult>
       checkUpdate(): Promise<DesktopUpdateStatusResult>
       openUpdateDownload(): Promise<DesktopUpdateOpenResult>
+      // POLISH-02（docs/43 §4 第 3.2 条）：本机连接/运行/版本诊断——只读 16 键摘要 + 脱敏导出（均无参）。
+      // 摘要不含 apiKey/token/cookie/deviceId/filePath；导出只回取消与否，不回本机路径。
+      getClientDiagnostics(): Promise<DesktopClientDiagnosticsResult>
+      exportClientDiagnostics(): Promise<DesktopClientDiagnosticsExportResult>
       // DEV-AI27-17（W17b，A12）：本机选窗器（枚举只在本机，handle 不透明）。
       listComputerWindows(): Promise<DesktopComputerWindowListResult>
       // DT-04（W17c / 27 §11.5.2）：UIA 主链路固定意图——结果按 C09 白名单逐控件校验，
@@ -185,6 +189,35 @@ export type DesktopUpdateStatusResult =
 export type DesktopUpdateOpenResult =
   | { ok: false; code: string; message: string }
   | { ok: true }
+
+// POLISH-02（docs/43 §4 第 3.2 条）：本机诊断只读摘要，严格 16 键（字母序即白名单顺序）。
+// 严禁追加 apiKey / token / cookie / password / deviceId / username / workspaceName / apiOrigin / filePath。
+export type DesktopClientDiagnostics = {
+  appVersion: string
+  electronVersion: string
+  platform: string
+  arch: string
+  connectionState: 'online' | 'offline' | 'unknown'
+  mode: 'server' | 'desktop'
+  channelState: 'disconnected' | 'connecting' | 'ready' | 'error'
+  channelMessage: string
+  routeRevision: number
+  signedIn: boolean
+  reauthRequired: boolean
+  storageAvailable: boolean
+  localConfigAvailable: boolean
+  deviceRegistered: boolean | null
+  modelCount: number | null
+  activeModelRequests: number
+}
+
+export type DesktopClientDiagnosticsResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; diagnostics: DesktopClientDiagnostics }
+
+export type DesktopClientDiagnosticsExportResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; canceled: boolean }
 
 // DEV-AI27-17（W17b，A12）：本机窗口摘要。handle 不透明，标题仅用于本机选择。
 // DEV-CU P5-2（用户选定方案①）：补 pid——observe/act 必填 pid，handle 不可逆无法反解；

@@ -15,6 +15,9 @@ const DESKTOP_UI_UPDATE_STATUS_CHANNEL = 'desktop-ui:update-status';
 const DESKTOP_UI_GET_UPDATE_STATUS_CHANNEL = 'desktop-ui:get-update-status';
 const DESKTOP_UI_CHECK_UPDATE_CHANNEL = 'desktop-ui:check-update';
 const DESKTOP_UI_OPEN_UPDATE_DOWNLOAD_CHANNEL = 'desktop-ui:open-update-download';
+// POLISH-02（docs/43 §4 第 3.2 条）：本机连接/运行/版本诊断——只读摘要 + 脱敏导出（均无参）。
+const DESKTOP_UI_GET_CLIENT_DIAGNOSTICS_CHANNEL = 'desktop-ui:get-client-diagnostics';
+const DESKTOP_UI_EXPORT_CLIENT_DIAGNOSTICS_CHANNEL = 'desktop-ui:export-client-diagnostics';
 
 type LocalSettingsState = { dirty: boolean; busy: boolean };
 type SettingsOpenListener = () => void;
@@ -40,6 +43,33 @@ type DesktopUpdateStatusResult =
   | { ok: false; code: string; message: string }
   | { ok: true; status: DesktopUpdateStatus };
 type DesktopUpdateOpenResult = { ok: false; code: string; message: string } | { ok: true };
+
+// POLISH-02（docs/43 §4 第 3.2 条）：本机诊断摘要严格 16 键。字段名与主进程
+// DesktopClientDiagnostics 完全一致；apiKey/token/cookie/deviceId/filePath 等一概不在白名单内。
+type DesktopClientDiagnostics = {
+  appVersion: string;
+  electronVersion: string;
+  platform: string;
+  arch: string;
+  connectionState: 'online' | 'offline' | 'unknown';
+  mode: 'server' | 'desktop';
+  channelState: 'disconnected' | 'connecting' | 'ready' | 'error';
+  channelMessage: string;
+  routeRevision: number;
+  signedIn: boolean;
+  reauthRequired: boolean;
+  storageAvailable: boolean;
+  localConfigAvailable: boolean;
+  deviceRegistered: boolean | null;
+  modelCount: number | null;
+  activeModelRequests: number;
+};
+type DesktopClientDiagnosticsResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; diagnostics: DesktopClientDiagnostics };
+type DesktopClientDiagnosticsExportResult =
+  | { ok: false; code: string; message: string }
+  | { ok: true; canceled: boolean };
 type DesktopUpdateStatusListener = (status: DesktopUpdateStatus) => void;
 type CXLongImageCaptureResult =
   | { ok: false; code: string; message: string }
@@ -381,6 +411,88 @@ function parseDesktopUpdateOpenResult(raw: unknown): DesktopUpdateOpenResult | n
       : null;
   }
   return Object.keys(value).length === 1 ? { ok: true } : null;
+}
+
+// POLISH-02（docs/43 §4 第 3.2 条）：16 键摘要的严格白名单——键集合必须完全相等，
+// 多余键（apiKey/filePath/deviceId/...）整份拒绝；枚举、布尔、非负安全整数逐项校验。
+const DESKTOP_CLIENT_DIAGNOSTICS_KEYS =
+  'activeModelRequests,appVersion,arch,channelMessage,channelState,connectionState,deviceRegistered,electronVersion,localConfigAvailable,mode,modelCount,platform,reauthRequired,routeRevision,signedIn,storageAvailable';
+
+function parseDesktopClientDiagnostics(raw: unknown): DesktopClientDiagnostics | null {
+  const value = asRecord(raw);
+  if (!value || Object.keys(value).sort().join(',') !== DESKTOP_CLIENT_DIAGNOSTICS_KEYS) return null;
+  const bounded = (key: string, max: number): string | null => {
+    const item = value[key];
+    return typeof item === 'string' && item.length <= max ? item : null;
+  };
+  const appVersion = bounded('appVersion', 64);
+  const electronVersion = bounded('electronVersion', 64);
+  const platform = bounded('platform', 32);
+  const arch = bounded('arch', 32);
+  const channelMessage = bounded('channelMessage', 200);
+  if (appVersion === null || electronVersion === null || platform === null
+    || arch === null || channelMessage === null) return null;
+  const connectionState = value.connectionState;
+  if (!['online', 'offline', 'unknown'].includes(String(connectionState))) return null;
+  const mode = value.mode;
+  if (!['server', 'desktop'].includes(String(mode))) return null;
+  const channelState = value.channelState;
+  if (!['disconnected', 'connecting', 'ready', 'error'].includes(String(channelState))) return null;
+  for (const key of ['signedIn', 'reauthRequired', 'storageAvailable', 'localConfigAvailable']) {
+    if (typeof value[key] !== 'boolean') return null;
+  }
+  if (value.deviceRegistered !== null && typeof value.deviceRegistered !== 'boolean') return null;
+  for (const key of ['routeRevision', 'activeModelRequests']) {
+    const item = value[key];
+    if (typeof item !== 'number' || !Number.isSafeInteger(item) || item < 0) return null;
+  }
+  if (value.modelCount !== null
+    && (typeof value.modelCount !== 'number' || !Number.isSafeInteger(value.modelCount) || value.modelCount < 0)) return null;
+  return {
+    appVersion,
+    electronVersion,
+    platform,
+    arch,
+    connectionState: connectionState as DesktopClientDiagnostics['connectionState'],
+    mode: mode as DesktopClientDiagnostics['mode'],
+    channelState: channelState as DesktopClientDiagnostics['channelState'],
+    channelMessage,
+    routeRevision: value.routeRevision as number,
+    signedIn: value.signedIn as boolean,
+    reauthRequired: value.reauthRequired as boolean,
+    storageAvailable: value.storageAvailable as boolean,
+    localConfigAvailable: value.localConfigAvailable as boolean,
+    deviceRegistered: value.deviceRegistered as boolean | null,
+    modelCount: value.modelCount as number | null,
+    activeModelRequests: value.activeModelRequests as number,
+  };
+}
+
+function parseDesktopClientDiagnosticsResult(raw: unknown): DesktopClientDiagnosticsResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.code === 'string' && value.code.length <= 40
+      && typeof value.message === 'string' && value.message.length <= 200
+      ? { ok: false, code: value.code, message: value.message }
+      : null;
+  }
+  if (Object.keys(value).sort().join(',') !== 'diagnostics,ok') return null;
+  const diagnostics = parseDesktopClientDiagnostics(value.diagnostics);
+  return diagnostics ? { ok: true, diagnostics } : null;
+}
+
+function parseDesktopClientDiagnosticsExportResult(raw: unknown): DesktopClientDiagnosticsExportResult | null {
+  const value = asRecord(raw);
+  if (!value || typeof value.ok !== 'boolean') return null;
+  if (!value.ok) {
+    return typeof value.code === 'string' && value.code.length <= 40
+      && typeof value.message === 'string' && value.message.length <= 200
+      ? { ok: false, code: value.code, message: value.message }
+      : null;
+  }
+  if (Object.keys(value).sort().join(',') !== 'canceled,ok') return null;
+  return typeof value.canceled === 'boolean' ? { ok: true, canceled: value.canceled } : null;
 }
 
 // OPT-U04：平台登录入参本机校验（非法即回 invalid_argument 且不发 IPC）。
@@ -906,6 +1018,28 @@ contextBridge.exposeInMainWorld('opsDesktopUI', {
     }
     return parseDesktopUpdateOpenResult(raw)
       ?? { ok: false, code: 'desktop_update_invalid', message: 'Electron 返回的下载结果无效。' };
+  },
+  // POLISH-02（docs/43 §4 第 3.2 条）：本机诊断——只读摘要（无参）与脱敏导出（无参）。
+  // 结果在进入渲染器之前完成 16 键白名单收敛；导出只回取消与否。
+  async getClientDiagnostics(): Promise<DesktopClientDiagnosticsResult> {
+    let raw: unknown;
+    try {
+      raw = await ipcRenderer.invoke(DESKTOP_UI_GET_CLIENT_DIAGNOSTICS_CHANNEL);
+    } catch {
+      return { ok: false, code: 'desktop_diagnostics_unavailable', message: '本机客户端诊断状态暂不可用，请重试。' };
+    }
+    return parseDesktopClientDiagnosticsResult(raw)
+      ?? { ok: false, code: 'desktop_diagnostics_invalid', message: 'Electron 返回的客户端诊断状态无效。' };
+  },
+  async exportClientDiagnostics(): Promise<DesktopClientDiagnosticsExportResult> {
+    let raw: unknown;
+    try {
+      raw = await ipcRenderer.invoke(DESKTOP_UI_EXPORT_CLIENT_DIAGNOSTICS_CHANNEL);
+    } catch {
+      return { ok: false, code: 'desktop_diagnostics_unavailable', message: '本机诊断信息导出暂不可用，请重试。' };
+    }
+    return parseDesktopClientDiagnosticsExportResult(raw)
+      ?? { ok: false, code: 'desktop_diagnostics_invalid', message: 'Electron 返回的诊断导出结果无效。' };
   },
   async captureLongImage(buildId: string): Promise<CXLongImageCaptureResult> {
     if (!isUuid(buildId)) return { ok: false, code: 'invalid_input', message: '长图构建参数无效。' };

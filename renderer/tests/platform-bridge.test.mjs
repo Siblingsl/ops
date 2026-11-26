@@ -52,6 +52,8 @@ function intentCalls(mod) {
     ['getDesktopUpdateStatus', () => mod.getDesktopUpdateStatus()],
     ['checkDesktopUpdate', () => mod.checkDesktopUpdate()],
     ['openDesktopUpdateDownload', () => mod.openDesktopUpdateDownload()],
+    ['getDesktopClientDiagnostics', () => mod.getDesktopClientDiagnostics()],
+    ['exportDesktopClientDiagnostics', () => mod.exportDesktopClientDiagnostics()],
     ['openDesktopPlatformLogin', () => mod.openDesktopPlatformLogin({ accountId: 'acc-1', platform: 'xhs' })],
     ['setDesktopLocalSettingsPanel', () => mod.setDesktopLocalSettingsPanel('connection')],
     ['openXhsManualImageFolder', () => mod.openXhsManualImageFolder({ workId: 'work-1', files: [] })],
@@ -138,6 +140,16 @@ test('POLISH-01 测试 2：注入模拟桥后探针准确、订阅可取消、�
     const listeners = {}
     const sentinels = {
       update: { ok: true, status: { status: 'up-to-date', currentVersion: '1.0.0' } },
+      diagnostics: {
+        ok: true,
+        diagnostics: {
+          appVersion: '1.0.0', electronVersion: '44.9.1', platform: 'win32', arch: 'x64',
+          connectionState: 'online', mode: 'desktop', channelState: 'ready', channelMessage: '连接正常',
+          routeRevision: 2, signedIn: true, reauthRequired: false, storageAvailable: true,
+          localConfigAvailable: true, deviceRegistered: true, modelCount: 1, activeModelRequests: 0,
+        },
+      },
+      diagnosticsExport: { ok: true, canceled: false },
       platformLogin: { ok: true },
       localSettings: { ok: true },
       xhs: { ok: true, count: 1, fileNames: ['01_封面.png'] },
@@ -158,6 +170,8 @@ test('POLISH-01 测试 2：注入模拟桥后探针准确、订阅可取消、�
       async getUpdateStatus() { calls.push(['getUpdateStatus']); return sentinels.update },
       async checkUpdate() { calls.push(['checkUpdate']); return sentinels.update },
       async openUpdateDownload() { calls.push(['openUpdateDownload']); return { ok: true } },
+      async getClientDiagnostics() { calls.push(['getClientDiagnostics']); return sentinels.diagnostics },
+      async exportClientDiagnostics() { calls.push(['exportClientDiagnostics']); return sentinels.diagnosticsExport },
       async openPlatformLogin(input) { calls.push(['openPlatformLogin', input]); return sentinels.platformLogin },
       async setLocalSettingsPanel(action) { calls.push(['setLocalSettingsPanel', action]); return sentinels.localSettings },
       async openXhsManualImageFolder(input) { calls.push(['openXhsManualImageFolder', input]); return sentinels.xhs },
@@ -216,6 +230,13 @@ test('POLISH-01 测试 2：注入模拟桥后探针准确、订阅可取消、�
 
       // 代表性意图：入参原样透传，返回值保持同一引用（不复制、不改写）。
       assert.equal(await mod.getDesktopUpdateStatus(), sentinels.update)
+      // POLISH-02：本机诊断摘要与脱敏导出原样透传（无参固定意图）。
+      assert.equal(mod.hasDesktopBridgeMethod('getClientDiagnostics'), true)
+      assert.equal(mod.hasDesktopBridgeMethod('exportClientDiagnostics'), true)
+      assert.equal(await mod.getDesktopClientDiagnostics(), sentinels.diagnostics)
+      assert.deepEqual(calls.find((call) => call[0] === 'getClientDiagnostics'), ['getClientDiagnostics'])
+      assert.equal(await mod.exportDesktopClientDiagnostics(), sentinels.diagnosticsExport)
+      assert.deepEqual(calls.find((call) => call[0] === 'exportClientDiagnostics'), ['exportClientDiagnostics'])
       const loginInput = { accountId: 'acc-1', platform: 'wechat_mp' }
       assert.equal(await mod.openDesktopPlatformLogin(loginInput), sentinels.platformLogin)
       assert.equal(calls.find((call) => call[0] === 'openPlatformLogin')[1], loginInput)
