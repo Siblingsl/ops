@@ -58,8 +58,10 @@ services:
       # V4 采集部署开关；off 为默认，改为 allow 后仍需超管在网页开启来源与强度
       OPS_CRAWL_MODE: ${OPS_CRAWL_MODE:-off}
       # D-129 / D-160：桌面 AI 与平台采集闸门，默认全关，验收前不要打开
+      # 注意：按 D-160，OPS_DESKTOP_PLATFORM_ENABLED 留空会放行进程闸（日常听 DB kill_switch），
+      # 故轻量模板默认显式给 0；验收/启用时改为 1 或留空交由超管 kill_switch 控制。
       OPS_DESKTOP_AI_ENABLED: ${OPS_DESKTOP_AI_ENABLED:-}
-      OPS_DESKTOP_PLATFORM_ENABLED: ${OPS_DESKTOP_PLATFORM_ENABLED:-}
+      OPS_DESKTOP_PLATFORM_ENABLED: ${OPS_DESKTOP_PLATFORM_ENABLED:-0}
       OPS_DESKTOP_PLATFORM_AUTO_ADOPT: ${OPS_DESKTOP_PLATFORM_AUTO_ADOPT:-0}
       # 冻结的智能体特性：默认空 = 不额外放开任何键，以超管 DB 为准
       OPS_AGENT_WORKBENCH_FEATURES: ${OPS_AGENT_WORKBENCH_FEATURES:-}
