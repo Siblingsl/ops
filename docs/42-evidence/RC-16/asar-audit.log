@@ -1,0 +1,66 @@
+[VERIFY-03a] app.asar / renderer audit
+date: 2026-11-26
+baseline: main / HEAD 1a864b44
+asar: desktop/out/OPS Desktop-win32-x64/resources/app.asar
+asar_bytes: 2451007
+header_json_start_offset: 16
+file_count: 198
+dir_count: 32
+uncompressed_bytes: 2399487
+top_level_dirs: .build, node_modules, public
+top_level_files: forge.config.cjs, package.json
+
+required_runtime_entries (9/9 PASS):
+[PASS] .build/main.js
+[PASS] .build/bootstrap.js
+[PASS] .build/business-ui-preload.js
+[PASS] .build/ipc/client-diagnostics.js  (POLISH-02)
+[PASS] .build/ipc/update.js  (OPT-E02)
+[PASS] .build/computer-worker/  (directory)
+[PASS] .build/browser-bridge/diagnostics.html
+[PASS] public/settings/index.html
+[PASS] package.json
+
+forbidden_root_entries (must be 0; actual 0):
+[PASS] src/                 0 hit
+[PASS] test/                0 hit
+[PASS] chrome-extension/    0 hit
+[PASS] scripts/             0 hit
+[PASS] .playwright-results/ 0 hit
+[PASS] .workbuddy-ai/       0 hit
+[PASS] pnpm-lock.yaml       0 hit
+[PASS] tsconfig.json        0 hit
+[PASS] README.md            0 hit
+[PASS] RELEASE_RUNBOOK.md   0 hit
+[PASS] USER_MANUAL.md       0 hit
+
+extra_check:
+suspicious_non_node_modules_source_paths: 0
+
+renderer:
+path: desktop/out/OPS Desktop-win32-x64/resources/renderer
+files: 92
+bytes: 3283244
+MiB: 3.13
+index_html: present
+assets_js_css: present
+build_timestamp: 2026-11-26 12:14:32
+
+feature_string_hits:
+desktop-client-diagnostics-row  HIT  assets/Preferences-BZqu0xiM.js
+desktop-update-pill             HIT  assets/Shell-Ce4UdC5Q.js
+xhs-manual-fallback-bar         HIT  assets/xhs-manual-fallback-C4nDChUu.js
+
+packaged_diagnostics_raw (sanitized, no paths):
+{"appVersion":"0.1.0","electronVersion":"44.9.1","platform":"win32","arch":"x64","connectionState":"online","mode":"server","channelState":"disconnected","channelMessage":"通道尚未连接","routeRevision":0,"signedIn":false,"reauthRequired":false,"storageAvailable":true,"localConfigAvailable":true,"deviceRegistered":false,"modelCount":0,"activeModelRequests":0}
+
+packaged_update_status_raw (sanitized):
+{"status":"idle","currentVersion":"0.1.0","latestVersion":"","updateAvailable":false,"releaseNotes":"","downloadUrl":"","sha256":"","checkedAt":null,"error":""}
+
+screenshot:
+path: docs/42-evidence/RC-16/01-packaged-unpacked-smoke.png
+dimensions: 1803x1020
+bytes: 69616
+privacy: login page only; no account name, no local path
+
+result: PASS
