@@ -1,0 +1,836 @@
+{
+  "meta": {
+    "task": "VERIFY-05 / RC-17 Step 2",
+    "title": "公网 HTTPS/WSS、真实打包桌面端、多租户隔离与公网预览页实测",
+    "executed_at": "2026-11-26T15:18:00+08:00/2026-11-26T15:56:00+08:00",
+    "base_url": "https://ops-api.88813888.xyz",
+    "repo_head": "d2e8eb47",
+    "tooling": [
+      "Node.js 22.23.2 fetch / undici",
+      "ws WebSocket client",
+      "Playwright 1.64 Chromium",
+      "packaged Electron 44.9.1 (OPS Desktop 0.1.1)"
+    ],
+    "prohibited_tools": [
+      "curl.exe (Windows Schannel) was not used for HTTPS/WSS probes; it fails with curl: (35) SSL/TLS connection failed against this endpoint"
+    ],
+    "data_protection": {
+      "existing_production_data_untouched": "7 users / 8 workspaces / 8 accounts / 1 work were not modified or deleted",
+      "test_data_prefix": "rc17v05_1530_* / RC17-WS-A-1530 / RC17-WS-B-1530",
+      "real_user_data_untouched": true,
+      "desktop_user_data_dir": "%TEMP%\\ops-verify05-userdata",
+      "secrets_in_this_file": "none; no password, cookie value, session token, preview token, hostname, local user path, or raw public IP"
+    }
+  },
+  "task1_https_cors": {
+    "verdict": "PASS",
+    "tls": {
+      "protocol": "TLSv1.3",
+      "alpn": "http/1.1",
+      "cipher": "TLS_AES_256_GCM_SHA384",
+      "authorized": true,
+      "issuer": "Let's Encrypt",
+      "san": [
+        "ops-api.88813888.xyz",
+        "ops.88813888.xyz"
+      ],
+      "valid_from": "2026-11-02T06:05:05Z",
+      "valid_to": "2027-01-31T06:05:04Z"
+    },
+    "endpoints": [
+      {
+        "request": "GET /healthz",
+        "status": 200,
+        "body": "ok",
+        "content_type": "text/plain; charset=utf-8"
+      },
+      {
+        "request": "GET /api/v1/healthz",
+        "status": 200,
+        "body": "ok",
+        "content_type": "text/plain; charset=utf-8"
+      },
+      {
+        "request": "GET /api/v1/desktop/release?current=0.1.1",
+        "status": 200,
+        "json": {
+          "configured": false,
+          "latest_version": "",
+          "current_version": "0.1.1",
+          "update_available": false
+        }
+      },
+      {
+        "request": "GET /api/v1/desktop/capabilities",
+        "status": 200,
+        "json_summary": {
+          "minimum_client_version": "1.0.0",
+          "platforms": [
+            "windows-x64"
+          ],
+          "platform_collection": {
+            "enabled": true,
+            "protocol_version": 1,
+            "protocol_versions": [
+              1,
+              2
+            ],
+            "platforms": [
+              "wechat_mp",
+              "xhs"
+            ],
+            "operations_count": 25,
+            "v2": {
+              "enabled": false,
+              "protocol_version": 2,
+              "account_sync_platforms": [],
+              "metrics_refresh_platforms": []
+            }
+          },
+          "auto_adopt_related_keys": [],
+          "auto_adopt_exposed": false
+        }
+      }
+    ],
+    "cors": {
+      "desktop_preflight": {
+        "request": "OPTIONS /api/v1/healthz",
+        "origin": "ops-desktop://business",
+        "status": 204,
+        "access_control_allow_origin": "ops-desktop://business",
+        "access_control_allow_credentials": "true",
+        "access_control_allow_methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "access_control_max_age": "600"
+      },
+      "evil_preflight": {
+        "request": "OPTIONS /api/v1/healthz",
+        "origin": "https://evil.example.invalid",
+        "status": 403,
+        "access_control_allow_origin": null
+      },
+      "unauthenticated_channel": {
+        "request": "GET /api/v1/desktop/channel",
+        "status": 401,
+        "error_code": "desktop_ticket_invalid",
+        "access_control_allow_origin": null
+      }
+    },
+    "static_web_disabled": {
+      "request": "GET /",
+      "status": 404,
+      "content_type": "text/plain; charset=utf-8",
+      "body_prefix": "404 page not found",
+      "spa_html_returned": false,
+      "fallback_probe": "GET /works",
+      "fallback_status": 404
+    }
+  },
+  "task2_multitenant": {
+    "verdict": "PARTIAL",
+    "tag": "1530",
+    "accounts": [
+      {
+        "role": "owner",
+        "username": "rc17v05_1530_owner",
+        "userId": "66ec03bc-de1a-4116-b954-391fc3f19baf",
+        "initial_workspace_id": "c1d37894-3582-403d-aee2-09f367c4f4d8",
+        "in_ws_a_role": "owner"
+      },
+      {
+        "role": "editor",
+        "username": "rc17v05_1530_editor",
+        "userId": "addf719c-e467-4b04-9ac1-29127edf22a6",
+        "initial_workspace_id": "46d7b06f-c88a-4cb7-a739-8ef086a457fe",
+        "in_ws_a_role": "editor"
+      },
+      {
+        "role": "viewer",
+        "username": "rc17v05_1530_viewer",
+        "userId": "68b286ee-f1f2-4db9-a142-56b851fd7933",
+        "initial_workspace_id": "bdf9fe8d-00bd-4051-8fe0-ab6b6237600a",
+        "in_ws_a_role": "viewer"
+      }
+    ],
+    "workspaces": {
+      "A": {
+        "id": "c1d37894-3582-403d-aee2-09f367c4f4d8",
+        "name": "RC17-WS-A-1530",
+        "accounts": [
+          {
+            "id": "4c73fc81-bdb3-40e4-82b4-d9efe48d53b2",
+            "name": "RC17V05-A-公众号-1530",
+            "platform": "wechat_mp",
+            "content_format": "long_article"
+          }
+        ],
+        "works": [
+          {
+            "id": "fd6543e7-8f56-4373-aa39-5539acb98d8e",
+            "name": "workA"
+          }
+        ]
+      },
+      "B": {
+        "id": "eca4fa07-4006-4039-bf43-1de2f0138001",
+        "name": "RC17-WS-B-1530",
+        "accounts": [
+          {
+            "id": "0d64ddb2-52a1-44c2-adb0-6a3a0fe91f43",
+            "name": "RC17V05-B-公众号-1530",
+            "platform": "wechat_mp"
+          }
+        ],
+        "works": [
+          {
+            "id": "01a3a78f-16bc-48c9-8a2c-b01feb83c8d1",
+            "name": "workB"
+          }
+        ]
+      }
+    },
+    "session_cookie_attributes": {
+      "name": "<session-cookie-name>",
+      "secure": true,
+      "httponly": true,
+      "samesite": "None",
+      "path": "/",
+      "has_value_but_value_not_recorded": true
+    },
+    "members_after_patch": [
+      {
+        "username_masked": "<prefix>_owner",
+        "role": "owner",
+        "status": "active"
+      },
+      {
+        "username_masked": "<prefix>_editor",
+        "role": "editor",
+        "status": "active"
+      },
+      {
+        "username_masked": "<prefix>_viewer",
+        "role": "viewer",
+        "status": "active"
+      }
+    ],
+    "invites": {
+      "editor": {
+        "status": 200,
+        "role": "editor",
+        "max_uses": 1,
+        "join_status": 200,
+        "joined_workspace": "RC17-WS-A-1530"
+      },
+      "viewer": {
+        "status": 200,
+        "role": "viewer",
+        "max_uses": 1,
+        "join_status": 200,
+        "joined_workspace": "RC17-WS-A-1530"
+      }
+    },
+    "permission_matrix": {
+      "first_run_assertions": {
+        "total": 49,
+        "pass": 47,
+        "fail": 2,
+        "failed": [
+          "viewer_wechat_push_preview_403",
+          "server_ip_matches_client"
+        ]
+      },
+      "after_ip_recheck": {
+        "total": 49,
+        "pass": 48,
+        "fail": 1,
+        "remaining_fail": "viewer_wechat_push_preview_403"
+      },
+      "viewer": [
+        {
+          "action": "GET workA",
+          "status": 200,
+          "result": "PASS"
+        },
+        {
+          "action": "POST create work",
+          "status": 403,
+          "error_code": "forbidden",
+          "result": "PASS"
+        },
+        {
+          "action": "PATCH workA",
+          "status": 403,
+          "error_code": "forbidden",
+          "result": "PASS"
+        },
+        {
+          "action": "PATCH workA section body",
+          "status": 403,
+          "error_code": "forbidden",
+          "result": "PASS"
+        },
+        {
+          "action": "GET workA wechat push-preview",
+          "status": 200,
+          "error_code": null,
+          "result": "FAIL",
+          "root_cause": "read-only GET endpoint lacks role check; blockViewerWrites only blocks write methods",
+          "response_keys": [
+            "asset_count",
+            "backend_url",
+            "can_push",
+            "check_revision_stale",
+            "content_format",
+            "cover_asset",
+            "cover_crops",
+            "credential",
+            "daily_limit",
+            "fields",
+            "material_basis_stale",
+            "mode",
+            "panel_images",
+            "revision",
+            "status",
+            "summary",
+            "title",
+            "today_count"
+          ],
+          "credential_value_note": "only a credential state object, no AppSecret/plaintext secret observed"
+        },
+        {
+          "action": "POST workA wechat push",
+          "status": 403,
+          "error_code": "forbidden",
+          "result": "PASS"
+        },
+        {
+          "action": "DELETE asset",
+          "status": 403,
+          "error_code": "forbidden",
+          "result": "PASS"
+        },
+        {
+          "action": "DELETE workA",
+          "status": 403,
+          "error_code": "forbidden",
+          "result": "PASS"
+        }
+      ],
+      "editor": [
+        {
+          "action": "PATCH workA section body",
+          "status": 200,
+          "result": "PASS"
+        },
+        {
+          "action": "POST workspace invite",
+          "status": 403,
+          "error_code": "forbidden",
+          "result": "PASS"
+        },
+        {
+          "action": "PUT accountA wechat credential",
+          "status": 403,
+          "error_code": "forbidden",
+          "result": "PASS"
+        }
+      ],
+      "cross_workspace": [
+        {
+          "actor": "editor",
+          "target": "workB",
+          "GET": 404,
+          "PATCH": 404,
+          "DELETE": 404,
+          "error_code": "not_found",
+          "title_leaked": false
+        },
+        {
+          "actor": "editor",
+          "target": "accountB",
+          "GET": 404,
+          "PATCH": 403,
+          "DELETE": 403,
+          "error_code": "not_found/forbidden",
+          "name_leaked": false
+        },
+        {
+          "actor": "viewer",
+          "target": "workB",
+          "GET": 404,
+          "PATCH": 403,
+          "DELETE": 403,
+          "error_code": "not_found/forbidden",
+          "title_leaked": false
+        },
+        {
+          "actor": "viewer",
+          "target": "accountB",
+          "GET": 404,
+          "PATCH": 403,
+          "DELETE": 403,
+          "error_code": "not_found/forbidden",
+          "name_leaked": false
+        }
+      ]
+    },
+    "audit": {
+      "workspace_a_query": {
+        "request": "GET /api/v1/audit-logs?limit=200",
+        "status": 200,
+        "count_at_task2": 11,
+        "count_at_final_recheck": 18,
+        "actions_at_task2": {
+          "member_update": 2,
+          "invite_create": 2,
+          "workspace_switch": 2,
+          "outline_confirm": 1,
+          "work_update": 1,
+          "work_create": 1,
+          "account_create": 1,
+          "workspace_create": 1
+        },
+        "actions_at_final_recheck": {
+          "desktop_device_register": 3,
+          "desktop_ai_policy_update": 1,
+          "work_delete": 1,
+          "work_create": 2,
+          "work_update": 2,
+          "member_update": 2,
+          "invite_create": 2,
+          "workspace_switch": 2,
+          "outline_confirm": 1,
+          "account_create": 1,
+          "workspace_create": 1
+        },
+        "entry_fields": [
+          "id",
+          "action",
+          "target_type",
+          "target_id",
+          "result",
+          "detail",
+          "created_at",
+          "actor"
+        ],
+        "detail_field_keys_observed": [],
+        "workspace_b_target_leaks": 0,
+        "entries_with_detail_ip": 0,
+        "login_action_entries": 0,
+        "isolation_verdict": "PASS: no WS-B record visible in WS-A view"
+      },
+      "why_no_ip_in_workspace_audit": "the workspace audit API returns id/action/target_type/target_id/result/detail/created_at/actor; it exposes no ip field, and action=login is not included in the workspace-scoped list (0 entries). The authoritative login IP is /auth/me.prev_login_ip, which exactly matches the direct client egress.",
+      "login_ip_verification": {
+        "source": "GET /api/v1/auth/me.prev_login_ip",
+        "server_recorded_masked": "39.88.x.x",
+        "client_direct_egress_masked": "39.88.x.x",
+        "client_direct_egress_source": "myip.ipip.net (domestic direct route)",
+        "exact_match": true,
+        "same_ipv4_prefix": true,
+        "docker_or_private_gateway": false,
+        "proxy_egress_masked": "107.149.x.x",
+        "proxy_note": "cloudflare trace and ipinfo resolve to a proxy egress; this is not the route used to reach ops-api, so it must not be compared against the server record",
+        "verdict": "PASS: server-recorded login IP equals the real domestic direct egress; not a Docker gateway/private IP"
+      }
+    }
+  },
+  "task3_preview": {
+    "verdict": "PARTIAL",
+    "asset": {
+      "assetId": "1f97a63f-84d0-486f-a6f9-964d23000e99",
+      "workId": "fd6543e7-8f56-4373-aa39-5539acb98d8e",
+      "mime": "image/png",
+      "width": 960,
+      "height": 640,
+      "stored_bytes": 4915,
+      "stored_sha256": "29f46bad1dbda2e3ee7a846c1e93329678915d65b47066a3487db0ac45b73706",
+      "upload_original_bytes": 5941,
+      "upload_original_sha256": "ea69573737f840384eddc63999f7a453bb2c7548d6e20431af1ada2344415a2b",
+      "retained_in_production": true,
+      "retained_for_step3_restore_check": true
+    },
+    "first_upload_attempt": {
+      "assetId": "f212808f-10d7-414e-ad8a-76f44dae083c",
+      "stored_mime": "image/jpeg",
+      "stored_bytes": 165574,
+      "why_rejected": "opaque (no alpha) PNG was normalized to JPEG by server processImage; not image/png"
+    },
+    "work_a": {
+      "id": "fd6543e7-8f56-4373-aa39-5539acb98d8e",
+      "title_probe_length": 43,
+      "title_probe": "RC17XSS<script>window.__rc17_xss=1</script>",
+      "body_probe": "<script>window.__rc17_xss=1</script>",
+      "server_sanitized_on_write": false,
+      "output_escaped_on_preview": true,
+      "stored_xss_executed": false
+    },
+    "preview_link": {
+      "issue_status": 200,
+      "token_length": 215,
+      "expires_at": "2026-11-27T07:26:36Z",
+      "masked_url": "https://ops-api.88813888.xyz/preview/<token:215chars>",
+      "token_written_to_repo": false
+    },
+    "desktop_qr_check": {
+      "route": "ops-desktop://business/works/<workA>/preview",
+      "qr_visible": true,
+      "open_link_visible": true,
+      "href_masked": "ops-desktop://business/preview/<token:215chars>",
+      "href_protocol": "ops-desktop:",
+      "href_host": "business",
+      "expected_public_prefix": "https://ops-api.88813888.xyz/preview/",
+      "href_is_public_https": false,
+      "phone_scan_expected_to_work": false,
+      "verdict": "FAIL: desktop builds previewURL from window.location.origin, which is ops-desktop://business in Electron; the generated QR/open link is not the public https URL"
+    },
+    "playwright_mobile": {
+      "cookie_context": "fresh, no cookies",
+      "viewport": "390x844",
+      "device_scale_factor": 2,
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "headers": {
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'",
+        "Cache-Control": "no-store"
+      },
+      "xss": {
+        "window___rc17_xss": "undefined",
+        "script_nodes": 0,
+        "probe_rendered_as_text": true
+      },
+      "security_observation": "the title/body probe is stored raw (no write-side sanitization) but the preview template entity-escapes it; execution is prevented by output encoding plus CSP, not by input sanitization. No execution observed.",
+      "image": {
+        "request": "GET /api/v1/public-previews/<token>/assets/1f97a63f-84d0-486f-a6f9-964d23000e99",
+        "anonymous_status": 200,
+        "content_type": "image/png",
+        "bytes": 4915,
+        "sha256": "29f46bad1dbda2e3ee7a846c1e93329678915d65b47066a3487db0ac45b73706",
+        "img_complete": true,
+        "img_natural_width": 960,
+        "img_natural_height": 640
+      },
+      "console_errors": 0,
+      "page_errors": 0,
+      "screenshot": {
+        "path": "docs/42-evidence/RC-17/03-public-preview-mobile.png",
+        "bytes": 88106,
+        "pixel_size": "780x1912",
+        "sha256": "a36d74f5e5e444b3f28c3bbc9b8f70e65dec1a39a0dbb7a15805ebae25c048b6"
+      }
+    },
+    "negative": {
+      "invalid_token": {
+        "url_masked": "https://ops-api.88813888.xyz/preview/rc17-invalid-token-test",
+        "status": 404,
+        "content_type": "text/html; charset=utf-8",
+        "readable_chinese": true
+      },
+      "deleted_work": {
+        "workId": "78a91810-5e8a-410d-91aa-b2c7a928d002",
+        "name": "workDel",
+        "before_delete_status": 200,
+        "delete_status": 200,
+        "after_delete_status": 404,
+        "content_type": "text/html; charset=utf-8",
+        "message_excerpt": "预览链接无效或作品已不存在，请确认链接完整或联系作者重新生成。"
+      }
+    }
+  },
+  "task4_desktop": {
+    "verdict": "PASS_WITH_EVIDENCE_NOTE",
+    "packaged": {
+      "isPackaged": true,
+      "version": "0.1.1",
+      "app_path_kind": "desktop/out/OPS Desktop-win32-x64/resources/app.asar",
+      "executable_kind": "desktop/out/OPS Desktop-win32-x64/OPS Desktop.exe",
+      "user_data": "%TEMP%\\ops-verify05-userdata",
+      "user_data_isolated_from_real_user_data": true,
+      "page_origin": "ops-desktop://business",
+      "electron_version": "44.9.1",
+      "user_agent": "OPSDesktop/0.1.1 Chrome/152 Electron/44.9.1"
+    },
+    "login": {
+      "account": "rc17v05_1530_owner",
+      "workspace": "RC17-WS-A-1530",
+      "account_a": "RC17V05-A-公众号-1530",
+      "workA_visible": true,
+      "post_login_url_kind": "ops-desktop://business/a/<workspace-account-id>"
+    },
+    "diagnostics": {
+      "ipc": "desktop-ui:get-client-diagnostics",
+      "ok": true,
+      "key_count": 16,
+      "keys": [
+        "appVersion",
+        "electronVersion",
+        "platform",
+        "arch",
+        "connectionState",
+        "mode",
+        "channelState",
+        "channelMessage",
+        "routeRevision",
+        "signedIn",
+        "reauthRequired",
+        "storageAvailable",
+        "localConfigAvailable",
+        "deviceRegistered",
+        "modelCount",
+        "activeModelRequests"
+      ],
+      "service_origin": "https://ops-api.88813888.xyz",
+      "service_origin_source": "settings getInfo().apiOrigin (the diagnostics IPC exposes appVersion/electronVersion/platform/arch/connectionState/mode/channelState/channelMessage/routeRevision/signedIn/reauthRequired/storageAvailable/localConfigAvailable/deviceRegistered/modelCount/activeModelRequests, not the API origin)",
+      "initial_channel_state": "disconnected",
+      "final_channel_state": "ready",
+      "final_channel_message": "WSS 通道已连接；桌面 AI 模式尚未应用。",
+      "final_device_registered": true,
+      "final_route_revision": 1,
+      "model_count": 0
+    },
+    "wss": {
+      "endpoint": "wss://ops-api.88813888.xyz/api/v1/desktop/channel",
+      "origin_header": "empty (desktop client, not browser)",
+      "device_registration": {
+        "probe_device_id": "fee3cb07-d0fe-4f8c-843b-f001c1ec70e7",
+        "probe_device_name": "RC17V05-WSS-Probe-1530",
+        "platform": "windows-x64",
+        "version": "0.1.1"
+      },
+      "connection_ticket": {
+        "status": 200,
+        "ticket_length": 43,
+        "generation": 1,
+        "route_revision": 1
+      },
+      "handshake": {
+        "raw_http_upgrade_status": 101,
+        "protocol": "Switching Protocols",
+        "sec_websocket_accept_present": true,
+        "messages": [
+          "channel.hello",
+          "channel.ready",
+          "channel.ready_ack",
+          "channel.heartbeat",
+          "channel.heartbeat_ack"
+        ]
+      },
+      "devices_list": {
+        "status": 200,
+        "count": 3,
+        "online_field_absent": true,
+        "desktop_device": {
+          "id": "e3506719-2ea3-43cc-8415-d9fcb629d49e",
+          "name": "OPS Desktop",
+          "platform": "windows-x64",
+          "version": "0.1.1",
+          "last_seen_at": "2026-11-26T15:44:38.142507+08:00",
+          "revoked_at": null
+        },
+        "probe_devices": [
+          {
+            "id": "9b9fcdfc-4e8b-4cc8-829d-048aac0b3e7a",
+            "name": "RC17V05-Raw101-1530",
+            "last_seen_at": "2026-11-26T15:42:39.729327+08:00"
+          },
+          {
+            "id": "fee3cb07-d0fe-4f8c-843b-f001c1ec70e7",
+            "name": "RC17V05-WSS-Probe-1530",
+            "last_seen_at": "2026-11-26T15:42:00.891689+08:00"
+          }
+        ],
+        "last_seen_at_set": true
+      },
+      "desktop_channel": {
+        "state": "ready",
+        "device_registered": true,
+        "heartbeat_round_trip": true
+      }
+    },
+    "feature_gates": {
+      "source": "GET /api/v1/agent/bootstrap",
+      "status": 200,
+      "a_tier": {
+        "expected": 11,
+        "enabled": 11,
+        "all_enabled": true,
+        "keys": [
+          "workbench_ui",
+          "conversation_organize",
+          "context_refs",
+          "skill_requests",
+          "artifacts",
+          "run_control",
+          "event_resume",
+          "plans",
+          "goals",
+          "routines",
+          "document_parse"
+        ]
+      },
+      "b_c_tier": {
+        "expected": 8,
+        "disabled": 8,
+        "all_disabled": true,
+        "keys": [
+          "chrome_connect",
+          "browser_workspace",
+          "personal_memories",
+          "plugin_mcp",
+          "subagents",
+          "voice_dictation",
+          "voice_realtime",
+          "computer_use"
+        ]
+      },
+      "additional_registered": {
+        "agent_roles": true,
+        "workflow_templates": true,
+        "operations_directory": false,
+        "side_chat": false,
+        "today_ops": false
+      },
+      "platform_collection": {
+        "enabled": true,
+        "v2_enabled": false
+      },
+      "auto_adopt": {
+        "exposed_in_capabilities": false,
+        "deployment_value": "off (per production deployment fact; key absent from public metadata)"
+      },
+      "bootstrap_state": {
+        "enabled": true,
+        "can_use": false,
+        "role": "owner",
+        "reason": "no_model"
+      }
+    },
+    "screens": {
+      "routes_checked": [
+        "workspace home",
+        "works",
+        "topics",
+        "ops",
+        "work detail",
+        "settings/models",
+        "settings/usage",
+        "review"
+      ],
+      "console_errors": 0,
+      "page_errors": 0,
+      "screenshot": {
+        "path": "docs/42-evidence/RC-17/01-desktop-prod-connected.png",
+        "bytes": 153446,
+        "pixel_size": "1802x1020",
+        "sha256": "d6b0690c4b1267eda746a41cb25c6409302999a5585de34fe3e06a961cf3424d"
+      }
+    },
+    "evidence_note_02": {
+      "path": "docs/42-evidence/RC-17/02-feature-gates-prod.png",
+      "bytes": 412702,
+      "pixel_size": "2880x2164",
+      "sha256": "b07348aba6ea3b5f264d442fc0b52974840a33156087f206317283eca949dc33",
+      "nature": "read-only rendering of real GET /api/v1/agent/bootstrap results, not a system-admin product page",
+      "why": "test owner has is_system_admin=false; /settings/admin redirects to /settings/accounts by design, so the product UI cannot display the feature switch matrix for this account"
+    },
+    "policy_fix_during_test": {
+      "initial_error": "desktop_ai_forbidden 403 because WS-A desktop_ai_policy.enabled=false; plus reauthRequired=true after 5-minute reauth expiry",
+      "fix": "PUT /api/v1/desktop/policy {enabled:true,allow_member_endpoints:false} -> 200; reauth with password -> ok",
+      "authorization_revision": "1 -> 2",
+      "final_state": "channel ready",
+      "note": "test workspace policy left enabled; no production user workspace touched"
+    },
+    "cleanup": {
+      "method": "Electron app.exit(0) through main-process inspector after app.quit() did not terminate the window; the later QR-check instance was closed with an isolated Stop-Process tree",
+      "extra_instance_note": "CDP window close on the QR-check instance did not exit the app; only the isolated exe process tree was terminated",
+      "remaining_processes": 0,
+      "temp_state_retained": "%TEMP%\\ops-verify05-state.json",
+      "temp_userdata_retained": "%TEMP%\\ops-verify05-userdata",
+      "real_user_data_touched": false
+    }
+  },
+  "deviations": [
+    {
+      "id": "D1",
+      "severity": "medium",
+      "area": "viewer permission",
+      "finding": "viewer can GET /api/v1/works/{workA}/wechat/push-preview and receives 200 instead of 403",
+      "impact": "read-only endpoint exposes push preview payload and credential state object to viewer; no plaintext secret observed",
+      "root_cause": "blockViewerWrites only guards write methods; the GET preview endpoint has no role check",
+      "action": "recorded as FAIL; no source change made in this step"
+    },
+    {
+      "id": "D2",
+      "severity": "low",
+      "area": "audit view",
+      "finding": "WS-A audit query returns 11 entries at task2 time (18 after later desktop actions), but 0 entries expose detail.ip; action=login returns 0 entries",
+      "impact": "cannot evidence login IP from workspace audit view; IP verified via /auth/me.prev_login_ip instead",
+      "root_cause": "the audit API exposes id/action/target_type/target_id/result/detail/created_at/actor only (no ip field); login is not included in workspace-scoped audit list",
+      "action": "recorded; no source change made"
+    },
+    {
+      "id": "D3",
+      "severity": "low",
+      "area": "desktop first connect",
+      "finding": "first WSS connect failed with desktop_ai_forbidden and reauthRequired",
+      "impact": "desktop requires workspace desktop_ai_policy enabled and a fresh reauth before channel ready",
+      "root_cause": "test workspace policy default disabled; reauth 5-minute window expired",
+      "action": "enabled policy for test workspace + reauth; channel reached ready"
+    },
+    {
+      "id": "D4",
+      "severity": "low",
+      "area": "preview asset mime",
+      "finding": "first PNG upload without alpha was normalized to JPEG; not image/png",
+      "impact": "preview asset test initially failed mime assertion",
+      "root_cause": "server processImage converts opaque PNG to JPEG",
+      "action": "re-uploaded RGBA transparent PNG 960x640; stored image/png 4915B; final PASS"
+    },
+    {
+      "id": "D5",
+      "severity": "info",
+      "area": "feature-gate screenshot",
+      "finding": "test owner is not system admin; /settings/admin redirects to /settings/accounts",
+      "impact": "02-feature-gates-prod.png is a read-only API evidence rendering, not a product admin page",
+      "root_cause": "product UI gates admin settings by is_system_admin",
+      "action": "declared in image and JSON; no claim of product UI screenshot"
+    },
+    {
+      "id": "D6",
+      "severity": "info",
+      "area": "process shutdown",
+      "finding": "app.quit() did not terminate the isolated instance; app.exit(0) did",
+      "impact": "0 residual processes confirmed; no real user data directory touched",
+      "root_cause": "window lifecycle/close handler did not complete quit",
+      "action": "used Electron app.exit(0) via main inspector"
+    },
+    {
+      "id": "D7",
+      "severity": "info",
+      "area": "XSS defense model",
+      "finding": "the XSS probe is stored raw in work title/body; the preview page escapes it and CSP blocks script execution",
+      "impact": "no XSS execution in tested preview; any future renderer that outputs raw title/body would be exposed",
+      "root_cause": "write path does not sanitize; preview relies on output encoding + CSP",
+      "action": "recorded as observation; no source change made in this step"
+    },
+    {
+      "id": "D8",
+      "severity": "medium",
+      "area": "desktop public preview link",
+      "finding": "desktop preview page generates QR code and '打开手机预览' href as ops-desktop://business/preview/<token>; it is not the public https URL",
+      "impact": "phone scanning the QR will not reach the public preview page; the desktop control is effectively broken for the intended mobile share flow",
+      "root_cause": "renderer pages/work/Preview.tsx builds previewURL as window.location.origin + '/preview/' + token; in Electron the origin is ops-desktop://business",
+      "action": "recorded as FAIL; no source change made in this step"
+    }
+  ],
+  "verdict": {
+    "task1": "PASS",
+    "task2": "PARTIAL: 48/49 assertions pass after IP recheck; sole remaining failure is viewer GET wechat push-preview returning 200",
+    "task3": "PARTIAL: server public preview PASS (mobile Playwright, XSS escaped, anonymous PNG asset); desktop QR/open link FAIL because it points to ops-desktop://business/preview/<token> instead of the public https URL",
+    "task4": "PASS with evidence note: packaged true, production https login, WSS 101 + heartbeat, feature gates 11 on / 8 off; 02 is API evidence rendering",
+    "repo_source_diff": "none expected; verified separately before handoff",
+    "committed": false,
+    "docs_42_43_08_35_modified": false
+  }
+}

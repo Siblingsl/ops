@@ -1,0 +1,229 @@
+{
+  "meta": {
+    "task": "VERIFY-05 / RC-17 Step 3C",
+    "title": "公网数据库短暂停机 503 → 打包桌面端可读报错与重连恢复实测",
+    "executed_at": "2026-11-26T16:39:58+08:00/2026-11-26T16:45:10+08:00",
+    "base_url": "https://ops-api.88813888.xyz",
+    "repo_head": "d2e8eb47",
+    "environment": {
+      "os": "Windows 11 10.0.26200",
+      "runtime": "本地 PC"
+    },
+    "tooling": [
+      "Node.js 22.23.2 fetch (undici, AbortSignal.timeout)",
+      "Chrome DevTools Protocol（打包 Electron 渲染页，127.0.0.1:19225）",
+      "packaged Electron 44.9.1 / OPS Desktop 0.1.1"
+    ],
+    "data_protection": {
+      "desktop_user_data_dir": "%TEMP%\\ops-verify05-userdata",
+      "state_file": "%TEMP%\\ops-verify05-state.json",
+      "real_user_data_untouched": true,
+      "secrets_in_this_file": "none; no password, cookie value, CSRF token, session token, raw public IP, absolute local user path or host name"
+    },
+    "scope_note": "本步仅实测与取证，不修改源码，不修改 docs/42/43/08/35 之外的任何业务文件，不 commit / push。"
+  },
+  "baseline": {
+    "desktop": {
+      "username": "rc17v05_1530_owner",
+      "role": "owner",
+      "workspace": "RC17-WS-A-1530",
+      "route": "ops-desktop://business/a/{accountId}/works",
+      "work_rows": 1,
+      "work_link": "/works/fd6543e7-8f56-4373-aa39-5539acb98d8e",
+      "has_error_state": false
+    },
+    "auth_me": {
+      "request": "GET /api/v1/auth/me",
+      "http_status": 200
+    },
+    "capabilities": {
+      "request": "GET /api/v1/desktop/capabilities",
+      "http_status": 200,
+      "platform_collection_enabled": true,
+      "disabled_reason": null
+    },
+    "healthz": {
+      "request": "GET /healthz",
+      "http_status": 200,
+      "body": "ok",
+      "elapsed_ms": 61
+    }
+  },
+  "polling": {
+    "interval_ms": 1000,
+    "window_s": 600,
+    "window_note": "首个 180s 窗口（16:36 前后）内 /healthz 全程 200、无 502 闪断，判定 Tabby 尚未执行到停库；随后以 600s 窗口重开，覆盖 ./update.sh 重建（254.4s）耗时。503 在第二窗口第 286.2s 命中。",
+    "status_transitions": [
+      {
+        "at": "2026-11-26T16:39:59.844+08:00",
+        "status": 200,
+        "body": "ok",
+        "elapsed_ms": 25
+      },
+      {
+        "at": "2026-11-26T16:44:41.967+08:00",
+        "status": 502,
+        "body": "502 Bad Gateway（nginx/1.21.5，app 重建窗口）",
+        "elapsed_ms": 21
+      },
+      {
+        "at": "2026-11-26T16:44:43.985+08:00",
+        "status": 200,
+        "body": "ok",
+        "elapsed_ms": 25
+      },
+      {
+        "at": "2026-11-26T16:44:46.019+08:00",
+        "status": 503,
+        "body": "数据库不可用",
+        "elapsed_ms": 42
+      }
+    ],
+    "http_502_flash_samples": 2,
+    "network_error_samples": 0,
+    "filter_rule": "502 与网络闪断一律忽略，仅接受 status=503 且响应正文包含「数据库不可用」"
+  },
+  "outage": {
+    "detected": true,
+    "outage_detected_at": "2026-11-26T16:44:46.019+08:00",
+    "status": 503,
+    "body": "数据库不可用",
+    "elapsed_ms": 42,
+    "waited_ms": 286200,
+    "api_v1_healthz": {
+      "request": "GET /api/v1/healthz",
+      "at": "2026-11-26T16:44:46.051+08:00",
+      "http_status": 503,
+      "body": "数据库不可用",
+      "elapsed_ms": 32
+    }
+  },
+  "desktop_outage": {
+    "action": "在 503 窗口内从作品页切到工作台再切回作品页，触发作品列表真实重载（GET /accounts/{accountId}/works）",
+    "page": {
+      "route": "ops-desktop://business/a/{accountId}/works",
+      "error_state_visible": true,
+      "error_title": "加载失败",
+      "error_message": "服务器内部错误，请稍后重试（请求 ID：5HdJS-000036）",
+      "retry_button_visible": true,
+      "work_rows_rendered": 0,
+      "toast_count": 0
+    },
+    "network": {
+      "api_calls_in_window": 23,
+      "failed_calls": 17,
+      "failed_status_all_500": true,
+      "works_list_calls": [
+        {
+          "path": "/api/v1/accounts/{accountId}/works",
+          "status": 500,
+          "at": "2026-11-26T16:44:47.437+08:00"
+        },
+        {
+          "path": "/api/v1/accounts/{accountId}/works",
+          "status": 500,
+          "at": "2026-11-26T16:44:48.886+08:00"
+        },
+        {
+          "path": "/api/v1/accounts/{accountId}/works",
+          "status": 500,
+          "at": "2026-11-26T16:44:51.252+08:00"
+        }
+      ],
+      "other_failed_paths": [
+        "/api/v1/stars",
+        "/api/v1/workspaces/current/members",
+        "/api/v1/auth/me",
+        "/api/v1/accounts/{accountId}/dashboard",
+        "/api/v1/accounts",
+        "/api/v1/me/preferences",
+        "/api/v1/accounts/{accountId}/health",
+        "/api/v1/accounts/{accountId}/daily"
+      ],
+      "loading_failed_events": 3
+    },
+    "screenshot": {
+      "path": "docs/42-evidence/RC-17/05-db-outage-503.png",
+      "pixel_size": "1802x1020",
+      "bytes": 74548,
+      "sha256": "ce0b7ca4a870208c377def5463ebad296521c2446644218d23180bd26f6ae9bd",
+      "captured_at": "2026-11-26T16:44:51.433+08:00"
+    }
+  },
+  "recovery": {
+    "recovered": true,
+    "recovered_at": "2026-11-26T16:45:06.550+08:00",
+    "consecutive_200_count": 2,
+    "body": "ok",
+    "outage_duration_ms": 20531,
+    "outage_duration_note": "从首个 503 采样到连续第 2 次 200 ok，共 20.5 秒，与 Tabby 侧 18 秒停/启 postgres 加应用探测间隔吻合",
+    "wait_after_outage_ms": 15119,
+    "capabilities": {
+      "request": "GET /api/v1/desktop/capabilities",
+      "http_status": 200,
+      "platform_collection_enabled": true,
+      "disabled_reason": null,
+      "interpretation": "Step 3B 时为 enabled=false / server_env_disabled；恢复后为 true，证明 Tabby 已成功还原 .env 并重建 app"
+    },
+    "auth_me": {
+      "request": "GET /api/v1/auth/me",
+      "http_status": 200,
+      "username": "rc17v05_1530_owner",
+      "role": "owner",
+      "workspace": "RC17-WS-A-1530"
+    }
+  },
+  "desktop_recovery": {
+    "action": "作品页点击「重试」→ 列表恢复 → 打开 workA 作品详情",
+    "retry_button_clicked": true,
+    "works_list": {
+      "route": "ops-desktop://business/a/{accountId}/works",
+      "work_rows": 1,
+      "work_link": "/works/fd6543e7-8f56-4373-aa39-5539acb98d8e",
+      "error_state_visible": false
+    },
+    "workA": {
+      "route": "ops-desktop://business/works/fd6543e7-8f56-4373-aa39-5539acb98d8e",
+      "work_title_visible": true,
+      "section_outline_visible": "01 引言 / 02 正文",
+      "word_count_visible": "148 字",
+      "error_state_visible": false,
+      "loading_failed_text_present": false
+    },
+    "screenshot": {
+      "path": "docs/42-evidence/RC-17/06-db-recovered-200.png",
+      "pixel_size": "1802x1020",
+      "bytes": 157293,
+      "sha256": "70fc3b2fbbf813fcab74ac5369e8356f08b6caaf705774fdaae4ec6e080a74fb",
+      "captured_at": "2026-11-26T16:45:09.863+08:00"
+    }
+  },
+  "cleanup": {
+    "quit_method": "渲染进程 window.close 触发原生确认框「退出 OPS Desktop」，因桌面会话已锁定，改用 Win32 BM_CLICK 点击「退出客户端」按钮完成优雅退出，未强杀进程",
+    "residual_processes": 0,
+    "cdp_19225_closed": true,
+    "temp_userdata_removed": true,
+    "temp_state_file_removed": true,
+    "real_user_data": {
+      "exists": true,
+      "file_count_before": 19374,
+      "file_count_after": 19374,
+      "newest_file_write_unchanged": true,
+      "dir_last_write_unchanged": true,
+      "note": "全程使用 --user-data-dir=%TEMP%\\ops-verify05-userdata，未读写用户真实应用数据目录（OPS Desktop）"
+    }
+  },
+  "verdict": {
+    "rc17_item_6": "PASS",
+    "healthz_exact_503": "PASS",
+    "api_v1_healthz_503": "PASS",
+    "desktop_readable_error": "PASS",
+    "business_api_500_in_outage": "PASS",
+    "two_consecutive_200_recovery": "PASS",
+    "capabilities_restored_enabled_true": "PASS",
+    "auth_me_200_after_recovery": "PASS",
+    "desktop_reconnect_and_work_readable": "PASS",
+    "zero_residual_and_temp_cleanup": "PASS",
+    "summary": "公网数据库停机期间 /healthz 与 /api/v1/healthz 均返回 503「数据库不可用」，打包桌面端作品列表真实重载撞上 500 并显示「加载失败 / 服务器内部错误，请稍后重试」+「重试」；恢复后连续 2 次 200 ok、capabilities 回到 enabled=true、auth/me 200，桌面端点击重试后列表与 workA 正文均可读，报错消失。"
+  }
+}

@@ -1,0 +1,165 @@
+{
+  "meta": {
+    "task": "VERIFY-05 / RC-17 Step 3B",
+    "title": "OPS_DESKTOP_PLATFORM_ENABLED=0 生产关闭态打包桌面端 OPT-U06 显式提示实测",
+    "executed_at": "2026-11-26T16:14:41+08:00/2026-11-26T16:23:08+08:00",
+    "base_url": "https://ops-api.88813888.xyz",
+    "repo_head": "d2e8eb47",
+    "environment": {
+      "os": "Windows 11 10.0.26200",
+      "runtime": "本地 PC"
+    },
+    "tooling": [
+      "Node.js 22.23.2 fetch (undici)",
+      "Playwright 1.64.0 connectOverCDP",
+      "packaged Electron 44.9.1 / OPS Desktop 0.1.1"
+    ],
+    "data_protection": {
+      "desktop_user_data_dir": "%TEMP%\\ops-verify05-userdata",
+      "parallel_state_file": "%TEMP%\\ops-verify05-state.json（保留给 Step 3C）",
+      "real_user_data_untouched": true,
+      "secrets_in_this_file": "none; no password, cookie value, session token, absolute local path, or raw public IP"
+    },
+    "scope_note": "本步仅实测与取证，不修改源码，不修改 docs/42/43/08/35，不 commit / push。"
+  },
+  "api_check": {
+    "verdict": "PASS",
+    "request": "GET https://ops-api.88813888.xyz/api/v1/desktop/capabilities",
+    "http_status": 200,
+    "elapsed_ms": 375,
+    "platform_collection": {
+      "enabled": false,
+      "disabled_reason": "server_env_disabled",
+      "disabled_hint": "服务端未开启 OPS_DESKTOP_PLATFORM_ENABLED=1，本机自动采集与状态心跳已暂停",
+      "account_sync_platforms": [],
+      "metrics_refresh_platforms": []
+    },
+    "assertions": {
+      "http_200": true,
+      "enabled_false": true,
+      "disabled_reason_is_server_env_disabled": true,
+      "disabled_hint_contains_env_flag": true
+    }
+  },
+  "packaged_desktop_check": {
+    "verdict": "PASS",
+    "client": {
+      "product": "OPS Desktop 0.1.1",
+      "electron": "44.9.1",
+      "chrome": "152.0.7977.167",
+      "user_data_dir": "%TEMP%\\ops-verify05-userdata",
+      "remote_debugging_port": 19225
+    },
+    "session": {
+      "username": "rc17v05_1530_owner",
+      "role": "owner",
+      "workspace": "RC17-WS-A-1530",
+      "verification": "GET /api/v1/auth/me -> HTTP 200"
+    },
+    "route": "ops-desktop://business/settings/accounts",
+    "presentation": "ops-creative-desktop",
+    "platform_connection_header": {
+      "present": true,
+      "visible": true
+    },
+    "disabled_notice": {
+      "testid": "platform-collection-disabled-notice",
+      "count": 1,
+      "visible": true,
+      "text": "服务端未开启 OPS_DESKTOP_PLATFORM_ENABLED=1，本机自动采集与状态心跳已暂停",
+      "rendered_size_css_px": {
+        "width": 790,
+        "height": 43
+      },
+      "position_css_px": {
+        "x": 430,
+        "y": 426
+      },
+      "scroll_container": "desktop-settings-body",
+      "not_silent_blank": true
+    },
+    "screenshot": {
+      "path": "docs/42-evidence/RC-17/04-platform-disabled-explicit.png",
+      "pixel_size": "1803x1020",
+      "bytes": 112319,
+      "sha256": "a8adef061e8339c22d6e640a0741582806ca699419e1f08a44ebc85bb6fbeee8"
+    }
+  },
+  "presence_suppression": {
+    "verdict": "PASS",
+    "mechanism": "desktop/src/main/platform-loop.ts:41-52：tick 先取 capabilities；enabled=false 时 setPresenceHealth(\"offline\",\"自动采集尚未启用。\") 后 return，不调用 desktopClient.presence()。",
+    "samples": [
+      {
+        "at": "2026-11-26T08:20:21.603Z",
+        "presence_status": "offline",
+        "presence_message": "自动采集尚未启用。",
+        "collection_status": "idle",
+        "collection_message": "自动采集尚未启用。"
+      },
+      {
+        "at": "2026-11-26T08:20:52.036Z",
+        "presence_status": "offline",
+        "presence_message": "自动采集尚未启用。",
+        "collection_status": "idle",
+        "collection_message": "自动采集尚未启用。"
+      }
+    ],
+    "presence_updated_at_delta_ms": 30433,
+    "interpretation": "两次采样跨越一个 30 秒周期；updatedAt 前进 30433ms，且状态/文案不变，证明两个连续 tick 都命中 enabled=false 的提前返回分支。",
+    "renderer_api_paths_observed": [
+      "/api/v1/auth/me",
+      "/api/v1/accounts",
+      "/api/v1/platform-collection/policy",
+      "/api/v1/desktop/capabilities",
+      "/api/v1/accounts/{accountId}/platform-connection",
+      "/api/v1/accounts/{accountId}/wechat/drafts/count",
+      "/api/v1/accounts/{accountId}/wechat/drafts?offset=0&count=10",
+      "/api/v1/system/info"
+    ],
+    "presence_requests_observed": 0,
+    "main_process_platform_presence_logs": 0,
+    "conclusion": "未观察到 platform.presence 派发；客户端按 enabled=false 跳过心跳并保持 presence=offline。"
+  },
+  "runtime_errors": {
+    "page_errors": 0,
+    "failed_requests": 0,
+    "console_error_messages_total": 2,
+    "application_level_console_error_calls": 0,
+    "platform_collection_related_errors": 0,
+    "silent_abnormal_loop": false,
+    "expected_network_console_messages": [
+      {
+        "status": 409,
+        "path": "/api/v1/accounts/{accountId}/wechat/drafts/count",
+        "classification": "expected_business_response",
+        "cause": "测试账号 RC17V05-A 未配置公众号 AppID/AppSecret；页面显示“公众号凭证未配置，请到平台账号页填写 AppID 和 AppSecret”。"
+      },
+      {
+        "status": 409,
+        "path": "/api/v1/accounts/{accountId}/wechat/drafts?offset=0&count=10",
+        "classification": "expected_business_response",
+        "cause": "同上，公众号草稿箱只读接口在凭证缺失时返回 409。"
+      }
+    ],
+    "loop_check": "两条 409 仅在账号详情初次挂载时各出现一次，32 秒观察窗口内计数未增长；与平台采集关闭无关，不是静默异常循环。",
+    "note": "若“0 console.error”按浏览器 console error 级消息字面计数，本步为 2；均为既有公众号草稿箱缺凭证的 409 网络消息，UI 已明确展示原因，非 OPT-U06 引入。"
+  },
+  "desktop_log_check": {
+    "platform_presence_entries": 0,
+    "client_health_errors": 0,
+    "unrelated_feature_gate_messages": [
+      "[mcp-executor] poll failed: 该工作台功能尚未开放（单次，已去重）",
+      "[computer-executor] tick 失败：该工作台功能尚未开放（单次，已去重）"
+    ],
+    "conclusion": "桌面主进程日志无 platform-presence / client-health 报错；仅有的两条功能闸门日志为既有 D-187 关闭项，单次去重，非平台采集关闭引入。"
+  },
+  "verdict": {
+    "overall": "PASS_WITH_ENV_NOTE",
+    "opt_u06_explicit_notice": "PASS",
+    "api_disabled_contract": "PASS",
+    "presence_heartbeat_suppressed": "PASS",
+    "page_error_zero": "PASS",
+    "strict_console_error_zero_literal": "NOT_MET_LITERAL",
+    "summary": "OPT-U06 在真实打包桌面端、隔离 userData、生产 enabled=false 下正确渲染显式提示并跳过 presence 心跳；0 pageerror / 0 应用级 console.error / 0 平台采集相关报错。唯一非零项是公众号草稿箱缺凭证导致的 2 条 409 网络 console 消息，UI 有明确说明、非循环、与本步目标无关。"
+  }
+}
