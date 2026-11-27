@@ -4,10 +4,45 @@ import { toast } from 'sonner'
 import { ApiError, errorMessage, get, post, stream } from '@/lib/api'
 import { mergeAgentErrors } from '@/lib/agent-ui.js'
 import {
+  IDLE_EVENT_STREAM_DELAY_MS, isClientClosedRequest, shouldRetryAccept,
+} from '@/lib/agent-stream-retry'
+import {
   type AgentConversationDetail, type AgentEventEnvelope, type AgentMessage,
   type AgentPlan, type AgentQuestion, type AgentRunAcceptance,
   streamAgentEvents,
 } from '@/lib/agent'
+
+function abortableDelay(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+      return
+    }
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener('abort', abort)
+      resolve()
+    }, ms)
+    const abort = () => {
+      window.clearTimeout(timer)
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+    }
+    signal.addEventListener('abort', abort, { once: true })
+  })
+}
+
+/** 499 是传输层取消，不是受理失败；request_id 不变地重试，服务端回执幂等。 */
+async function postAcceptance<T>(endpoint: string, body: Record<string, unknown>, signal: AbortSignal): Promise<T> {
+  let attempt = 0
+  for (;;) {
+    try {
+      return await post<T>(endpoint, body, signal)
+    } catch (error) {
+      if (signal.aborted || !shouldRetryAccept(error, attempt)) throw error
+      attempt++
+      await abortableDelay(Math.min(200 * attempt, 800), signal)
+    }
+  }
+}
 
 export function useAgentRun({
   conversationId,
@@ -69,7 +104,7 @@ export function useAgentRun({
       setRunID(event.run_id ?? '')
       setStreaming(true)
       setStreamStage(data.status === 'queued' ? 'queued' : 'thinking')
-      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
+      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] }, { cancelRefetch: false })
     } else if (type === 'run.stage') {
       setStreamStage(data.stage || 'thinking')
     } else if (type === 'message.delta' || type === 'message.snapshot') {
@@ -105,10 +140,10 @@ export function useAgentRun({
           setBrowserPickerOpen(true)
         }
       }
-      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
+      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] }, { cancelRefetch: false })
       void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
     } else if (type === 'artifact.created') {
-      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
+      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] }, { cancelRefetch: false })
       void qc.invalidateQueries({ queryKey: ['agent-artifacts'] })
       void qc.invalidateQueries({ queryKey: ['agent-artifact'] })
     } else if (type === 'run.ended') {
@@ -116,7 +151,11 @@ export function useAgentRun({
       setRunID('')
       setStreamText('')
       setStreamStage('')
-      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
+      // 先落地 active_run=null，避免随后详情刷新失败时留下「运行中 / 停止」。
+      qc.setQueryData<AgentConversationDetail>(['agent-conversation', id], (current) => current ? {
+        ...current, active_run: null, last_event_seq: Math.max(current.last_event_seq ?? 0, event.event_seq),
+      } : current)
+      void qc.invalidateQueries({ queryKey: ['agent-conversation', id] }, { cancelRefetch: false })
       void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
     }
   }, [qc])
@@ -165,14 +204,10 @@ export function useAgentRun({
       acceptedRequest = true
       onAccepted?.(accepted)
       if (desktopPresentation) {
-        // 受理事务已将用户消息持久化；在第一条工具/回答事件前刷新，立即同步服务端消息。
-        void qc.cancelQueries({ queryKey: ['agent-conversation', id], exact: true }).then(() =>
-          qc.fetchQuery({
-            queryKey: ['agent-conversation', id],
-            queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${id}`),
-            staleTime: 0,
-          }),
-        ).catch(() => { void qc.invalidateQueries({ queryKey: ['agent-conversation', id], exact: true }) })
+        // 受理事务已将用户消息持久化；只标记失效让观察者自行重取。
+        // 禁止 cancelQueries 或 cancelRefetch=true：受理发生在发送后仅数十毫秒，
+        // 取消会中止仍在鉴权/查询阶段的详情 GET，服务端按客户端断开记录 499。
+        void qc.invalidateQueries({ queryKey: ['agent-conversation', id], exact: true }, { cancelRefetch: false })
         void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
       }
       if (accepted?.run_id) setRunID(accepted.run_id)
@@ -187,7 +222,7 @@ export function useAgentRun({
       const requestID = typeof body.request_id === 'string' && body.request_id ? body.request_id : crypto.randomUUID()
       const result = eventResumeEnabled
         ? await (async () => {
-          const accepted = await post<AgentRunAcceptance>(endpoint, { ...body, request_id: requestID, protocol_version: 2 }, controller.signal)
+          const accepted = await postAcceptance<AgentRunAcceptance>(endpoint, { ...body, request_id: requestID, protocol_version: 2 }, controller.signal)
           markAccepted(accepted)
           lastEventSeqRef.current = accepted.last_event_seq
           streamPartialRef.current = { messageKey: '', chunkIndex: 0 }
@@ -206,7 +241,7 @@ export function useAgentRun({
             if (name === 'run') markAccepted({ run_id: data.run_id ?? '' })
             if (name === 'stage') setStreamStage(data.stage === 'tool' ? `tool:${data.label || data.tool_name || '工具'}` : data.stage || 'thinking')
             if (name === 'action' || name === 'message' || name === 'tool') {
-              void qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
+              void qc.invalidateQueries({ queryKey: ['agent-conversation', id] }, { cancelRefetch: false })
               void qc.invalidateQueries({ queryKey: ['agent-conversations'] })
             }
             if (name === 'error') recordStreamError({ code: String(data.code || ''), message: String(data.message || '运行失败，请重试'), requestId: String(data.request_id || '') })
@@ -215,7 +250,7 @@ export function useAgentRun({
         })
       markAccepted()
       await Promise.all([
-        qc.invalidateQueries({ queryKey: ['agent-conversation', id] }),
+        qc.invalidateQueries({ queryKey: ['agent-conversation', id] }, { cancelRefetch: false }),
         qc.invalidateQueries({ queryKey: ['agent-conversations'] }),
       ])
       setCompletedNotice(result?.status === 'stopped' ? '已停止'
@@ -225,10 +260,13 @@ export function useAgentRun({
       return true
     } catch (error) {
       if (controller.signal.aborted) return acceptedRequest
-      await qc.invalidateQueries({ queryKey: ['agent-conversation', id] })
+      await qc.invalidateQueries({ queryKey: ['agent-conversation', id] }, { cancelRefetch: false })
       if (error instanceof ApiError && error.code === 'agent_event_cursor_expired') {
         resumeAfterSnapshotRef.current = true
         await qc.fetchQuery({ queryKey: ['agent-conversation', id], queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${id}`) })
+      } else if (isClientClosedRequest(error)) {
+        // 重试后仍被取消：不渲染错误卡，回到可重发状态并等待详情快照收敛。
+        if (!acceptedRequest) setCompletedNotice('发送请求已取消，请重新发送')
       } else {
         recordStreamError(error instanceof ApiError ? { code: error.code, message: errorMessage(error), requestId: error.requestId } : errorMessage(error))
       }
@@ -297,42 +335,54 @@ export function useAgentRun({
     setRunID(targetRunID)
     setStreamStage(activeRun?.stage || '')
     setStreaming(!!activeRun)
-    void streamAgentEvents(`/api/v1/agent/conversations/${conversationId}/events`, lastEventSeq, {
-      signal: controller.signal,
-      runID: targetRunID,
-      onEvent: (type, event) => applyPersistentEvent(conversationId, type, event, targetRunID),
-      onConnectionState: setStreamConnection,
-      onResume: () => resumeEventSnapshot(conversationId, targetRunID),
-    }).then(async (result) => {
-      await qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] })
-      await qc.invalidateQueries({ queryKey: ['agent-conversations'] })
-      if (conversationIDRef.current !== conversationId) return
-      setCompletedNotice(result.status === 'stopped' ? '已停止'
-        : result.reason === 'round_limit' || result.reason === 'deadline' ? '已达到单次运行上限'
-          : result.status === 'awaiting_confirmation' ? '等待你逐张确认操作卡片' : '')
-      if (result.status === 'failed') recordStreamError('本次运行已中断，请查看已保存的结果后再继续。')
-    }).catch(async (error) => {
-      if (controller.signal.aborted) return
-      if (error instanceof ApiError && error.code === 'agent_event_cursor_expired') {
-        resumeAfterSnapshotRef.current = true
-        await qc.fetchQuery({ queryKey: ['agent-conversation', conversationId], queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${conversationId}`) })
-      } else {
-        recordStreamError(error instanceof ApiError ? { code: error.code, message: errorMessage(error), requestId: error.requestId } : errorMessage(error))
-      }
-    }).finally(() => {
-      if (eventController.current !== controller) return
-      eventController.current = null
-      setStreaming(false)
-      setRunID('')
-      setStreamText('')
-      setStreamStage('')
-      setStreamConnection('')
-      if (resumeAfterSnapshotRef.current) {
-        resumeAfterSnapshotRef.current = false
-        setEventResumeGeneration((generation) => generation + 1)
-      }
-    })
+    const startStream = () => {
+      startTimer = undefined
+      if (controller.signal.aborted || eventController.current !== controller) return
+      void streamAgentEvents(`/api/v1/agent/conversations/${conversationId}/events`, lastEventSeq, {
+        signal: controller.signal,
+        runID: targetRunID,
+        onEvent: (type, event) => applyPersistentEvent(conversationId, type, event, targetRunID),
+        onConnectionState: setStreamConnection,
+        onResume: () => resumeEventSnapshot(conversationId, targetRunID),
+      }).then(async (result) => {
+        await qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] }, { cancelRefetch: false })
+        await qc.invalidateQueries({ queryKey: ['agent-conversations'] })
+        if (conversationIDRef.current !== conversationId) return
+        setCompletedNotice(result.status === 'stopped' ? '已停止'
+          : result.reason === 'round_limit' || result.reason === 'deadline' ? '已达到单次运行上限'
+            : result.status === 'awaiting_confirmation' ? '等待你逐张确认操作卡片' : '')
+        if (result.status === 'failed') recordStreamError('本次运行已中断，请查看已保存的结果后再继续。')
+      }).catch(async (error) => {
+        if (controller.signal.aborted) return
+        if (error instanceof ApiError && error.code === 'agent_event_cursor_expired') {
+          resumeAfterSnapshotRef.current = true
+          await qc.fetchQuery({ queryKey: ['agent-conversation', conversationId], queryFn: () => get<AgentConversationDetail>(`/agent/conversations/${conversationId}`) })
+        } else if (isClientClosedRequest(error)) {
+          // 499 已由事件流内部按快照重连处理；不应把传输取消留下为错误卡。
+        } else {
+          recordStreamError(error instanceof ApiError ? { code: error.code, message: errorMessage(error), requestId: error.requestId } : errorMessage(error))
+        }
+      }).finally(() => {
+        if (eventController.current !== controller) return
+        eventController.current = null
+        setStreaming(false)
+        setRunID('')
+        setStreamText('')
+        setStreamStage('')
+        setStreamConnection('')
+        if (resumeAfterSnapshotRef.current) {
+          resumeAfterSnapshotRef.current = false
+          setEventResumeGeneration((generation) => generation + 1)
+        }
+      })
+    }
+    // 空闲流延迟启动：避免用户紧接着发送时，把尚在鉴权阶段的 SSE 连接取消成 499。
+    let startTimer: number | undefined
+    const startDelay = activeRun ? 0 : IDLE_EVENT_STREAM_DELAY_MS
+    if (startDelay > 0) startTimer = window.setTimeout(startStream, startDelay)
+    else startStream()
     return () => {
+      if (startTimer !== undefined) window.clearTimeout(startTimer)
       if (eventController.current === controller) {
         controller.abort()
         eventController.current = null
@@ -357,7 +407,7 @@ export function useAgentRun({
     try {
       await post(`/agent/runs/${id}/cancel`, {})
       setStreamStage('stopping')
-      await qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] })
+      await qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] }, { cancelRefetch: false })
     } catch (error) { toast.error(errorMessage(error)) }
   }
 

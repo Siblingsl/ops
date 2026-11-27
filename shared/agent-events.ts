@@ -1,4 +1,5 @@
 import { ApiError, rawRequest } from './api'
+import { CLIENT_CLOSED_RETRY_DELAY_MS, isClientClosedRequest } from './agent-stream-retry'
 
 export interface AgentRunAcceptance {
   run_id: string
@@ -72,6 +73,7 @@ export async function streamAgentEvents(path: string, initialAfter: number, opti
     }
     document.addEventListener('visibilitychange', abortConnection)
     window.addEventListener('offline', abortConnection)
+    let clientClosed = false
     try {
       // A recovered view can retain an active run while its cursor already includes run.ended.
       if (needsSnapshot) {
@@ -134,14 +136,22 @@ export async function streamAgentEvents(path: string, initialAfter: number, opti
         after = Math.max(after, snapshot.after)
         continue
       }
-      if (error instanceof ApiError && error.status !== 0 && ![502, 503, 504].includes(error.status)) throw error
+      if (isClientClosedRequest(error)) {
+        // 499 表示这次传输在鉴权完成前被取消（常见于新旧事件流交接）。
+        // 它不是业务错误；下一次连接先读快照游标，若 run 已结束则直接收敛。
+        clientClosed = true
+        needsSnapshot = true
+      } else if (error instanceof ApiError && error.status !== 0 && ![502, 503, 504].includes(error.status)) {
+        throw error
+      }
       failures++
     } finally {
       document.removeEventListener('visibilitychange', abortConnection)
       window.removeEventListener('offline', abortConnection)
     }
     options.onConnectionState?.('reconnecting')
-    const baseDelay = failures === 1 ? 0 : Math.min(1000 * 2 ** Math.min(failures - 2, 5), 30_000)
+    const baseDelay = clientClosed ? Math.min(CLIENT_CLOSED_RETRY_DELAY_MS * 2 ** Math.min(Math.max(failures - 1, 0), 5), 10_000)
+      : failures === 1 ? 0 : Math.min(1000 * 2 ** Math.min(failures - 2, 5), 30_000)
     if (baseDelay > 0) await new Promise<void>((resolve, reject) => {
       const abort = () => {
         window.clearTimeout(timer)

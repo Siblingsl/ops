@@ -372,7 +372,7 @@ ${draft.text}` : draft.text))
   const invalidate = useCallback(async () => {
     await Promise.all([
       qc.invalidateQueries({ queryKey: ['agent-conversations'] }),
-      conversationId ? qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] }) : Promise.resolve(),
+      conversationId ? qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] }, { cancelRefetch: false }) : Promise.resolve(),
     ])
   }, [qc, conversationId])
   const openConversation = (id: string, matchedSeq?: number) => {
@@ -873,7 +873,7 @@ ${draft.text}` : draft.text))
         ? { expected_revision: conversation?.revision, model: value ? { provider_id: value.split('::')[0], model: value.slice(value.indexOf('::') + 2) } : null }
         : { expected_revision: conversation?.revision, account_id: value }
       await patch(`/agent/conversations/${conversationId}`, payload)
-      await qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] })
+      await qc.invalidateQueries({ queryKey: ['agent-conversation', conversationId] }, { cancelRefetch: false })
       await qc.invalidateQueries({ queryKey: ['agent-conversations'] })
     } catch (error) { toast.error(errorMessage(error)); void detailQuery.refetch() }
   }

@@ -82,7 +82,7 @@ async function fetchResponse(method: string, path: string, payload: BodyInit | u
       requestId = res.headers.get('X-Request-ID') || ''
       if (streaming && res.ok && res.headers.get('Content-Type')?.startsWith('text/event-stream')) return res
       if (res.body) res = new Response(await res.arrayBuffer(), { status: res.status, statusText: res.statusText, headers: res.headers })
-      // DEV-P09：仅 GET 对网关错误重试；退避 / Retry-After；非 GET 立即失败。
+      // DEV-P09：GET 对网关错误/499 取消重试；退避 / Retry-After；非 GET 立即失败。
       if (shouldRetryGet(method, attempt, res.status)) {
         const delay = getRetryDelayMs(attempt, res.headers.get('Retry-After'))
         await new Promise<void>((resolve) => {

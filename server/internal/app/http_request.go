@@ -39,7 +39,16 @@ var streamingRequests = map[string]bool{
 	"POST /api/v1/agent/conversations/{id}/continue":                  true,
 	"POST /api/v1/agent/conversations/{id}/regenerate":                true,
 	"POST /api/v1/agent/conversations/{id}/messages/{messageId}/edit": true,
-	"GET /api/v1/notifications/stream":                                true,
+}
+
+// sseRequests 是服务端单向推送的 SSE 端点：请求体在建立连接时就已读完，
+// 之后连接上没有新的客户端字节。对它们设置读取截止时间只会在到期时
+// 强制关闭健康的长连接，并让复用该 keep-alive 连接的后续请求同时被
+// 取消（服务端因此记录 499 client_closed_request）。SSE 的存活应由
+// ctx 取消与服务端心跳写失败来判定，不能使用 ReadDeadline。
+var sseRequests = map[string]bool{
+	"GET /api/v1/notifications/stream":            true,
+	"GET /api/v1/agent/conversations/{id}/events": true,
 }
 
 func requestReadDeadline(router chi.Router) func(http.Handler) http.Handler {
@@ -49,7 +58,10 @@ func requestReadDeadline(router chi.Router) func(http.Handler) http.Handler {
 			budget := 30 * time.Second
 			modelBudget := 25 * time.Second
 			lookup := chi.NewRouteContext()
-			streaming := router.Match(lookup, r.Method, r.URL.Path) && streamingRequests[r.Method+" "+lookup.RoutePattern()]
+			matched := router.Match(lookup, r.Method, r.URL.Path)
+			pattern := lookup.RoutePattern()
+			streaming := matched && streamingRequests[r.Method+" "+pattern]
+			sse := matched && sseRequests[r.Method+" "+pattern]
 			if streaming {
 				budget = 90 * time.Second
 				modelBudget = 0
@@ -58,14 +70,21 @@ func requestReadDeadline(router chi.Router) func(http.Handler) http.Handler {
 				budget = 120 * time.Second
 				modelBudget = 115 * time.Second
 			}
+			if sse {
+				// SSE 连接只写不读，不能用读取截止时间做存活上限。
+				budget = 0
+				modelBudget = 0
+			}
 			requestBudget := httpRequestBudget{}
 			if modelBudget > 0 {
 				requestBudget.modelDeadline = startedAt.Add(modelBudget)
 			}
 			r = r.WithContext(context.WithValue(r.Context(), httpRequestBudgetKey{}, requestBudget))
-			controller := http.NewResponseController(w)
-			_ = controller.SetReadDeadline(startedAt.Add(budget))
-			defer controller.SetReadDeadline(time.Time{})
+			if budget > 0 {
+				controller := http.NewResponseController(w)
+				_ = controller.SetReadDeadline(startedAt.Add(budget))
+				defer controller.SetReadDeadline(time.Time{})
+			}
 			next.ServeHTTP(w, r)
 		})
 	}

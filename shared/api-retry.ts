@@ -1,9 +1,9 @@
-/** DEV-P09：GET 对 502/503/504 的重试策略（shared 权威源，两端 re-export）。 */
+/** DEV-P09：GET 对 499（客户端取消）与 502/503/504 的重试策略（shared 权威源，两端 re-export）。 */
 
 /** 首次失败后最多再试几次（不含首次请求）。 */
 export const GET_RETRY_MAX = 2
 
-const RETRYABLE = new Set([502, 503, 504])
+const RETRYABLE = new Set([499, 502, 503, 504])
 
 export function shouldRetryGet(method: string, attempt: number, status: number): boolean {
   return method === 'GET' && attempt < GET_RETRY_MAX && RETRYABLE.has(status)

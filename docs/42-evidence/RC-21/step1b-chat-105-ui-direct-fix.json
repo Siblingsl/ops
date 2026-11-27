@@ -1,0 +1,1624 @@
+{
+  "mode": "real-unpacked-electron-ui-direct",
+  "startedAt": "2026-11-27T12:04:42.285Z",
+  "finishedAt": "2026-11-27T12:07:51.986Z",
+  "baseUrl": "http://127.0.0.1:18221",
+  "conversationId": "9cb25a6d-b92a-4846-9b49-1648efe7b012",
+  "isolatedDatabase": "ops_rc21_fix",
+  "isolatedPorts": {
+    "api": 18221,
+    "mock": 18291
+  },
+  "roundsRequested": 105,
+  "roundsCompleted": 105,
+  "roundsFailed": 0,
+  "failed": false,
+  "sendMode": "textarea + Enter (UI direct)",
+  "postMessagesAccepted": 105,
+  "postMessagesAll": 105,
+  "messagePostStatuses": [
+    202
+  ],
+  "milestones": [
+    {
+      "round": 26,
+      "messageCount": 50,
+      "hasMore": true,
+      "activeRun": null,
+      "lastEventSeq": 235,
+      "ui": {
+        "stop": false,
+        "errorCard": false,
+        "bubbles": 50,
+        "requestIds": []
+      }
+    },
+    {
+      "round": 39,
+      "messageCount": 50,
+      "hasMore": true,
+      "activeRun": null,
+      "lastEventSeq": 352,
+      "ui": {
+        "stop": false,
+        "errorCard": false,
+        "bubbles": 50,
+        "requestIds": []
+      }
+    },
+    {
+      "round": 91,
+      "messageCount": 50,
+      "hasMore": true,
+      "activeRun": null,
+      "lastEventSeq": 820,
+      "ui": {
+        "stop": false,
+        "errorCard": false,
+        "bubbles": 50,
+        "requestIds": []
+      }
+    },
+    {
+      "round": 105,
+      "messageCount": 50,
+      "hasMore": true,
+      "activeRun": null,
+      "lastEventSeq": 946,
+      "ui": {
+        "stop": false,
+        "errorCard": false,
+        "bubbles": 50,
+        "requestIds": []
+      }
+    }
+  ],
+  "p95": {
+    "ttftMs": 232,
+    "wallMs": 1563
+  },
+  "ttftMs": {
+    "min": 160,
+    "median": 210,
+    "max": 431
+  },
+  "fpsEnd": {
+    "frames": 290,
+    "elapsedMs": 2005.600000095379,
+    "fps": 144.5951336189712
+  },
+  "memory": {
+    "before": {
+      "label": "before",
+      "at": "2026-11-27T12:04:46.741Z",
+      "heap": {
+        "used": 14236730,
+        "total": 22424974,
+        "limit": 4395630592
+      },
+      "procs": [
+        {
+          "type": "Browser",
+          "pid": 36228,
+          "workingSetKb": 159820,
+          "peakWorkingSetKb": 161756
+        },
+        {
+          "type": "GPU",
+          "pid": 24032,
+          "workingSetKb": 223380,
+          "peakWorkingSetKb": 225332
+        },
+        {
+          "type": "Utility",
+          "pid": 13316,
+          "workingSetKb": 107700,
+          "peakWorkingSetKb": 108012
+        },
+        {
+          "type": "Tab",
+          "pid": 20412,
+          "workingSetKb": 161464,
+          "peakWorkingSetKb": 163468
+        }
+      ],
+      "rssKb": 652364
+    },
+    "after": {
+      "label": "after",
+      "at": "2026-11-27T12:07:49.827Z",
+      "heap": {
+        "used": 19477716,
+        "total": 69611776,
+        "limit": 4395630592
+      },
+      "procs": [
+        {
+          "type": "Browser",
+          "pid": 36228,
+          "workingSetKb": 159936,
+          "peakWorkingSetKb": 164088
+        },
+        {
+          "type": "GPU",
+          "pid": 24032,
+          "workingSetKb": 228436,
+          "peakWorkingSetKb": 235076
+        },
+        {
+          "type": "Utility",
+          "pid": 13316,
+          "workingSetKb": 107936,
+          "peakWorkingSetKb": 108056
+        },
+        {
+          "type": "Tab",
+          "pid": 20412,
+          "workingSetKb": 287052,
+          "peakWorkingSetKb": 377992
+        }
+      ],
+      "rssKb": 783360
+    },
+    "heapDeltaBytes": 5240986,
+    "rssDeltaKb": 130996
+  },
+  "console": {
+    "errorCount": 0,
+    "errors499": 0,
+    "pageErrors": 0,
+    "responses499": 0,
+    "failedRequests": 210
+  },
+  "finalState": {
+    "stop": false,
+    "errorCard": false,
+    "requestIds": [],
+    "bubbles": 50,
+    "composerDisabled": false,
+    "url": "http://127.0.0.1:18221/agent/c/9cb25a6d-b92a-4846-9b49-1648efe7b012",
+    "tail": "卡片，由你逐张确认。\n\n林\n你\n20:07\n\n第 105 轮：请直接用一句话确认这是第 105 轮，并给一个简短的运营提示。不要调用工具，不要创建卡片。\n\nOPS\n20:07\n\n我可以帮你查询和整理系统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+  },
+  "detailEnd": {
+    "messageCount": 50,
+    "hasMore": true,
+    "activeRun": null,
+    "lastEventSeq": 946
+  },
+  "uiTerminal": true,
+  "rounds": [
+    {
+      "round": 1,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 160,
+      "wallMs": 1499,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 2,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 2,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 191,
+      "wallMs": 1479,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 4,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 3,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 196,
+      "wallMs": 1478,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 6,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 4,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 194,
+      "wallMs": 1486,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 8,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 5,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 201,
+      "wallMs": 1519,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 10,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 6,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 205,
+      "wallMs": 1500,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 12,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 7,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 193,
+      "wallMs": 1569,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 14,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 8,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 186,
+      "wallMs": 1540,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 16,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 9,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 195,
+      "wallMs": 1472,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 18,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 10,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 192,
+      "wallMs": 1498,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 20,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 11,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 187,
+      "wallMs": 1484,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 22,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 12,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 204,
+      "wallMs": 1497,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 24,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 13,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 194,
+      "wallMs": 1499,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 26,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 14,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 196,
+      "wallMs": 1501,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 28,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 15,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 201,
+      "wallMs": 1499,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 30,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 16,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 237,
+      "wallMs": 1547,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 32,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 17,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 191,
+      "wallMs": 1494,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 34,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 18,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 195,
+      "wallMs": 1483,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 36,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 19,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 193,
+      "wallMs": 1492,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 38,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 20,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 201,
+      "wallMs": 1510,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 40,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 21,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 212,
+      "wallMs": 1510,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 42,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 22,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 186,
+      "wallMs": 1502,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 44,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 23,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 223,
+      "wallMs": 1473,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 46,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 24,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 205,
+      "wallMs": 1512,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 48,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 25,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 227,
+      "wallMs": 1533,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 26,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 194,
+      "wallMs": 1503,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 27,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 228,
+      "wallMs": 1535,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 28,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 202,
+      "wallMs": 1520,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 29,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 216,
+      "wallMs": 1523,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 30,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 217,
+      "wallMs": 1534,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 31,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 220,
+      "wallMs": 1537,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 32,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 207,
+      "wallMs": 1516,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 33,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 209,
+      "wallMs": 1528,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 34,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 223,
+      "wallMs": 1474,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 35,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 195,
+      "wallMs": 1502,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 36,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 220,
+      "wallMs": 1488,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 37,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 202,
+      "wallMs": 1497,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 38,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 206,
+      "wallMs": 1510,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 39,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 210,
+      "wallMs": 1527,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 40,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 228,
+      "wallMs": 1532,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 41,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 211,
+      "wallMs": 1526,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 42,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 202,
+      "wallMs": 1569,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 43,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 222,
+      "wallMs": 1533,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 44,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 250,
+      "wallMs": 1574,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 45,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 209,
+      "wallMs": 1511,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 46,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 215,
+      "wallMs": 1535,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 47,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 215,
+      "wallMs": 1483,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 48,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 210,
+      "wallMs": 1488,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 49,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 209,
+      "wallMs": 1514,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 50,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 203,
+      "wallMs": 1531,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 51,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 198,
+      "wallMs": 1495,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 52,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 208,
+      "wallMs": 1516,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 53,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 218,
+      "wallMs": 1528,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 54,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 219,
+      "wallMs": 1517,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 55,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 204,
+      "wallMs": 1498,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 56,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 228,
+      "wallMs": 1537,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 57,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 218,
+      "wallMs": 1531,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 58,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 220,
+      "wallMs": 1532,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 59,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 220,
+      "wallMs": 1528,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 60,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 218,
+      "wallMs": 1549,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 61,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 213,
+      "wallMs": 1527,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 62,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 203,
+      "wallMs": 1500,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 63,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 213,
+      "wallMs": 1508,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 64,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 209,
+      "wallMs": 1562,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 65,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 229,
+      "wallMs": 1538,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 66,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 192,
+      "wallMs": 1561,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 67,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 204,
+      "wallMs": 1521,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 68,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 210,
+      "wallMs": 1521,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 69,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 224,
+      "wallMs": 1489,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 70,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 209,
+      "wallMs": 1493,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 71,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 226,
+      "wallMs": 1468,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 72,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 431,
+      "wallMs": 1744,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 73,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 232,
+      "wallMs": 1562,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 74,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 225,
+      "wallMs": 1548,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 75,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 199,
+      "wallMs": 1502,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 76,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 212,
+      "wallMs": 1521,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 77,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 227,
+      "wallMs": 1532,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 78,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 226,
+      "wallMs": 1525,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 79,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 216,
+      "wallMs": 1521,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 80,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 228,
+      "wallMs": 1605,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 81,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 212,
+      "wallMs": 1520,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 82,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 230,
+      "wallMs": 1563,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 83,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 230,
+      "wallMs": 1531,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 84,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 206,
+      "wallMs": 1497,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 85,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 202,
+      "wallMs": 1519,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 86,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 214,
+      "wallMs": 1512,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 87,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 232,
+      "wallMs": 1501,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 88,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 203,
+      "wallMs": 1534,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 89,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 217,
+      "wallMs": 1517,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 90,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 217,
+      "wallMs": 1531,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 91,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 227,
+      "wallMs": 1527,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 92,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 212,
+      "wallMs": 1532,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 93,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 220,
+      "wallMs": 1507,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 94,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 212,
+      "wallMs": 1532,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 95,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 216,
+      "wallMs": 1533,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 96,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 203,
+      "wallMs": 1500,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 97,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 189,
+      "wallMs": 1486,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 98,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 221,
+      "wallMs": 1532,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 99,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 203,
+      "wallMs": 1505,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 100,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 190,
+      "wallMs": 1489,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 101,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 212,
+      "wallMs": 1494,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 102,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 242,
+      "wallMs": 1532,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 103,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 207,
+      "wallMs": 1515,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 104,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 201,
+      "wallMs": 1533,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    },
+    {
+      "round": 105,
+      "ok": true,
+      "kind": "ok",
+      "firstTextMs": 210,
+      "wallMs": 1512,
+      "stop": false,
+      "errorCard": false,
+      "requestIds": [],
+      "bubbles": 50,
+      "tail": "统里的内容；需要写入时会先给出操作卡片，由你逐张确认。\n\n模拟模型演示，结果不代表真实执行\n部分完成\n\nPDF / DOCX / CSV ≤20MB；文档≤100页，CSV≤10000行×100列。DOCX分页不可验证时请转PDF。\n\n执行\n选择模型\n发送\nrc21fix 的工作区\n·\nRC21-Fix 公众号\n已连接"
+    }
+  ],
+  "samples": {
+    "consoleErrors": [],
+    "responses499": [],
+    "failedRequests": [
+      {
+        "ts": 169858,
+        "round": 96,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=856",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 171016,
+        "round": 96,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=859",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 171571,
+        "round": 97,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=865",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 172738,
+        "round": 97,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=868",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 173280,
+        "round": 98,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=874",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 174436,
+        "round": 98,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=875",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 175021,
+        "round": 99,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=883",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 176193,
+        "round": 99,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=886",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 176744,
+        "round": 100,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=892",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 177888,
+        "round": 100,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=895",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 178466,
+        "round": 101,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=901",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 179624,
+        "round": 101,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=904",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 180191,
+        "round": 102,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=910",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 181359,
+        "round": 102,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=913",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 181937,
+        "round": 103,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=919",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 183094,
+        "round": 103,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=922",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 183662,
+        "round": 104,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=928",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 184822,
+        "round": 104,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=931",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 185424,
+        "round": 105,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=937",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "ts": 186603,
+        "round": 105,
+        "method": "GET",
+        "url": "/api/v1/agent/conversations/9cb25a6d-b92a-4846-9b49-1648efe7b012/events?after_event_seq=940",
+        "error": "net::ERR_ABORTED"
+      }
+    ],
+    "navEvents": [
+      {
+        "ts": 610,
+        "url": "http://127.0.0.1:18221/"
+      },
+      {
+        "ts": 688,
+        "url": "http://127.0.0.1:18221/a/45aa6c26-75f1-4bf7-92c6-16df8a41ff41"
+      },
+      {
+        "ts": 2174,
+        "url": "http://127.0.0.1:18221/agent/c/9cb25a6d-b92a-4846-9b49-1648efe7b012"
+      },
+      {
+        "ts": 2193,
+        "url": "http://127.0.0.1:18221/agent/c/9cb25a6d-b92a-4846-9b49-1648efe7b012"
+      }
+    ]
+  },
+  "artifacts": {
+    "screenshot": "shot-chat-105-ui-direct-final.png",
+    "log": "<temp>/ops-rc21-fix/verify-105.log"
+  },
+  "sanitization": "仅保留测试用户名 rc21fix、合成公众号名与本地隔离端口；不含 Cookie、CSRF、密码、真实账号或生产数据。",
+  "baselineComparison": {
+    "beforeFixKnownDefect": "UI 直发第 26 轮跨 agentMessagePage=50 硬失败；API+UI 第 91 轮后错误卡 + 运行中/停止残留；13 次 499 console 错误",
+    "afterFix": "105/105 完成，错误卡 false, 停止残留 false, 499 response 0"
+  }
+}

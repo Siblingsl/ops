@@ -25,6 +25,8 @@ test('DEV-P09 shouldRetryGet：仅 GET + 网关状态 + 上限内', () => {
   assert.equal(shouldRetryGet('GET', 1, 502), true)
   assert.equal(shouldRetryGet('GET', 2, 503), false) // 已达上限
   assert.equal(shouldRetryGet('POST', 0, 503), false)
+  assert.equal(shouldRetryGet('GET', 0, 499), true) // RC-21：499 是传输取消，GET 幂等重试
+  assert.equal(shouldRetryGet('POST', 0, 499), false)
   assert.equal(shouldRetryGet('GET', 0, 500), false)
   assert.equal(shouldRetryGet('GET', 0, 429), false)
 })

@@ -225,6 +225,31 @@ func TestOPT15HTTPReadAndIdleBudgets(t *testing.T) {
 	}
 }
 
+func TestRC21SSEHasNoReadDeadline(t *testing.T) {
+	router := chi.NewRouter()
+	router.Use(requestReadDeadline(router))
+	router.Get("/api/v1/notifications/stream", func(http.ResponseWriter, *http.Request) {})
+	router.Get("/api/v1/agent/conversations/{id}/events", func(http.ResponseWriter, *http.Request) {})
+	for _, path := range []string{
+		"/api/v1/notifications/stream",
+		"/api/v1/agent/conversations/rc21/events",
+	} {
+		writer := &opt15DeadlineWriter{ResponseRecorder: httptest.NewRecorder()}
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		router.ServeHTTP(writer, req)
+		if len(writer.deadlines) != 0 {
+			t.Fatalf("%s set read deadline %+v; SSE must live until ctx cancel/heartbeat failure", path, writer.deadlines)
+		}
+		mpWriter := &opt15DeadlineWriter{ResponseRecorder: httptest.NewRecorder()}
+		mpReq := httptest.NewRequest(http.MethodGet, path, nil)
+		mpReq.Header.Set("Content-Type", "multipart/form-data; boundary=rc21")
+		router.ServeHTTP(mpWriter, mpReq)
+		if len(mpWriter.deadlines) != 0 {
+			t.Fatalf("%s with multipart header set read deadline %+v; SSE must live until ctx cancel/heartbeat failure", path, mpWriter.deadlines)
+		}
+	}
+}
+
 func TestOPT15SlowRequestBodyTimesOut(t *testing.T) {
 	sink := opt15Capture(t)
 	hs := env.srv.HTTPServer("127.0.0.1:0")
