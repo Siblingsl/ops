@@ -93,6 +93,86 @@ func TestU106MetricsPasteImport(t *testing.T) {
 	}
 }
 
+func TestU106MetricsImportPreviewDateValidation(t *testing.T) {
+	_ = env.accounts(t)
+	var a Account
+	env.mustJSON(t, "POST", "/api/v1/accounts", map[string]string{"platform": "wechat_mp", "name": "日期预览验收号", "content_format": "long_article"}, &a)
+	const title = "日期预览校验作品"
+	var w Work
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/works", map[string]string{"title": title}, &w)
+
+	badDate := "2026-13-45 99:99"
+	goodDate := "2026-10-21T13:24:38+08:00"
+	for _, c := range []struct {
+		name  string
+		csv   string
+		field string
+	}{
+		{"csv captured_at", "标题,阅读,采集时间\n" + title + ",10," + badDate + "\n", "采集时间"},
+		{"csv published_at", "标题,阅读,发布时间\n" + title + ",10," + badDate + "\n", "发布时间"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rows := ttCSVPreview(t, a.ID, c.csv)
+			if len(rows) != 1 {
+				t.Fatalf("preview rows: %+v", rows)
+			}
+			r := rows[0]
+			if r.Error == "" || !strings.Contains(r.Error, c.field) || r.WorkID != nil || r.Matched {
+				t.Fatalf("invalid %s must fail before matching and keep work_id nil: %+v", c.field, r)
+			}
+		})
+	}
+
+	valid := ttCSVPreview(t, a.ID, "标题,阅读,采集时间\n"+title+",10,"+goodDate+"\n")
+	if len(valid) != 1 || valid[0].WorkID == nil || *valid[0].WorkID != w.ID || !valid[0].Matched || valid[0].Error != "" {
+		t.Fatalf("valid RFC3339 date must still match: %+v", valid)
+	}
+
+	for _, c := range []struct {
+		name  string
+		text  string
+		field string
+	}{
+		{"paste captured_at", "标题\t阅读\t采集时间\n" + title + "\t10\t" + badDate, "采集时间"},
+		{"paste published_at", "标题\t阅读\t发布时间\n" + title + "\t10\t" + badDate, "发布时间"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var out struct {
+				Preview []metricPreviewRow `json:"preview"`
+			}
+			env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/metrics/import", map[string]string{"text": c.text}, &out)
+			if len(out.Preview) != 1 {
+				t.Fatalf("preview rows: %+v", out.Preview)
+			}
+			r := out.Preview[0]
+			if r.Error == "" || !strings.Contains(r.Error, c.field) || r.WorkID != nil || r.Matched {
+				t.Fatalf("invalid %s must fail before matching and keep work_id nil: %+v", c.field, r)
+			}
+		})
+	}
+
+	var paste struct {
+		Preview []metricPreviewRow `json:"preview"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/metrics/import", map[string]string{
+		"text": "标题\t阅读\t采集时间\n" + title + "\t10\t" + goodDate,
+	}, &paste)
+	if len(paste.Preview) != 1 || paste.Preview[0].WorkID == nil || *paste.Preview[0].WorkID != w.ID || !paste.Preview[0].Matched {
+		t.Fatalf("valid pasted date must still match: %+v", paste.Preview)
+	}
+
+	var imported struct {
+		Imported int `json:"imported"`
+	}
+	env.mustJSON(t, "POST", "/api/v1/accounts/"+a.ID.String()+"/metrics/import", map[string]any{
+		"source": "paste",
+		"rows":   []map[string]any{{"title": title, "work_id": w.ID.String(), "captured_at": goodDate, "reads": 10}},
+	}, &imported)
+	if imported.Imported != 1 {
+		t.Fatalf("valid date import count: %d", imported.Imported)
+	}
+}
+
 func TestU106MetricsImportDuplicateTitleRequiresDisambiguation(t *testing.T) {
 	_ = env.accounts(t)
 	var a Account

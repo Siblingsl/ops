@@ -1,0 +1,134 @@
+[WebServer] 2026/11/27 20:19:12 INFO 数据库连接池已配置 max_conns=20 max_conn_idle_time=5m0s max_conn_lifetime=1h0m0s statement_timeout=30s idle_in_transaction_session_timeout=60s timezone=Asia/Shanghai
+
+
+[WebServer] 2026/11/27 20:19:17 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000001 method=GET route=/healthz status=200 duration_ms=1.5905 workspace_id=""
+
+Running 1 test using 1 worker
+
+[1/1] [desktop-renderer] › e2e\desktop-review-restoration.spec.ts:6:1 › Electron 复盘页按原型布局并逐项点击数据入口
+
+[WebServer] 2026/11/27 20:19:21 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000002 method=GET route=/api/v1/auth/me status=401 duration_ms=0 workspace_id=""
+[WebServer] 2026/11/27 20:19:22 INFO 已添加本地模拟模型（仅开发模式） workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+
+[WebServer] 2026/11/27 20:19:22 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000003 method=POST route=/api/v1/auth/register status=200 duration_ms=120.9042 workspace_id=""
+[WebServer] 2026/11/27 20:19:22 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000004 method=GET route=/api/v1/auth/me status=200 duration_ms=12.2216 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+
+[WebServer] 2026/11/27 20:19:22 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000005 method=GET route=/api/v1/accounts status=200 duration_ms=9.8018 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+[WebServer] 2026/11/27 20:19:22 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000006 method=GET route=/api/v1/auth/status status=200 duration_ms=4.9403 workspace_id=""
+
+[WebServer] 2026/11/27 20:19:23 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000007 method=GET route=/api/v1/notifications status=200 duration_ms=19.1789 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:23 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000009 method=GET route=/api/v1/me/preferences status=200 duration_ms=25.5139 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+
+[WebServer] 2026/11/27 20:19:23 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000008 method=GET route=/api/v1/agent/bootstrap status=200 duration_ms=28.1078 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+[WebServer] 2026/11/27 20:19:24 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000011 method=POST route=/api/v1/accounts status=200 duration_ms=22.0303 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:24 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000012 method=GET route=/api/v1/accounts status=200 duration_ms=8.3372 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+
+[WebServer] 2026/11/27 20:19:24 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000010 method=GET route=/api/v1/notifications/stream status=200 duration_ms=796.9318 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:24 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000013 method=GET route=/api/v1/ai/status status=200 duration_ms=8.227 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:24 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000014 method=GET route=/api/v1/auth/status status=200 duration_ms=4.3369 workspace_id=""
+
+[WebServer] 2026/11/27 20:19:24 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000015 method=GET route=/api/v1/auth/me status=200 duration_ms=5.4942 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:24 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000016 method=GET route=/api/v1/accounts status=200 duration_ms=8.1186 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+[WebServer] 2026/11/27 20:19:25 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000017 method=GET route=/api/v1/ai/status status=200 duration_ms=9.5106 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+
+[WebServer] 2026/11/27 20:19:25 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000018 method=GET route=/api/v1/notifications status=200 duration_ms=17.033 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:25 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000023 method=GET route=/api/v1/me/preferences status=200 duration_ms=5.2221 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:25 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000020 method=GET route=/api/v1/accounts/{accountId}/daily status=200 duration_ms=22.4613 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+[WebServer] 2026/11/27 20:19:25 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000019 method=GET route=/api/v1/accounts/{accountId}/dashboard status=200 duration_ms=43.9757 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+
+[WebServer] 2026/11/27 20:19:25 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000022 method=GET route=/api/v1/agent/bootstrap status=200 duration_ms=55.28 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:25 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000021 method=GET route=/api/v1/accounts/{accountId}/health status=200 duration_ms=69.5955 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:25 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000025 method=GET route=/api/v1/accounts/{accountId}/strategy status=200 duration_ms=12.889 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+[WebServer] 2026/11/27 20:19:25 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000029 method=GET route=/api/v1/accounts/{accountId}/rhythm status=200 duration_ms=18.7555 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:25 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000027 method=GET route=/api/v1/accounts/{accountId}/brief status=200 duration_ms=22.7219 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+
+[WebServer] 2026/11/27 20:19:25 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000028 method=GET route=/api/v1/accounts/{accountId}/hot status=200 duration_ms=28.8236 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:25 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000026 method=GET route=/api/v1/accounts/{accountId}/next-actions status=200 duration_ms=42.9183 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:25 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000030 method=GET route=/api/v1/notifications status=200 duration_ms=9.5775 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:25 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000024 method=GET route=/api/v1/notifications/stream status=200 duration_ms=607.4747 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:26 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000031 method=GET route=/api/v1/auth/status status=200 duration_ms=4.814 workspace_id=""
+
+[WebServer] 2026/11/27 20:19:26 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000032 method=GET route=/api/v1/auth/me status=200 duration_ms=10.5413 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:26 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000033 method=GET route=/api/v1/accounts status=200 duration_ms=4.5295 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:26 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000035 method=GET route=/api/v1/healthz status=200 duration_ms=1.0557 workspace_id=""
+
+[WebServer] 2026/11/27 20:19:26 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000037 method=GET route=/api/v1/me/preferences status=200 duration_ms=7.8192 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:26 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000034 method=GET route=/api/v1/notifications status=200 duration_ms=22.8416 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:26 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000036 method=GET route=/api/v1/agent/bootstrap status=200 duration_ms=30.7385 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:26 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000040 method=GET route=/api/v1/accounts/{accountId}/metrics/compare status=200 duration_ms=7.6191 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:26 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000041 method=GET route=/api/v1/accounts/{accountId}/experiments status=200 duration_ms=8.2311 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[WebServer] 2026/11/27 20:19:26 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000039 method=GET route=/api/v1/accounts/{accountId}/conversions status=200 duration_ms=15.2492 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+[WebServer] 2026/11/27 20:19:27 INFO HTTP 请求 request_id=ASUS/b00DbXTjDq-000042 method=GET route=/api/v1/works/{id}/metrics/windows status=404 duration_ms=3.2708 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+
+[desktop-renderer] › e2e\desktop-review-restoration.spec.ts:6:1 › Electron 复盘页按原型布局并逐项点击数据入口
+Review layout comparison [{"selector":".desktop-review-page > div:first-child h1","actual":{"x":96,"y":52,"width":276,"height":42.046875},"expected":{"x":96,"y":52,"width":276,"height":42}},{"selector":".desktop-review-page > div:first-child p","actual":{"x":96,"y":102.046875,"width":276,"height":21.59375},"expected":{"x":96,"y":102,"width":276,"height":21.59375}},{"selector":".desktop-review-stats","actual":{"x":96,"y":148.9375,"width":1312,"height":94.6875},"expected":{"x":96,"y":148.59375,"width":1312,"height":98.5}},{"selector":".desktop-review-board-heading","actual":{"x":96,"y":398.5,"width":1312,"height":80},"expected":{"x":96,"y":269.09375,"width":1312,"height":31}},{"selector":".desktop-review-table","actual":{"x":97,"y":495.5,"width":1310,"height":216.5},"expected":{"x":97,"y":318.09375,"width":1310,"height":216.5}},{"selector":".desktop-review-teasers","actual":{"x":96,"y":737,"width":1312,"height":178.5},"expected":{"x":96,"y":559.59375,"width":1312,"height":177.296875}}]
+
+
+[WebServer] 2026/11/27 20:19:28 WARN HTTP 请求 request_id=ASUS/b00DbXTjDq-000038 method=GET route=/api/v1/notifications/stream status=200 duration_ms=1733.5886 workspace_id=793a1802-42fb-41a9-bdb7-51712b5a77b4
+  1) [desktop-renderer] › e2e\desktop-review-restoration.spec.ts:6:1 › Electron 复盘页按原型布局并逐项点击数据入口 ──
+
+    Error: .desktop-review-board-heading y
+
+    expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 4
+    Received:    129.40625
+
+      73 |   for (const { selector, actual, expected } of metrics) {
+      74 |     expect(Math.abs(actual.x - expected.x), `${selector} x`).toBeLessThanOrEqual(2)
+    > 75 |     expect(Math.abs(actual.y - expected.y), `${selector} y`).toBeLessThanOrEqual(4)
+         |                                                              ^
+      76 |     expect(Math.abs(actual.width - expected.width), `${selector} width`).toBeLessThanOrEqual(2)
+      77 |     expect(Math.abs(actual.height - expected.height), `${selector} height`).toBeLessThanOrEqual(4)
+      78 |   }
+        at <repo>\renderer\e2e\desktop-review-restoration.spec.ts:75:62
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ..\.playwright-results\desktop-renderer\desktop-review-restoration-Electron-复盘页按原型布局并逐项点击数据入口-desktop-renderer\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ..\.playwright-results\desktop-renderer\desktop-review-restoration-Electron-复盘页按原型布局并逐项点击数据入口-desktop-renderer\test-failed-2.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ..\.playwright-results\desktop-renderer\desktop-review-restoration-Electron-复盘页按原型布局并逐项点击数据入口-desktop-renderer\error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    ..\.playwright-results\desktop-renderer\desktop-review-restoration-Electron-复盘页按原型布局并逐项点击数据入口-desktop-renderer\trace.zip
+    Usage:
+
+        pnpm exec playwright show-trace ..\.playwright-results\desktop-renderer\desktop-review-restoration-Electron-复盘页按原型布局并逐项点击数据入口-desktop-renderer\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+  1 failed
+    [desktop-renderer] › e2e\desktop-review-restoration.spec.ts:6:1 › Electron 复盘页按原型布局并逐项点击数据入口 ───

@@ -101,7 +101,9 @@ type metricShotOut struct {
 	} `json:"rows"`
 }
 
-var shotNumberRe = regexp.MustCompile(`\d+(?:\.\d+)?[万亿]?\+?`)
+// shotNumberTokenRe matches one number token from raw screenshot text without collapsing
+// spaces or commas first: spaces and plain commas may be column separators (OPT-U05).
+var shotNumberTokenRe = regexp.MustCompile(`(?:\d{1,3}(?:[,，]\d{3})+|\d+)(?:\.\d+)?(?:[\s\x{00A0}]*[万亿wW])?\+?`)
 
 var metricIntervalRe = regexp.MustCompile(`(?i)(昨日|昨天|前日|本周|上周|本月|上月|近\s*[0-9一二三四五六七八九十]+\s*(天|日|周|月)|最近\s*[0-9一二三四五六七八九十]+\s*(天|日|周|月)|过去.{0,5}[0-9一二三四五六七八九十]+\s*(天|日|周|月)|近七日|近一周|过去一周)`)
 var metricDateHintRe = regexp.MustCompile(`([0-9]{4})[-/.年]([0-9]{1,2})[-/.月]([0-9]{1,2})日?`)
@@ -126,11 +128,12 @@ var accountFollowerMetricRe = regexp.MustCompile(`账号.{0,6}(净粉丝|净增|
 var shotNormalizer = strings.NewReplacer(",", "", "，", "", " ", "", "\u00a0", "", "w", "万", "W", "万")
 
 // rawNumbers is every count that literally appears in the screenshot text, after unit conversion.
+// It must tokenize the raw text first: deleting every space would glue columns such as
+// "12:33 89 0 3 2 0" into one bogus number. Only each token is normalized.
 func rawNumbers(raw string) map[int]bool {
-	t := shotNormalizer.Replace(raw)
 	out := map[int]bool{}
-	for _, tok := range shotNumberRe.FindAllString(t, -1) {
-		if v, _, err := parseCount(tok); err == nil {
+	for _, tok := range shotNumberTokenRe.FindAllString(raw, -1) {
+		if v, _, err := parseCount(shotNormalizer.Replace(tok)); err == nil {
 			out[v] = true
 		}
 	}
@@ -138,10 +141,9 @@ func rawNumbers(raw string) map[int]bool {
 }
 
 func rawNumbers64(raw string) map[int64]bool {
-	t := shotNormalizer.Replace(raw)
 	out := map[int64]bool{}
-	for _, tok := range shotNumberRe.FindAllString(t, -1) {
-		if v, _, err := parseCount64(tok); err == nil {
+	for _, tok := range shotNumberTokenRe.FindAllString(raw, -1) {
+		if v, _, err := parseCount64(shotNormalizer.Replace(tok)); err == nil {
 			out[v] = true
 		}
 	}

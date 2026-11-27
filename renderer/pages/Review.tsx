@@ -28,6 +28,12 @@ const metricSourceLabel: Record<MetricSource, string> = {
 
 const nodeLabel = (m: Pick<Metric, 'day_offset'>) => (m.day_offset == null ? '发布时间未知' : `发布后第 ${m.day_offset} 天`)
 
+// 桌面看板只展示“最接近第 7 天”的节点；非第 7 天时必须把真实节点说出来，不能伪装成第 7 天。
+const reviewNodeNote = (m: Pick<Metric, 'day_offset'> | null | undefined) => {
+  if (!m || m.day_offset === 7) return ''
+  return m.day_offset == null ? '按发布时间未知节点' : `按第 ${m.day_offset} 天`
+}
+
 // OP-04：`pushed/packed` 是没回填发布链接，`published` 才是已发布但没录数据，两者不能都写成“尚未录入”。
 type RecordState = { kind: 'missing_link' | 'missing_data' | 'recorded'; label: string; to?: string }
 
@@ -40,9 +46,11 @@ const recordStateOf = (r: BoardRow): RecordState => {
 
 function RecordCell({ row, onRecord }: { row: BoardRow; onRecord: () => void }) {
   const state = recordStateOf(row)
+  const nodeNote = reviewNodeNote(row.d7)
   return (
-    <div className="desktop-review-source-cell">
+    <div className={cn('desktop-review-source-cell', nodeNote && 'desktop-review-source-cell--node')}>
       <Badge tone={state.kind === 'recorded' ? 'ink' : 'gamboge'}>{state.label}</Badge>
+      {nodeNote && <span className="desktop-review-node-label">{nodeNote}</span>}
       {unitHint(row.d7) && <span className="text-[11.5px] text-mist-400">{unitHint(row.d7)}</span>}
       {state.to
         ? <Link to={state.to} className="text-[12px] text-ink-700 underline underline-offset-2">去回填链接</Link>
@@ -139,6 +147,10 @@ function ImportMetrics({ accountId, platform, works, onDone }: { accountId: stri
     }
   }
   const confirmImport = async () => {
+    if (rows.some((r) => r.work_id && r.error)) {
+      toast.error('存在格式错误的行，请先修正或跳过后再导入')
+      return
+    }
     const payload = rows.filter((r) => r.work_id).map((r) => ({
       title: r.title, work_id: r.work_id!, url: r.url, content_format: r.content_format, published_at: r.published_at,
       captured_at: r.captured_at, reads: r.reads, impressions: r.impressions, likes: r.likes, wows: r.wows,
@@ -187,9 +199,11 @@ function ImportMetrics({ accountId, platform, works, onDone }: { accountId: stri
                 <div className="min-w-0">
                   <div className="truncate text-[13.5px] font-medium text-mist-800">{r.title || '（无外部标题）'}</div>
                   <div className="text-xs text-mist-400">
-                    {r.error ? <span className="text-danger">{r.error}</span> : r.match_type === 'exact' ? '已精确匹配'
-                      : r.match_type === 'fuzzy' ? `模糊匹配 ${Math.round((r.similarity ?? 0) * 100)}%，请确认` : '未匹配，请选择作品或跳过'}
-                    {r.content_format && ` · ${contentFormatName(r.content_format)}`}{r.published_at && ` · ${r.published_at}`}
+                    {r.error ? <span className="text-danger">{r.error}</span> : <span>{r.match_type === 'exact' ? '已精确匹配'
+                      : r.match_type === 'fuzzy' ? `模糊匹配 ${Math.round((r.similarity ?? 0) * 100)}%，请确认` : '未匹配，请选择作品或跳过'}</span>}
+                    {r.content_format && <span>{` · ${contentFormatName(r.content_format)}`}</span>}
+                    {r.published_at && <span>{` · ${r.published_at}`}</span>}
+                    {!r.error && r.captured_at && <span>{` · 采集 ${r.captured_at}`}</span>}
                   </div>
                 </div>
                 <Select value={r.work_id ?? ''} onChange={(e) => setRows((list) => list.map((x, j) => j === i ? { ...x, work_id: e.target.value || null, matched: !!e.target.value } : x))}>
@@ -673,6 +687,7 @@ export default function Review() {
       onRetry={() => { void board.refetch(); void reports.refetch() }} /></div>
   }
   const rows = board.data ?? []
+  const hasNonSevenNode = rows.some((r) => r.d7 && r.d7.day_offset !== 7)
   const summaryRows = rows.flatMap((row) => row.d7?.day_offset === 7 ? [row.d7] : [])
   const summaryValue = (key: MetricKey) => {
     if (key === 'impressions') {
@@ -784,7 +799,7 @@ export default function Review() {
         </div>
       )}
       {desktopPresentation && <div className="desktop-review-board-heading">
-        <h2>作品数据 · 发布后第 7 天</h2>
+        <h2 className={hasNonSevenNode ? 'desktop-review-board-heading-mixed' : undefined}>{hasNonSevenNode ? '作品数据 · 默认第 7 天（缺第 7 天按实采节点）' : '作品数据 · 发布后第 7 天'}</h2>
         <div className="flex flex-wrap items-center gap-3">{boardSortControls}{boardActions}</div>
       </div>}
       <Card className="mb-6 overflow-hidden" id="desktop-review-board">

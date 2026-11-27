@@ -242,6 +242,9 @@ func (s *Server) matchWorkPublishedAt(ctx context.Context, accountID uuid.UUID, 
 }
 
 func (s *Server) matchMetricImportRow(ctx context.Context, accountID uuid.UUID, platform string, cells []string, colByKey map[string]int, row *metricPreviewRow) {
+	if row.Error != "" {
+		return
+	}
 	if rawID := metricCell(cells, colByKey, "work_id"); rawID != "" {
 		id, err := uuid.Parse(rawID)
 		if err != nil {
@@ -331,6 +334,25 @@ func fillMetricRow(cells []string, colByKey map[string]int, row *metricPreviewRo
 	}
 }
 
+// validateMetricPreviewDates rejects malformed RFC3339 dates at preview time. It must run
+// before matchMetricImportRow so an invalid row keeps work_id=nil and the UI defaults to skip.
+func validateMetricPreviewDates(row *metricPreviewRow) {
+	if row.Error != "" {
+		return
+	}
+	if row.CapturedAt != "" {
+		if _, err := time.Parse(time.RFC3339, row.CapturedAt); err != nil {
+			row.Error = fmt.Sprintf("「采集时间」格式无效（需 RFC3339）：%s", row.CapturedAt)
+			return
+		}
+	}
+	if row.PublishedAt != "" {
+		if _, err := time.Parse(time.RFC3339, row.PublishedAt); err != nil {
+			row.Error = fmt.Sprintf("「发布时间」格式无效（需 RFC3339）：%s", row.PublishedAt)
+		}
+	}
+}
+
 // parseMetricText parses pasted table text: one work per line, columns split by tab, pipe, or 2+ spaces.
 // A header line containing 标题 maps columns by alias; otherwise the default order is
 // 标题,阅读,点赞,在看,收藏,评论,分享,涨粉.
@@ -396,6 +418,7 @@ func (s *Server) parseMetricText(ctx context.Context, accountID uuid.UUID, platf
 		row.PublishedAt = metricCell(cells, colByKey, "published_at")
 		row.CapturedAt = metricCell(cells, colByKey, "captured_at")
 		fillMetricRow(cells, colByKey, &row)
+		validateMetricPreviewDates(&row)
 		s.matchMetricImportRow(ctx, accountID, platform, cells, colByKey, &row)
 		if title == "" && platform != "toutiao" {
 			row.Error = "缺少标题列"
@@ -558,6 +581,7 @@ func (s *Server) importMetrics(w http.ResponseWriter, r *http.Request) error {
 		if title == "" && a.Platform != "toutiao" {
 			continue
 		}
+		validateMetricPreviewDates(&row)
 		s.matchMetricImportRow(r.Context(), a.ID, a.Platform, rec, colByKey, &row)
 		if row.Error == "" && row.WorkID == nil && title == "" {
 			row.Error = "请选择本账号中对应的作品"

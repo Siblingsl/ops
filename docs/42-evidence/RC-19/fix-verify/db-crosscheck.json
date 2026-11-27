@@ -1,0 +1,11 @@
+{
+  "generated_at": "2026-11-27T20:12:39.7253488+08:00",
+  "database": "127.0.0.1:5440/ops",
+  "metric_snapshot_count_before": 25,
+  "metric_snapshot_count_after": 25,
+  "account_metric_daily_count_before": 30,
+  "account_metric_daily_count_after": 30,
+  "checked_rows": 14,
+  "all_match": true,
+  "mismatches": []
+}

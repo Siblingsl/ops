@@ -1,0 +1,3909 @@
+{
+  "schema": "rc19-local-db-verification/v1",
+  "generated_at": "2026-11-27T19:24:00+08:00",
+  "generated_by": "RC-19 本机实测（零业务源码改动）",
+  "scope": {
+    "environment": "本机 Windows / OPS 仓库",
+    "database": "ops-dev-postgres-1 / ops / 127.0.0.1:5440",
+    "workspace": {
+      "id": "4e2bd06c-210c-4840-9cfa-db2b36101083",
+      "name": "inspect-1792313152138 的工作区",
+      "role": "owner",
+      "owner": "inspect-1792313152138"
+    },
+    "accounts": [
+      {
+        "id": "05dfeb67-c0b0-401d-905a-edddddb63f40",
+        "name": "验收号-94322847988",
+        "platform": "xhs"
+      },
+      {
+        "id": "6c320a1b-b6f1-4897-b39f-13b12e854271",
+        "name": "巡检号",
+        "platform": "xhs"
+      },
+      {
+        "id": "bf07850c-7cfc-4b8b-b112-6ebc6eb00c4b",
+        "name": "周末读书会（测试）",
+        "platform": "wechat"
+      }
+    ],
+    "never_touched": "https://ops-api.88813888.xyz（未访问、未写入）"
+  },
+  "environment": {
+    "launcher": "start-server.cmd",
+    "launcher_text": "@echo off\nrem RC-19 local environment launcher (dev only). Production API is never used.\nset NO_PROXY=127.0.0.1,localhost,::1\nset no_proxy=127.0.0.1,localhost,::1\nset OPS_DEV=1\nset OPS_LISTEN=:8080\nset OPS_DESKTOP_PLATFORM_ENABLED=1\nset OPS_DESKTOP_PLATFORM_AUTO_ADOPT=0\nset OPS_COOKIE_SECURE=0\nset OPS_FIRST_TOKEN_TIMEOUT=120s\nset OPS_DESKTOP_FIRST_CONTENT_TIMEOUT=120s\ncd /d <repo>\\server\n\"<tmp>\\ops-rc19\\ops.exe\" serve > \"<tmp>\\ops-rc19\\server.log\" 2>&1\n",
+    "process": {
+      "pid": 24020,
+      "name": "ops.exe",
+      "start_time": "2026-11-27T18:25:32.1055224+08:00",
+      "listening": [
+        {
+          "port": 5173,
+          "pid": 6560
+        },
+        {
+          "port": 8080,
+          "pid": 24020
+        },
+        {
+          "port": 19310,
+          "pid": 25752
+        }
+      ]
+    },
+    "healthz": "200 ok",
+    "ai_gateway": {
+      "base_url": "http://127.0.0.1:3425/v1",
+      "models": [
+        "zcode/GLM-5.4",
+        "zcode/GLM-5.3-Flash",
+        "zcode/GLM-5.2",
+        "zcode/GLM-5-Turbo",
+        "workbuddy-ai/hy4flash-free",
+        "qoder/gfmodel",
+        "qoder/dfmodel",
+        "opencode-zen-free/deepseek-v4.1-flash-free",
+        "autoclaw/zaicoding_glm-5.3",
+        "autoclaw/zai_glm-5.3-flash"
+      ]
+    },
+    "providers": [
+      {
+        "id": "8ed19c28-c26e-46c5-8ba6-fada945b10b0",
+        "name": "本地模拟模型",
+        "models": [
+          "mock-writer",
+          "mock-fast",
+          "mock-embed"
+        ],
+        "status": "active",
+        "base_url": "http://127.0.0.1:8091/v1",
+        "simulated": false
+      },
+      {
+        "id": "017ee409-0282-4a01-a102-1e911bbbe80f",
+        "name": "本地网关 3425 · OpenCode DeepSeek",
+        "models": [
+          "opencode-zen-free/deepseek-v4.1-flash-free"
+        ],
+        "status": "active",
+        "base_url": "http://127.0.0.1:3425/v1",
+        "simulated": false
+      },
+      {
+        "id": "9bf53a15-005e-4eef-ab9e-e6ad7e9c7f1a",
+        "name": "本地网关 3425 · WorkBuddy Hy4",
+        "models": [
+          "workbuddy-ai/hy4flash-free"
+        ],
+        "status": "active",
+        "base_url": "http://127.0.0.1:3425/v1",
+        "simulated": false
+      }
+    ],
+    "routes": [
+      {
+        "model": "workbuddy-ai/hy4flash-free",
+        "task_type": "agent_chat",
+        "provider_id": "9bf53a15-005e-4eef-ab9e-e6ad7e9c7f1a",
+        "fallback_model": "opencode-zen-free/deepseek-v4.1-flash-free",
+        "execution_location": "server"
+      },
+      {
+        "model": "workbuddy-ai/hy4flash-free",
+        "task_type": "default",
+        "provider_id": "9bf53a15-005e-4eef-ab9e-e6ad7e9c7f1a",
+        "fallback_model": "opencode-zen-free/deepseek-v4.1-flash-free",
+        "execution_location": "server"
+      },
+      {
+        "model": "mock-embed",
+        "task_type": "embedding",
+        "provider_id": "8ed19c28-c26e-46c5-8ba6-fada945b10b0",
+        "fallback_model": "",
+        "execution_location": "server"
+      },
+      {
+        "model": "mock-fast",
+        "task_type": "fact_flag",
+        "provider_id": "8ed19c28-c26e-46c5-8ba6-fada945b10b0",
+        "fallback_model": "",
+        "execution_location": "server"
+      },
+      {
+        "model": "mock-fast",
+        "task_type": "fix_suggest",
+        "provider_id": "8ed19c28-c26e-46c5-8ba6-fada945b10b0",
+        "fallback_model": "",
+        "execution_location": "server"
+      },
+      {
+        "model": "mock-fast",
+        "task_type": "inbox_triage",
+        "provider_id": "8ed19c28-c26e-46c5-8ba6-fada945b10b0",
+        "fallback_model": "",
+        "execution_location": "server"
+      },
+      {
+        "model": "mock-fast",
+        "task_type": "material_tag",
+        "provider_id": "8ed19c28-c26e-46c5-8ba6-fada945b10b0",
+        "fallback_model": "",
+        "execution_location": "server"
+      },
+      {
+        "model": "workbuddy-ai/hy4flash-free",
+        "task_type": "metric_screenshot",
+        "provider_id": "9bf53a15-005e-4eef-ab9e-e6ad7e9c7f1a",
+        "fallback_model": "",
+        "execution_location": "server"
+      },
+      {
+        "model": "mock-fast",
+        "task_type": "section_continue",
+        "provider_id": "8ed19c28-c26e-46c5-8ba6-fada945b10b0",
+        "fallback_model": "",
+        "execution_location": "server"
+      },
+      {
+        "model": "mock-fast",
+        "task_type": "tag_suggest",
+        "provider_id": "8ed19c28-c26e-46c5-8ba6-fada945b10b0",
+        "fallback_model": "",
+        "execution_location": "server"
+      },
+      {
+        "model": "workbuddy-ai/hy4flash-free",
+        "task_type": "tier_economy",
+        "provider_id": "9bf53a15-005e-4eef-ab9e-e6ad7e9c7f1a",
+        "fallback_model": "",
+        "execution_location": "server"
+      },
+      {
+        "model": "mock-fast",
+        "task_type": "topic_score",
+        "provider_id": "8ed19c28-c26e-46c5-8ba6-fada945b10b0",
+        "fallback_model": "",
+        "execution_location": "server"
+      }
+    ],
+    "system_settings": {
+      "key": "platform_account_sync.xhs.enabled",
+      "value": true
+    },
+    "auto_adopt_effective": "关闭：进程环境 OPS_DESKTOP_PLATFORM_AUTO_ADOPT=0，且 system_setting 无覆盖键"
+  },
+  "baseline_at_task_start": {
+    "metric_snapshot": 21,
+    "account_metric_daily": 27,
+    "metric_upload": 0,
+    "review_report": 1,
+    "account_memory": 0,
+    "ai_call": 374,
+    "platform_metric_observation": 173
+  },
+  "anomaly_test": {
+    "before": {
+      "metric_snapshot_global": 25,
+      "metric_snapshot_workspace": 25,
+      "account_metric_daily_global": 30,
+      "account_metric_daily_workspace": 0,
+      "metric_upload_global": 1,
+      "metric_upload_workspace": 1,
+      "snapshot_workspace_hash": "ea1da80a2cb11fb28b25700bc38aabb0",
+      "upload_workspace_hash": "3019b2b6b3e3c2b0f56dcaa56d1af56b"
+    },
+    "after": {
+      "metric_snapshot_global": 25,
+      "metric_snapshot_workspace": 25,
+      "account_metric_daily_global": 30,
+      "account_metric_daily_workspace": 0,
+      "metric_upload_global": 1,
+      "metric_upload_workspace": 1,
+      "snapshot_workspace_hash": "ea1da80a2cb11fb28b25700bc38aabb0",
+      "upload_workspace_hash": "3019b2b6b3e3c2b0f56dcaa56d1af56b"
+    },
+    "cases": [
+      {
+        "id": "bad-image",
+        "input": "伪造 PNG 字节",
+        "result": "弹窗错误：第 1 张不是可识别的图片（支持 PNG、JPEG）；无写入"
+      },
+      {
+        "id": "metrics-bad-header",
+        "input": "foo,bar 表头",
+        "result": "CSV 需要「标题」列以便匹配作品；无写入"
+      },
+      {
+        "id": "metrics-negative",
+        "input": "阅读=-5",
+        "result": "预览行级提示「「reads」列无法解析：-5」并跳过；未确认导入"
+      },
+      {
+        "id": "metrics-bad-date",
+        "input": "采集时间 2026-13-45 99:99",
+        "result": "预览未标红；点确认后服务端拒绝：第 1 行的采集时间格式无效；无写入"
+      },
+      {
+        "id": "metrics-empty",
+        "input": "空 CSV",
+        "result": "CSV 无法解析或没有数据行；无写入"
+      },
+      {
+        "id": "followers-bad-header",
+        "input": "foo,bar 表头",
+        "result": "CSV 第 1 行日期格式应为 2026-10-01；无写入"
+      },
+      {
+        "id": "followers-negative",
+        "input": "粉丝数=-10",
+        "result": "CSV 第 2 行粉丝数必须是非负整数；无写入"
+      },
+      {
+        "id": "followers-bad-date",
+        "input": "日期 2026-13-45",
+        "result": "CSV 第 2 行日期格式应为 2026-10-01；无写入"
+      },
+      {
+        "id": "followers-empty",
+        "input": "空 CSV",
+        "result": "CSV 不能为空；无写入"
+      }
+    ],
+    "verdict": "零污染：三表行数与工作区哈希前后完全一致"
+  },
+  "metric_snapshots_created": [
+    {
+      "id": "2d9c4419-ecc8-47b0-a17d-b43dc22f4be8",
+      "likes": 0,
+      "reads": 1,
+      "title": "公众号采集验证 2247483754_1",
+      "shares": 0,
+      "source": "file",
+      "account": "周末读书会（测试）",
+      "work_id": "a473b5a6-f9fe-4ac6-ba0d-1a33fbc082a9",
+      "as_of_at": null,
+      "comments": null,
+      "platform": "wechat_mp",
+      "favorites": null,
+      "read_unit": "unknown",
+      "day_offset": 103,
+      "captured_at": "2026-10-21T21:24:38+08:00",
+      "metric_meta": {},
+      "quality_state": "approved",
+      "follows_gained": null,
+      "observation_id": null
+    },
+    {
+      "id": "e93d62bd-7dbc-4a67-b403-2a3f2fc68b85",
+      "likes": 0,
+      "reads": null,
+      "title": "公众号采集验证 2247483739_1",
+      "shares": null,
+      "source": "wechat_browser",
+      "account": "周末读书会（测试）",
+      "work_id": "7b54b56a-91a9-4884-92fc-8e1bd78122c2",
+      "as_of_at": "2026-10-21T21:24:38.552+08:00",
+      "comments": 0,
+      "platform": "wechat_mp",
+      "favorites": null,
+      "read_unit": "unknown",
+      "day_offset": 106,
+      "captured_at": "2026-10-21T21:24:38.552+08:00",
+      "metric_meta": {
+        "fields": {
+          "wow_count": {
+            "state": "missing"
+          },
+          "like_count": {
+            "path": "fixture.article.like_num",
+            "unit": "count",
+            "state": "observed",
+            "precision": "exact"
+          },
+          "read_times": {
+            "path": "fixture.article.read_num",
+            "unit": "unknown",
+            "state": "observed",
+            "precision": "exact"
+          },
+          "read_users": {
+            "state": "missing"
+          },
+          "impressions": {
+            "state": "missing"
+          },
+          "share_times": {
+            "path": "fixture.article.share_num",
+            "unit": "times",
+            "state": "observed",
+            "precision": "exact"
+          },
+          "share_users": {
+            "state": "missing"
+          },
+          "comment_count": {
+            "path": "fixture.article.comment_num",
+            "unit": "count",
+            "state": "observed",
+            "precision": "exact"
+          }
+        },
+        "missing_fields": [
+          "impressions",
+          "read_users",
+          "share_users",
+          "wow_count"
+        ],
+        "adapter_version": "wechat-mp-1",
+        "mapping_version": 1
+      },
+      "quality_state": "approved",
+      "follows_gained": null,
+      "observation_id": "14316a35-93da-4684-b7fb-638cbb4a763a"
+    },
+    {
+      "id": "227ea0ff-9ee9-42c5-b2bc-5b7cb061e690",
+      "likes": 27,
+      "reads": null,
+      "title": "占位作品 · 09-04 · 6a9aaa5e",
+      "shares": 2,
+      "source": "xhs_browser",
+      "account": "验收号-94322847988",
+      "work_id": "8aa86490-9d10-4256-b9f7-d4109e4df4e5",
+      "as_of_at": "2026-11-19T17:13:50.44+08:00",
+      "comments": 0,
+      "platform": "xhs",
+      "favorites": 30,
+      "read_unit": "unknown",
+      "day_offset": 76,
+      "captured_at": "2026-11-19T17:13:50.44+08:00",
+      "metric_meta": {
+        "fields": {
+          "like_count": {
+            "path": "fixture.note.likes",
+            "unit": "count",
+            "state": "observed",
+            "precision": "exact"
+          },
+          "view_times": {
+            "path": "fixture.note.view_count",
+            "unit": "unknown",
+            "state": "observed",
+            "precision": "exact"
+          },
+          "impressions": {
+            "state": "missing"
+          },
+          "share_times": {
+            "path": "fixture.note.shared_count",
+            "unit": "times",
+            "state": "observed",
+            "precision": "exact"
+          },
+          "comment_count": {
+            "path": "fixture.note.comments_count",
+            "unit": "count",
+            "state": "observed",
+            "precision": "exact"
+          },
+          "favorite_count": {
+            "path": "fixture.note.collected_count",
+            "unit": "count",
+            "state": "observed",
+            "precision": "exact"
+          }
+        },
+        "missing_fields": [
+          "impressions"
+        ],
+        "adapter_version": "xhs-1",
+        "mapping_version": 1
+      },
+      "quality_state": "approved",
+      "follows_gained": null,
+      "observation_id": "12a1aad4-d265-48b9-9b8f-b4ebbc393ef9"
+    },
+    {
+      "id": "d4295181-2a51-4e93-a322-192a00cdda01",
+      "likes": 3,
+      "reads": 89,
+      "title": "工位上的松弛感",
+      "shares": 0,
+      "source": "screenshot",
+      "account": "巡检号",
+      "work_id": "b6d99970-6f69-4578-a7ae-649b61bf8e91",
+      "as_of_at": null,
+      "comments": 0,
+      "platform": "xhs",
+      "favorites": 2,
+      "read_unit": "unknown",
+      "day_offset": 2,
+      "captured_at": "2026-11-26T13:23:00+08:00",
+      "metric_meta": {},
+      "quality_state": "approved",
+      "follows_gained": null,
+      "observation_id": null
+    }
+  ],
+  "observations_confirmed": [
+    {
+      "id": "14316a35-93da-4684-b7fb-638cbb4a763a",
+      "source": "wechat_browser",
+      "values": {
+        "like_count": {
+          "unit": "count",
+          "value": 0,
+          "precision": "exact"
+        },
+        "read_times": {
+          "unit": "unknown",
+          "value": 1,
+          "precision": "exact"
+        },
+        "share_times": {
+          "unit": "unknown",
+          "value": 0,
+          "precision": "exact"
+        },
+        "comment_count": {
+          "unit": "count",
+          "value": 0,
+          "precision": "exact"
+        }
+      },
+      "as_of_at": "2026-10-21T21:24:38.552+08:00",
+      "field_paths": {
+        "like_count": "fixture.article.like_num",
+        "read_times": "fixture.article.read_num",
+        "share_times": "fixture.article.share_num",
+        "comment_count": "fixture.article.comment_num"
+      },
+      "match_state": "bound",
+      "observed_at": "2026-10-21T21:24:38.552+08:00",
+      "quality_state": "valid",
+      "platform_work_id": null
+    },
+    {
+      "id": "12a1aad4-d265-48b9-9b8f-b4ebbc393ef9",
+      "source": "xhs_browser",
+      "values": {
+        "like_count": {
+          "unit": "count",
+          "value": 27,
+          "precision": "exact"
+        },
+        "view_times": {
+          "unit": "unknown",
+          "value": 523,
+          "precision": "exact"
+        },
+        "share_times": {
+          "unit": "times",
+          "value": 2,
+          "precision": "exact"
+        },
+        "comment_count": {
+          "unit": "count",
+          "value": 0,
+          "precision": "exact"
+        },
+        "favorite_count": {
+          "unit": "count",
+          "value": 30,
+          "precision": "exact"
+        }
+      },
+      "as_of_at": "2026-11-19T17:13:50.44+08:00",
+      "field_paths": {
+        "like_count": "fixture.note.likes",
+        "view_times": "fixture.note.view_count",
+        "share_times": "fixture.note.shared_count",
+        "comment_count": "fixture.note.comments_count",
+        "favorite_count": "fixture.note.collected_count"
+      },
+      "match_state": "bound",
+      "observed_at": "2026-11-19T17:13:50.44+08:00",
+      "quality_state": "valid",
+      "platform_work_id": null
+    }
+  ],
+  "metric_upload": {
+    "id": "359c3b97-6ef0-48b6-a789-9654a4b07edd",
+    "rows": [
+      {
+        "wows": null,
+        "index": 0,
+        "likes": null,
+        "reads": null,
+        "title": "工位上的松弛感",
+        "shares": null,
+        "status": "confirmed",
+        "dropped": [
+          "阅读/观看",
+          "点赞",
+          "收藏",
+          "评论/留言",
+          "分享"
+        ],
+        "work_id": "b6d99970-6f69-4578-a7ae-649b61bf8e91",
+        "comments": null,
+        "day_hint": "",
+        "raw_text": "工位上的松弛感 2026-11-24 12:33 89 0 3 2 0",
+        "estimated": false,
+        "favorites": null,
+        "metric_id": "d4295181-2a51-4e93-a322-192a00cdda01",
+        "match_type": "exact",
+        "similarity": 0,
+        "impressions": null,
+        "interval_hint": false,
+        "follows_gained": null,
+        "published_hint": "2026-11-24 12:33",
+        "account_follower_hint": false
+      },
+      {
+        "wows": null,
+        "index": 1,
+        "likes": null,
+        "reads": null,
+        "title": "哪个更真实？",
+        "shares": null,
+        "status": "pending",
+        "dropped": [
+          "阅读/观看",
+          "点赞",
+          "收藏",
+          "评论/留言",
+          "分享"
+        ],
+        "work_id": null,
+        "comments": null,
+        "day_hint": "",
+        "raw_text": "哪个更真实？ 2026-08-12 20:53 230 2 6 1 0",
+        "estimated": false,
+        "favorites": null,
+        "match_type": "none",
+        "similarity": 0,
+        "impressions": null,
+        "interval_hint": false,
+        "follows_gained": null,
+        "published_hint": "2026-08-12 20:53",
+        "account_follower_hint": false
+      }
+    ],
+    "files": [
+      {
+        "mime": "image/jpeg",
+        "path": "metric_uploads/359c3b97-6ef0-48b6-a789-9654a4b07edd/0.jpg"
+      }
+    ],
+    "account_id": "6c320a1b-b6f1-4897-b39f-13b12e854271",
+    "ai_call_id": "0338fe77-a6f1-4438-8fcc-92b98d934e27",
+    "created_at": "2026-11-27T18:09:20.185196+08:00",
+    "created_by": "71a6b917-e23b-471a-bd10-11728bac9108",
+    "workspace_id": "4e2bd06c-210c-4840-9cfa-db2b36101083"
+  },
+  "review_report": {
+    "id": "9fc997e7-15b7-44bc-bdc5-dbeae7b4505d",
+    "cx_basis": {
+      "model": "本地网关 3425 · WorkBuddy Hy4 / workbuddy-ai/hy4flash-free",
+      "works": [
+        {
+          "title": "写给新手：本条用于绑定已发布笔记",
+          "status": "published",
+          "topics": null,
+          "summary": "",
+          "windows": [
+            {
+              "range": {
+                "to": "2026-10-23T17:58:00+08:00",
+                "from": "2026-10-23T05:58:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T1",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 10
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 10
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 10
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-10-23T11:58:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-10-25T23:58:00+08:00",
+                "from": "2026-10-24T23:58:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T3",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 10
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 10
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 10
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-10-25T11:58:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-10-29T23:58:00+08:00",
+                "from": "2026-10-28T23:58:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T7",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 10
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 10
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 10
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-10-29T11:58:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-11-22T11:58:00+08:00",
+                "from": "2026-11-20T11:58:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T30",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 10
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 10
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 10
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-11-21T11:58:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            }
+          ],
+          "work_id": "fc55c64d-efdb-424b-bde8-59ed713b752f",
+          "viewpoint": "本条用于绑定已发布笔记\n本条用于绑定已发布笔记",
+          "source_ref": "work:fc55c64d-efdb-424b-bde8-59ed713b752f:revision:9",
+          "published_at": "2026-10-22T11:58:00+08:00",
+          "work_revision": 9,
+          "content_format": "image_note",
+          "cover_asset_id": null,
+          "publish_revision": 2,
+          "cover_image_loaded": false
+        },
+        {
+          "title": "占位作品 · 09-21 · 6ab12462",
+          "status": "published",
+          "topics": null,
+          "summary": "",
+          "windows": [
+            {
+              "range": {
+                "to": "2026-09-22T18:00:00+08:00",
+                "from": "2026-09-22T06:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T1",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 9
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 9
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 9
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-22T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-25T00:00:00+08:00",
+                "from": "2026-09-24T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T3",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 9
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 9
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 9
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-24T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-29T00:00:00+08:00",
+                "from": "2026-09-28T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T7",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 9
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 9
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 9
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-28T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-10-22T12:00:00+08:00",
+                "from": "2026-10-20T12:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T30",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 9
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 9
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 9
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-10-21T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            }
+          ],
+          "work_id": "625d79cb-9517-4ae2-8186-795b57587fed",
+          "viewpoint": "",
+          "source_ref": "work:625d79cb-9517-4ae2-8186-795b57587fed:revision:4",
+          "published_at": "2026-09-21T12:00:00+08:00",
+          "work_revision": 4,
+          "content_format": "image_note",
+          "cover_asset_id": null,
+          "publish_revision": 2,
+          "cover_image_loaded": false
+        },
+        {
+          "title": "占位作品 · 09-16 · 6aaa8c57",
+          "status": "published",
+          "topics": null,
+          "summary": "",
+          "windows": [
+            {
+              "range": {
+                "to": "2026-09-17T18:00:00+08:00",
+                "from": "2026-09-17T06:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T1",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 8
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 8
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 8
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-17T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-20T00:00:00+08:00",
+                "from": "2026-09-19T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T3",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 8
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 8
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 8
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-19T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-24T00:00:00+08:00",
+                "from": "2026-09-23T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T7",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 8
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 8
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 8
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-23T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-10-17T12:00:00+08:00",
+                "from": "2026-10-15T12:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T30",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 8
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 8
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 8
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-10-16T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            }
+          ],
+          "work_id": "a9c319f7-5bfe-4efc-a454-cf110e0b0a7c",
+          "viewpoint": "",
+          "source_ref": "work:a9c319f7-5bfe-4efc-a454-cf110e0b0a7c:revision:4",
+          "published_at": "2026-09-16T12:00:00+08:00",
+          "work_revision": 4,
+          "content_format": "image_note",
+          "cover_asset_id": null,
+          "publish_revision": 2,
+          "cover_image_loaded": false
+        },
+        {
+          "title": "占位作品 · 09-07 · 6a9e9d6c",
+          "status": "published",
+          "topics": null,
+          "summary": "",
+          "windows": [
+            {
+              "range": {
+                "to": "2026-09-08T18:00:00+08:00",
+                "from": "2026-09-08T06:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T1",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 7
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 7
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 7
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-08T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-11T00:00:00+08:00",
+                "from": "2026-09-10T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T3",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 7
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 7
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 7
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-10T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-15T00:00:00+08:00",
+                "from": "2026-09-14T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T7",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 7
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 7
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 7
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-14T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-10-08T12:00:00+08:00",
+                "from": "2026-10-06T12:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T30",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 7
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 7
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 7
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-10-07T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            }
+          ],
+          "work_id": "d5494bb8-a645-4ba5-8ca5-1fd7dbf8e879",
+          "viewpoint": "",
+          "source_ref": "work:d5494bb8-a645-4ba5-8ca5-1fd7dbf8e879:revision:4",
+          "published_at": "2026-09-07T12:00:00+08:00",
+          "work_revision": 4,
+          "content_format": "image_note",
+          "cover_asset_id": null,
+          "publish_revision": 2,
+          "cover_image_loaded": false
+        },
+        {
+          "title": "占位作品 · 09-04 · 6a9aaa5e",
+          "status": "published",
+          "topics": null,
+          "summary": "",
+          "windows": [
+            {
+              "range": {
+                "to": "2026-09-05T18:00:00+08:00",
+                "from": "2026-09-05T06:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T1",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 6
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 6
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 6
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-05T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-08T00:00:00+08:00",
+                "from": "2026-09-07T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T3",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 6
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 6
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 6
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-07T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-12T00:00:00+08:00",
+                "from": "2026-09-11T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T7",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 6
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 6
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 6
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-11T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-10-05T12:00:00+08:00",
+                "from": "2026-10-03T12:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T30",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 6
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 6
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 6
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-10-04T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            }
+          ],
+          "work_id": "8aa86490-9d10-4256-b9f7-d4109e4df4e5",
+          "viewpoint": "",
+          "source_ref": "work:8aa86490-9d10-4256-b9f7-d4109e4df4e5:revision:4",
+          "published_at": "2026-09-04T12:00:00+08:00",
+          "work_revision": 4,
+          "content_format": "image_note",
+          "cover_asset_id": null,
+          "publish_revision": 2,
+          "cover_image_loaded": false
+        },
+        {
+          "title": "占位作品 · 09-01 · 6a96ae73",
+          "status": "published",
+          "topics": null,
+          "summary": "",
+          "windows": [
+            {
+              "range": {
+                "to": "2026-09-03T00:00:00+08:00",
+                "from": "2026-09-02T12:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T1",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 5
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 5
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 5
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-02T18:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-05T06:00:00+08:00",
+                "from": "2026-09-04T06:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T3",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 5
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 5
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 5
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-04T18:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-09T06:00:00+08:00",
+                "from": "2026-09-08T06:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T7",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 5
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 5
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 5
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-08T18:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-10-02T18:00:00+08:00",
+                "from": "2026-09-30T18:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T30",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 5
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 5
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 5
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-10-01T18:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            }
+          ],
+          "work_id": "1643cecb-d594-4cec-8f79-92b531ae9b11",
+          "viewpoint": "",
+          "source_ref": "work:1643cecb-d594-4cec-8f79-92b531ae9b11:revision:4",
+          "published_at": "2026-09-01T18:00:00+08:00",
+          "work_revision": 4,
+          "content_format": "image_note",
+          "cover_asset_id": null,
+          "publish_revision": 2,
+          "cover_image_loaded": false
+        },
+        {
+          "title": "占位作品 · 09-01 · 6a96e0dd",
+          "status": "published",
+          "topics": null,
+          "summary": "",
+          "windows": [
+            {
+              "range": {
+                "to": "2026-09-02T18:00:00+08:00",
+                "from": "2026-09-02T06:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T1",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 4
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 4
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 4
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-02T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-05T00:00:00+08:00",
+                "from": "2026-09-04T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T3",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 4
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 4
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 4
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-04T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-09T00:00:00+08:00",
+                "from": "2026-09-08T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T7",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 4
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 4
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 4
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-08T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-10-02T12:00:00+08:00",
+                "from": "2026-09-30T12:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T30",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 4
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 4
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 4
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-10-01T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            }
+          ],
+          "work_id": "a2f7a77d-e0b2-46d3-b85e-631a7037fcb1",
+          "viewpoint": "",
+          "source_ref": "work:a2f7a77d-e0b2-46d3-b85e-631a7037fcb1:revision:4",
+          "published_at": "2026-09-01T12:00:00+08:00",
+          "work_revision": 4,
+          "content_format": "image_note",
+          "cover_asset_id": null,
+          "publish_revision": 2,
+          "cover_image_loaded": false
+        },
+        {
+          "title": "占位作品 · 08-28 · 6a9165aa",
+          "status": "published",
+          "topics": null,
+          "summary": "",
+          "windows": [
+            {
+              "range": {
+                "to": "2026-08-29T18:00:00+08:00",
+                "from": "2026-08-29T06:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T1",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 3
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 3
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 3
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-08-29T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-01T00:00:00+08:00",
+                "from": "2026-08-31T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T3",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 3
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 3
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 3
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-08-31T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-05T00:00:00+08:00",
+                "from": "2026-09-04T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T7",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 3
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 3
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 3
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-04T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-28T12:00:00+08:00",
+                "from": "2026-09-26T12:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T30",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 3
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 3
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 3
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-27T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            }
+          ],
+          "work_id": "6fe3fc89-d2c5-4844-9539-c18ef90e7598",
+          "viewpoint": "",
+          "source_ref": "work:6fe3fc89-d2c5-4844-9539-c18ef90e7598:revision:4",
+          "published_at": "2026-08-28T12:00:00+08:00",
+          "work_revision": 4,
+          "content_format": "image_note",
+          "cover_asset_id": null,
+          "publish_revision": 2,
+          "cover_image_loaded": false
+        },
+        {
+          "title": "占位作品 · 08-27 · 6a90111a",
+          "status": "published",
+          "topics": null,
+          "summary": "",
+          "windows": [
+            {
+              "range": {
+                "to": "2026-08-28T18:00:00+08:00",
+                "from": "2026-08-28T06:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T1",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 2
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 2
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 2
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-08-28T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-08-31T00:00:00+08:00",
+                "from": "2026-08-30T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T3",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 2
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 2
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 2
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-08-30T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-04T00:00:00+08:00",
+                "from": "2026-09-03T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T7",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 2
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 2
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 2
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-03T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-27T12:00:00+08:00",
+                "from": "2026-09-25T12:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T30",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 2
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 2
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 2
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-26T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            }
+          ],
+          "work_id": "f1de5a7e-9c56-4cb5-bee6-e3029b92dbe4",
+          "viewpoint": "",
+          "source_ref": "work:f1de5a7e-9c56-4cb5-bee6-e3029b92dbe4:revision:4",
+          "published_at": "2026-08-27T12:00:00+08:00",
+          "work_revision": 4,
+          "content_format": "image_note",
+          "cover_asset_id": null,
+          "publish_revision": 2,
+          "cover_image_loaded": false
+        },
+        {
+          "title": "占位作品 · 08-26 · 6a8ed57c",
+          "status": "published",
+          "topics": null,
+          "summary": "",
+          "windows": [
+            {
+              "range": {
+                "to": "2026-08-27T18:00:00+08:00",
+                "from": "2026-08-27T06:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T1",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 1
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 1
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 1
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-08-27T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-08-30T00:00:00+08:00",
+                "from": "2026-08-29T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T3",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 1
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 1
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 1
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-08-29T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-03T00:00:00+08:00",
+                "from": "2026-09-02T00:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T7",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 1
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 1
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 1
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-02T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            },
+            {
+              "range": {
+                "to": "2026-09-26T12:00:00+08:00",
+                "from": "2026-09-24T12:00:00+08:00"
+              },
+              "ratios": {
+                "follow_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "favorite_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                },
+                "interaction_rate": {
+                  "value": null,
+                  "missing_reasons": [
+                    "missing_metric"
+                  ]
+                }
+              },
+              "window": "T30",
+              "baseline": {
+                "follow_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 1
+                },
+                "favorite_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 1
+                },
+                "interaction_rate": {
+                  "median": null,
+                  "samples": null,
+                  "sample_size": 0,
+                  "excluded_count": 1
+                }
+              },
+              "coverage": {
+                "formal_snapshots": 0,
+                "retained_snapshots": 0
+              },
+              "target_at": "2026-09-25T12:00:00+08:00",
+              "metric_ref": null,
+              "missing_reasons": [
+                "missing_metric"
+              ]
+            }
+          ],
+          "work_id": "45ae322c-4764-4014-9d3b-371efcbf7492",
+          "viewpoint": "",
+          "source_ref": "work:45ae322c-4764-4014-9d3b-371efcbf7492:revision:4",
+          "published_at": "2026-08-26T12:00:00+08:00",
+          "work_revision": 4,
+          "content_format": "image_note",
+          "cover_asset_id": null,
+          "publish_revision": 2,
+          "cover_image_loaded": false
+        }
+      ],
+      "missing": [
+        {
+          "code": "missing_metric",
+          "message": "所选作品没有可用于效果比较的正式窗口指标"
+        },
+        {
+          "code": "missing_metric",
+          "message": "4 个窗口缺少可用的正式指标"
+        },
+        {
+          "code": "low_sample",
+          "message": "部分窗口或口径的同账号基准少于 5 篇有效作品，不展示基准中位数"
+        },
+        {
+          "code": "other",
+          "message": "没有可用的账号粉丝总数快照"
+        },
+        {
+          "code": "partial_content",
+          "message": "本次内容依据仅含标题、主题标签和已保存摘要字段，不含全文或封面图像"
+        }
+      ],
+      "sources": [
+        {
+          "kind": "work_content_metadata",
+          "fields": {
+            "title": "占位作品 · 09-01 · 6a96ae73",
+            "status": "published",
+            "topics": [],
+            "summary": "",
+            "viewpoint": "",
+            "published_at": "2026-09-01T18:00:00+08:00",
+            "content_format": "image_note",
+            "cover_asset_id": null,
+            "publish_revision": 2
+          },
+          "work_id": "1643cecb-d594-4cec-8f79-92b531ae9b11",
+          "revision": 4,
+          "source_ref": "work:1643cecb-d594-4cec-8f79-92b531ae9b11:revision:4"
+        },
+        {
+          "kind": "work_content_metadata",
+          "fields": {
+            "title": "占位作品 · 08-26 · 6a8ed57c",
+            "status": "published",
+            "topics": [],
+            "summary": "",
+            "viewpoint": "",
+            "published_at": "2026-08-26T12:00:00+08:00",
+            "content_format": "image_note",
+            "cover_asset_id": null,
+            "publish_revision": 2
+          },
+          "work_id": "45ae322c-4764-4014-9d3b-371efcbf7492",
+          "revision": 4,
+          "source_ref": "work:45ae322c-4764-4014-9d3b-371efcbf7492:revision:4"
+        },
+        {
+          "kind": "work_content_metadata",
+          "fields": {
+            "title": "占位作品 · 09-21 · 6ab12462",
+            "status": "published",
+            "topics": [],
+            "summary": "",
+            "viewpoint": "",
+            "published_at": "2026-09-21T12:00:00+08:00",
+            "content_format": "image_note",
+            "cover_asset_id": null,
+            "publish_revision": 2
+          },
+          "work_id": "625d79cb-9517-4ae2-8186-795b57587fed",
+          "revision": 4,
+          "source_ref": "work:625d79cb-9517-4ae2-8186-795b57587fed:revision:4"
+        },
+        {
+          "kind": "work_content_metadata",
+          "fields": {
+            "title": "占位作品 · 08-28 · 6a9165aa",
+            "status": "published",
+            "topics": [],
+            "summary": "",
+            "viewpoint": "",
+            "published_at": "2026-08-28T12:00:00+08:00",
+            "content_format": "image_note",
+            "cover_asset_id": null,
+            "publish_revision": 2
+          },
+          "work_id": "6fe3fc89-d2c5-4844-9539-c18ef90e7598",
+          "revision": 4,
+          "source_ref": "work:6fe3fc89-d2c5-4844-9539-c18ef90e7598:revision:4"
+        },
+        {
+          "kind": "work_content_metadata",
+          "fields": {
+            "title": "占位作品 · 09-04 · 6a9aaa5e",
+            "status": "published",
+            "topics": [],
+            "summary": "",
+            "viewpoint": "",
+            "published_at": "2026-09-04T12:00:00+08:00",
+            "content_format": "image_note",
+            "cover_asset_id": null,
+            "publish_revision": 2
+          },
+          "work_id": "8aa86490-9d10-4256-b9f7-d4109e4df4e5",
+          "revision": 4,
+          "source_ref": "work:8aa86490-9d10-4256-b9f7-d4109e4df4e5:revision:4"
+        },
+        {
+          "kind": "work_content_metadata",
+          "fields": {
+            "title": "占位作品 · 09-01 · 6a96e0dd",
+            "status": "published",
+            "topics": [],
+            "summary": "",
+            "viewpoint": "",
+            "published_at": "2026-09-01T12:00:00+08:00",
+            "content_format": "image_note",
+            "cover_asset_id": null,
+            "publish_revision": 2
+          },
+          "work_id": "a2f7a77d-e0b2-46d3-b85e-631a7037fcb1",
+          "revision": 4,
+          "source_ref": "work:a2f7a77d-e0b2-46d3-b85e-631a7037fcb1:revision:4"
+        },
+        {
+          "kind": "work_content_metadata",
+          "fields": {
+            "title": "占位作品 · 09-16 · 6aaa8c57",
+            "status": "published",
+            "topics": [],
+            "summary": "",
+            "viewpoint": "",
+            "published_at": "2026-09-16T12:00:00+08:00",
+            "content_format": "image_note",
+            "cover_asset_id": null,
+            "publish_revision": 2
+          },
+          "work_id": "a9c319f7-5bfe-4efc-a454-cf110e0b0a7c",
+          "revision": 4,
+          "source_ref": "work:a9c319f7-5bfe-4efc-a454-cf110e0b0a7c:revision:4"
+        },
+        {
+          "kind": "work_content_metadata",
+          "fields": {
+            "title": "占位作品 · 09-07 · 6a9e9d6c",
+            "status": "published",
+            "topics": [],
+            "summary": "",
+            "viewpoint": "",
+            "published_at": "2026-09-07T12:00:00+08:00",
+            "content_format": "image_note",
+            "cover_asset_id": null,
+            "publish_revision": 2
+          },
+          "work_id": "d5494bb8-a645-4ba5-8ca5-1fd7dbf8e879",
+          "revision": 4,
+          "source_ref": "work:d5494bb8-a645-4ba5-8ca5-1fd7dbf8e879:revision:4"
+        },
+        {
+          "kind": "work_content_metadata",
+          "fields": {
+            "title": "占位作品 · 08-27 · 6a90111a",
+            "status": "published",
+            "topics": [],
+            "summary": "",
+            "viewpoint": "",
+            "published_at": "2026-08-27T12:00:00+08:00",
+            "content_format": "image_note",
+            "cover_asset_id": null,
+            "publish_revision": 2
+          },
+          "work_id": "f1de5a7e-9c56-4cb5-bee6-e3029b92dbe4",
+          "revision": 4,
+          "source_ref": "work:f1de5a7e-9c56-4cb5-bee6-e3029b92dbe4:revision:4"
+        },
+        {
+          "kind": "work_content_metadata",
+          "fields": {
+            "title": "写给新手：本条用于绑定已发布笔记",
+            "status": "published",
+            "topics": [],
+            "summary": "",
+            "viewpoint": "本条用于绑定已发布笔记\n本条用于绑定已发布笔记",
+            "published_at": "2026-10-22T11:58:00+08:00",
+            "content_format": "image_note",
+            "cover_asset_id": null,
+            "publish_revision": 2
+          },
+          "work_id": "fc55c64d-efdb-424b-bde8-59ed713b752f",
+          "revision": 9,
+          "source_ref": "work:fc55c64d-efdb-424b-bde8-59ed713b752f:revision:9"
+        }
+      ],
+      "platform": "xhs",
+      "sampling": "retained_snapshots",
+      "work_ids": [
+        "fc55c64d-efdb-424b-bde8-59ed713b752f",
+        "625d79cb-9517-4ae2-8186-795b57587fed",
+        "a9c319f7-5bfe-4efc-a454-cf110e0b0a7c",
+        "d5494bb8-a645-4ba5-8ca5-1fd7dbf8e879",
+        "8aa86490-9d10-4256-b9f7-d4109e4df4e5",
+        "1643cecb-d594-4cec-8f79-92b531ae9b11",
+        "a2f7a77d-e0b2-46d3-b85e-631a7037fcb1",
+        "6fe3fc89-d2c5-4844-9539-c18ef90e7598",
+        "f1de5a7e-9c56-4cb5-bee6-e3029b92dbe4",
+        "45ae322c-4764-4014-9d3b-371efcbf7492"
+      ],
+      "selection": {
+        "work_scope": "explicit_or_recent_published",
+        "window_rule": "nearest_target_then_earlier_then_metric_source_order_then_id",
+        "content_scope": "title_summary_viewpoint_topics_metadata_only",
+        "metric_source": "metric_source_supported",
+        "baseline_limit": 10,
+        "metric_quality": "approved",
+        "ratio_precision": "unrounded",
+        "baseline_minimum_per_ratio": 5
+      },
+      "task_type": "review_analysis",
+      "ai_call_id": "4f2beddc-c17e-4c15-b2ea-ed11bea4feb9",
+      "source_refs": [
+        "work:1643cecb-d594-4cec-8f79-92b531ae9b11:revision:4",
+        "work:45ae322c-4764-4014-9d3b-371efcbf7492:revision:4",
+        "work:625d79cb-9517-4ae2-8186-795b57587fed:revision:4",
+        "work:6fe3fc89-d2c5-4844-9539-c18ef90e7598:revision:4",
+        "work:8aa86490-9d10-4256-b9f7-d4109e4df4e5:revision:4",
+        "work:a2f7a77d-e0b2-46d3-b85e-631a7037fcb1:revision:4",
+        "work:a9c319f7-5bfe-4efc-a454-cf110e0b0a7c:revision:4",
+        "work:d5494bb8-a645-4ba5-8ca5-1fd7dbf8e879:revision:4",
+        "work:f1de5a7e-9c56-4cb5-bee6-e3029b92dbe4:revision:4",
+        "work:fc55c64d-efdb-424b-bde8-59ed713b752f:revision:9"
+      ],
+      "assembled_at": "2026-11-27T10:27:15.5396643Z",
+      "context_hash": "d89c03b9a2c99a4bf32a7655e001f1a78acc7d25770f2686e3f986e1e8a51579",
+      "content_format": "image_note",
+      "prompt_version": "cx-review-v2-1",
+      "schema_version": 1,
+      "analysis_version": 2,
+      "prompt_template_version": 1
+    },
+    "account_id": "05dfeb67-c0b0-401d-905a-edddddb63f40",
+    "ai_call_id": "4f2beddc-c17e-4c15-b2ea-ed11bea4feb9",
+    "created_at": "2026-11-27T18:27:21.353231+08:00",
+    "hypotheses": 4,
+    "remembered": [
+      0
+    ],
+    "conclusions": [
+      "本轮没有可用的正式窗口指标，不能给出收藏率、互动率或关注率的效果结论；效果数值待核实：【待核实：T1/T3/T7/T30 的 favorite_rate、interaction_rate、follow_rate 正式值】。",
+      "作品元数据以占位标题和空摘要/空观点为主，暂不支持从标题、主题标签或观点字段区分稳定选题。",
+      "唯一非占位标题包含“写给新手”和“本条用于绑定已发布笔记”，具体用途待作者确认。",
+      "封面资产标识字段为空且图片未加载，本轮不评价封面视觉，也不把封面纳入现状判断。",
+      "样本与小样本基准不足限制比较，后续应先补齐正式指标与内容元数据，再做小范围人工实验。"
+    ],
+    "experiments": 5,
+    "limitations": 9,
+    "observations": 8,
+    "analysis_v2_keys": [
+      "experiments",
+      "hypotheses",
+      "limitations",
+      "observations",
+      "schema_version"
+    ],
+    "analysis_version": null,
+    "writing_insights": [
+      "标题如果只体现“占位作品 · 日期 · 代码”，复盘时难以从标题层面区分选题；后续标题尽量把对象、任务或问题写进一句。",
+      "summary 和 viewpoint 为空时，复盘只能依赖标题与发布时间；观点字段建议保持单一、具体，避免重复句。",
+      "“写给新手”提供了明确对象，但“本条用于绑定已发布笔记”更像流程记录；若面向读者，需要补成可理解的步骤或场景。",
+      "本轮没有可用正式指标，写作结论不应写成“表现好/差”，应先定义要观察的指标和窗口。"
+    ],
+    "topic_suggestions": [
+      {
+        "angle": "用“写给新手”作为入口，把 viewpoint 中的“本条用于绑定已发布笔记”展开为记录前、记录中、记录后的检查项。",
+        "title": "写给新手：先把“已发布笔记”这件事拆成三步",
+        "reason": "现有非占位标题包含“写给新手”，viewpoint 也出现“本条用于绑定已发布笔记”；作为旧版逐项采用链候选草案，不写入选题池。"
+      },
+      {
+        "angle": "围绕本轮“占位作品 ·”标题，讨论标题字段如何影响复盘可读性，不评价作品质量。",
+        "title": "占位标题复盘：为什么标题看不出选题",
+        "reason": "素材中多数 title 为占位式且 summary/viewpoint 为空；作为旧版逐项采用链候选草案，不写入选题池。"
+      },
+      {
+        "angle": "比较“本条用于绑定已发布笔记”重复出现与压缩成一句观点后的信息差异。",
+        "title": "一条笔记两种记录法：重复观点句与单一观点句",
+        "reason": "非占位标题对应作品的 viewpoint 出现同一句重复；适合作为后续人工实验草案，不写入选题池。"
+      },
+      {
+        "angle": "只用已有 title/viewpoint 中的“新手”“已发布笔记”等词做标签草案，不补外部事实。",
+        "title": "主题标签空着时，怎样从标题里找回线索",
+        "reason": "source metadata 的 topics 字段为空；作为旧版逐项采用链候选草案，不写入选题池。"
+      }
+    ]
+  },
+  "account_memory": {
+    "id": "0a167d6f-ebde-439c-8b86-a878618debbc",
+    "kind": "wording",
+    "text": "标题如果只体现“占位作品 · 日期 · 代码”，复盘时难以从标题层面区分选题；后续标题尽量把对象、任务或问题写进一句。",
+    "scope": "all",
+    "source": "review",
+    "status": "active",
+    "evidence": {
+      "index": 0,
+      "review_report_id": "9fc997e7-15b7-44bc-bdc5-dbeae7b4505d"
+    },
+    "use_count": 2,
+    "account_id": "05dfeb67-c0b0-401d-905a-edddddb63f40",
+    "confidence": 0.8,
+    "created_at": "2026-11-27T18:28:05.399413+08:00",
+    "confirmed_at": "2026-11-27T18:28:05.399413+08:00",
+    "last_used_at": "2026-11-27T18:39:05.395883+08:00",
+    "injection_disabled": false
+  },
+  "injection_preview": {
+    "items": [
+      {
+        "id": "0a167d6f-ebde-439c-8b86-a878618debbc",
+        "account_id": "05dfeb67-c0b0-401d-905a-edddddb63f40",
+        "kind": "wording",
+        "scope": "all",
+        "text": "标题如果只体现“占位作品 · 日期 · 代码”，复盘时难以从标题层面区分选题；后续标题尽量把对象、任务或问题写进一句。",
+        "status": "active",
+        "source": "review",
+        "evidence": {
+          "index": 0,
+          "review_report_id": "9fc997e7-15b7-44bc-bdc5-dbeae7b4505d"
+        },
+        "use_count": 2,
+        "last_used_at": "2026-11-27T18:39:05.395883+08:00",
+        "confirmed_at": "2026-11-27T18:28:05.399413+08:00",
+        "created_at": "2026-11-27T18:28:05.399413+08:00",
+        "confidence": 0.8,
+        "injection_disabled": false
+      }
+    ],
+    "total_chars": 59,
+    "dropped": []
+  },
+  "ai_call": [
+    {
+      "error": "",
+      "model": "workbuddy-ai/hy4flash-free",
+      "status": "ok",
+      "provider": "本地网关 3425 · WorkBuddy Hy4",
+      "task_type": "metric_screenshot",
+      "created_at": "2026-11-27T18:09:26.831102+08:00",
+      "latency_ms": 12326,
+      "prompt_tokens": 2291,
+      "completion_tokens": 1621,
+      "context_summary": {
+        "task_type": "metric_screenshot",
+        "memories": 0,
+        "memory_slot_ids": [],
+        "cx_source_refs": [],
+        "status": "ok"
+      }
+    },
+    {
+      "error": "模型超过 15 秒没有返回内容",
+      "model": "workbuddy-ai/hy4flash-free",
+      "status": "failed",
+      "provider": "本地网关 3425 · WorkBuddy Hy4",
+      "task_type": "review_analysis",
+      "created_at": "2026-11-27T18:19:43.042619+08:00",
+      "latency_ms": 15000,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "context_summary": {
+        "task_type": "review_analysis",
+        "memories": 0,
+        "memory_slot_ids": [],
+        "cx_source_refs": [],
+        "status": "failed"
+      }
+    },
+    {
+      "error": "模型超过 15 秒没有返回内容",
+      "model": "opencode-zen-free/deepseek-v4.1-flash-free",
+      "status": "failed",
+      "provider": "本地网关 3425 · OpenCode DeepSeek",
+      "task_type": "review_analysis",
+      "created_at": "2026-11-27T18:19:59.86626+08:00",
+      "latency_ms": 15000,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "context_summary": {
+        "task_type": "review_analysis",
+        "memories": 0,
+        "memory_slot_ids": [],
+        "cx_source_refs": [],
+        "status": "failed"
+      }
+    },
+    {
+      "error": "",
+      "model": "workbuddy-ai/hy4flash-free",
+      "status": "ok",
+      "provider": "本地网关 3425 · WorkBuddy Hy4",
+      "task_type": "review_analysis",
+      "created_at": "2026-11-27T18:27:21.294921+08:00",
+      "latency_ms": 77932,
+      "prompt_tokens": 13731,
+      "completion_tokens": 16603,
+      "context_summary": {
+        "task_type": "review_analysis",
+        "memories": 0,
+        "memory_slot_ids": [],
+        "cx_source_refs": [],
+        "status": "ok"
+      }
+    },
+    {
+      "error": "",
+      "model": "workbuddy-ai/hy4flash-free",
+      "status": "ok",
+      "provider": "本地网关 3425 · WorkBuddy Hy4",
+      "task_type": "outline",
+      "created_at": "2026-11-27T18:32:07.807561+08:00",
+      "latency_ms": 10322,
+      "prompt_tokens": 458,
+      "completion_tokens": 1012,
+      "context_summary": {
+        "task_type": "outline",
+        "memories": 1,
+        "memory_slot_ids": [
+          "0a167d6f-ebde-439c-8b86-a878618debbc"
+        ],
+        "cx_source_refs": [
+          "confirmed_memory:0a167d6f-ebde-439c-8b86-a878618debbc",
+          "profile:05dfeb67-c0b0-401d-905a-edddddb63f40"
+        ],
+        "status": "ok"
+      }
+    },
+    {
+      "error": "",
+      "model": "workbuddy-ai/hy4flash-free",
+      "status": "ok",
+      "provider": "本地网关 3425 · WorkBuddy Hy4",
+      "task_type": "title",
+      "created_at": "2026-11-27T18:39:05.373197+08:00",
+      "latency_ms": 14756,
+      "prompt_tokens": 766,
+      "completion_tokens": 2035,
+      "context_summary": {
+        "task_type": "title",
+        "memories": 1,
+        "memory_slot_ids": [
+          "0a167d6f-ebde-439c-8b86-a878618debbc"
+        ],
+        "cx_source_refs": [
+          "confirmed_memory:0a167d6f-ebde-439c-8b86-a878618debbc",
+          "profile:05dfeb67-c0b0-401d-905a-edddddb63f40",
+          "work_section:4d5f14e6-ba90-4be5-ad28-8a83b76b6ec3",
+          "work_section:5ef2e831-3e37-428d-a075-a688172c5ec5",
+          "work_section:622aacf2-b6d5-4e20-b3cc-06a1b04f494d",
+          "work_section:7a5ba968-1d85-4959-bc55-7d00739e2bdc",
+          "work_section:8eb6f7ae-c9f4-4157-8039-4b20a58f4907",
+          "work_section:fed810a1-f7a4-471f-9038-29927be342d1"
+        ],
+        "status": "ok"
+      }
+    }
+  ],
+  "new_work_for_memory_loop": {
+    "id": "f49abc33-e10e-4993-b2c1-edba9707f71b",
+    "title": "新手怎么开始用手账：3 个低门槛起步动作",
+    "status": "drafting",
+    "account_id": "05dfeb67-c0b0-401d-905a-edddddb63f40",
+    "created_at": "2026-11-27T18:29:27.622113+08:00",
+    "updated_at": "2026-11-27T18:36:05.427085+08:00"
+  },
+  "page_vs_db": [
+    {
+      "page": "巡检号·工位上的松弛感",
+      "shown": "阅读 89 / 收藏 2 / 分享 0；截图识别",
+      "db": "snapshot d4295181… source=screenshot reads=89 favorites=2 shares=0 day_offset=2",
+      "original": "RC-05 截图 views=89 likes=3 collects=2 comments=0 shares=0",
+      "verdict": "一致（桌面表不展示点赞）"
+    },
+    {
+      "page": "巡检号·顶部近7天",
+      "shown": "全 —",
+      "db": "仅 day_offset=2 节点，无 day_offset=7",
+      "verdict": "数值规则一致；标签“近7天”实为 day7 节点合计"
+    },
+    {
+      "page": "巡检号·T1/T3/T7/T30",
+      "shown": "全部没有可用正式指标",
+      "db": "48h50m 快照落 day2，不落任何 ±12h 窗口",
+      "verdict": "一致"
+    },
+    {
+      "page": "巡检号·同龄对比第7天",
+      "shown": "第 7 天未采集",
+      "db": "无 day7 节点",
+      "verdict": "一致"
+    },
+    {
+      "page": "巡检号·同龄对比第30天",
+      "shown": "非精确节点，取第 31 天，样本 5，指标未采集",
+      "db": "day31 存在但 reads NULL/read_unit=unknown",
+      "verdict": "一致"
+    },
+    {
+      "page": "验收号 09-21",
+      "shown": "22 / 2",
+      "db": "day31 favorites=22 shares=2",
+      "verdict": "一致"
+    },
+    {
+      "page": "验收号 09-16",
+      "shown": "6 / 0",
+      "db": "day36 favorites=6 shares=0",
+      "verdict": "一致"
+    },
+    {
+      "page": "验收号 09-07",
+      "shown": "48 / 4",
+      "db": "day45 favorites=48 shares=4",
+      "verdict": "一致"
+    },
+    {
+      "page": "验收号 09-04",
+      "shown": "29 / 2",
+      "db": "day48 favorites=29 shares=2（11-19 day76 favorites=30 未上板）",
+      "verdict": "数值一致；节点非第7天"
+    },
+    {
+      "page": "验收号 09-01(6a96ae73)",
+      "shown": "3 / 0",
+      "db": "day51 favorites=3 shares=0",
+      "verdict": "一致"
+    },
+    {
+      "page": "验收号 09-01(6a96e0dd)",
+      "shown": "41 / 3",
+      "db": "day51 favorites=41 shares=3",
+      "verdict": "一致"
+    },
+    {
+      "page": "验收号 08-28",
+      "shown": "26 / 6",
+      "db": "day55 favorites=26 shares=6",
+      "verdict": "一致"
+    },
+    {
+      "page": "验收号 08-27",
+      "shown": "63 / 1",
+      "db": "day56 favorites=63 shares=1",
+      "verdict": "一致"
+    },
+    {
+      "page": "验收号 08-26",
+      "shown": "74 / 3",
+      "db": "day57 favorites=74 shares=3",
+      "verdict": "一致"
+    },
+    {
+      "page": "验收号 08-25",
+      "shown": "69 / 2",
+      "db": "day58 favorites=69 shares=2",
+      "verdict": "一致"
+    },
+    {
+      "page": "公众号顶部近7天阅读",
+      "shown": "100",
+      "db": "snapshot 5b752271… source=manual day7 reads=100（2026-10-21 历史行）",
+      "verdict": "数值一致；非本批写入"
+    },
+    {
+      "page": "公众号 3754",
+      "shown": "1 / 0",
+      "db": "snapshot 2d9c4419… source=file day103 reads=1 shares=0",
+      "verdict": "一致"
+    },
+    {
+      "page": "公众号 3739",
+      "shown": "阅读 —",
+      "db": "snapshot e93d62bd… source=wechat_browser day106 reads=NULL",
+      "verdict": "一致"
+    },
+    {
+      "page": "公众号 3759",
+      "shown": "100 / —",
+      "db": "snapshot 5b752271… source=manual reads=100 likes=10",
+      "verdict": "一致；历史人工行"
+    }
+  ],
+  "evidence_dir": "docs/42-evidence/RC-19",
+  "evidence_files": [
+    {
+      "name": "01-desktop-login-dashboard.png",
+      "bytes": 153747,
+      "sha256_prefix": "b96998cbe24d0ac6",
+      "sha256": "b96998cbe24d0ac6e16491068a699379b1269c1e4fb03da2f5480299a3c5558a"
+    },
+    {
+      "name": "02-settings-accounts-list.png",
+      "bytes": 94160,
+      "sha256_prefix": "decb68ef7b31c509",
+      "sha256": "decb68ef7b31c509dcdbd4b845a640baab29f8252a9a96e24226b631d9eba0f1"
+    },
+    {
+      "name": "03-settings-xhs-pending-observations.png",
+      "bytes": 123515,
+      "sha256_prefix": "eea7ca6a4fd3af9a",
+      "sha256": "eea7ca6a4fd3af9a688aff345d4cf1e8b7e51079def35c2c031e40d7df89738b"
+    },
+    {
+      "name": "04-settings-xhs-observation-confirmed.png",
+      "bytes": 99910,
+      "sha256_prefix": "33fadfdeb5e3d3b4",
+      "sha256": "33fadfdeb5e3d3b48c87c0b52ae14abfe5446136ccc38e0d8aaac7eec6a21337"
+    },
+    {
+      "name": "05-settings-wechat-pending-observations.png",
+      "bytes": 126828,
+      "sha256_prefix": "e04dc0d6b2cfd51d",
+      "sha256": "e04dc0d6b2cfd51dfe71e8a34d7fa7031391e97d647ea95e1e393c39377c46cc"
+    },
+    {
+      "name": "06-settings-wechat-observation-confirmed.png",
+      "bytes": 139406,
+      "sha256_prefix": "01a4c6fe571ce982",
+      "sha256": "01a4c6fe571ce982b445908eb23c2de08b2893e2538de2860dc2d3c69bcaa117"
+    },
+    {
+      "name": "07-review-xhs-screenshot-dropzone.png",
+      "bytes": 112733,
+      "sha256_prefix": "b042d53827d1574b",
+      "sha256": "b042d53827d1574b19dacae0c24eb65ef4bb43238bf37bdf3c87281b446235f6"
+    },
+    {
+      "name": "08-review-screenshot-recognized-dialog.png",
+      "bytes": 218097,
+      "sha256_prefix": "329c66caa1c59039",
+      "sha256": "329c66caa1c590394f9d69a36b408958899aad7a689f6d4e791da02d6b1961c7"
+    },
+    {
+      "name": "09-review-screenshot-values-corrected.png",
+      "bytes": 220361,
+      "sha256_prefix": "b3cc82d2adaf98e5",
+      "sha256": "b3cc82d2adaf98e5c1d9db6625daa47795efda3e75b30a1552c95d7a1e5df40b"
+    },
+    {
+      "name": "10-review-screenshot-row-imported.png",
+      "bytes": 219093,
+      "sha256_prefix": "d8dad86a74245efb",
+      "sha256": "d8dad86a74245efb44f27264ac4f4cd83158b6344cbf8708f619b6a867838103"
+    },
+    {
+      "name": "11-review-screenshot-metric-drawer.png",
+      "bytes": 173090,
+      "sha256_prefix": "1cc28ab1cf8aace4",
+      "sha256": "1cc28ab1cf8aace4cb0333a976f48ab73b19edd23f9bc32094c222c9a8408931"
+    },
+    {
+      "name": "12-review-screenshot-captured-at-corrected.png",
+      "bytes": 165401,
+      "sha256_prefix": "bac3315c467c2589",
+      "sha256": "bac3315c467c258964787e244cc342f9ced39a19ad09f75e884895f7ae8e58ad"
+    },
+    {
+      "name": "13-review-screenshot-metric-saved.png",
+      "bytes": 164621,
+      "sha256_prefix": "c5d0a44c8ba6b171",
+      "sha256": "c5d0a44c8ba6b171c83a600f4b1e0008fef594c2bf85e593dea8a33d05dcf289"
+    },
+    {
+      "name": "14-review-wechat-advanced-expanded.png",
+      "bytes": 110964,
+      "sha256_prefix": "27a086c791be747f",
+      "sha256": "27a086c791be747f8c247520cbe0ad6912760ecab47d2263ee10bcf65f12f50e"
+    },
+    {
+      "name": "14b-review-wechat-before-csv-import.png",
+      "bytes": 103881,
+      "sha256_prefix": "1edb8c8f8ff39c6c",
+      "sha256": "1edb8c8f8ff39c6c77e2fdfcb7c00cd9891f87d1a7ea5ec803a37525ac227934"
+    },
+    {
+      "name": "15-review-wechat-csv-preview.png",
+      "bytes": 196055,
+      "sha256_prefix": "82105f1b3eb2a672",
+      "sha256": "82105f1b3eb2a672d73d403551b95a14880e5aab7183da4c993e82ebaa09b5b6"
+    },
+    {
+      "name": "16-review-wechat-csv-imported.png",
+      "bytes": 112080,
+      "sha256_prefix": "cd5fe1822570c769",
+      "sha256": "cd5fe1822570c7691e1c193ef5f10418293830523556cb434131eaa7814dd040"
+    },
+    {
+      "name": "17-review-wechat-followers-backfill-form.png",
+      "bytes": 99175,
+      "sha256_prefix": "248650e9ffa90f2d",
+      "sha256": "248650e9ffa90f2dc5dc77bfd50e0334fbde6ca46af29ab094ea97e33c151d2f"
+    },
+    {
+      "name": "18-review-wechat-followers-empty.png",
+      "bytes": 102104,
+      "sha256_prefix": "289bf05d595fd74a",
+      "sha256": "289bf05d595fd74abaa67a135e80bf9e83cd6847d842a09d99a2c7bd08bf9bf2"
+    },
+    {
+      "name": "19-review-xhs-inspection-board-89.png",
+      "bytes": 113169,
+      "sha256_prefix": "45ab75dac5adb5f9",
+      "sha256": "45ab75dac5adb5f974e724f7a963389c7b46d5ea4dcd1413f84fe72371702b40"
+    },
+    {
+      "name": "20-review-xhs-inspection-advanced.png",
+      "bytes": 104722,
+      "sha256_prefix": "b2ce750cffaf9d12",
+      "sha256": "b2ce750cffaf9d12bbad412bfca90b168dd3fc575023b8b6bb7996a8b6a670dc"
+    },
+    {
+      "name": "21-review-xhs-verification-board.png",
+      "bytes": 112471,
+      "sha256_prefix": "991b6d40d7318723",
+      "sha256": "991b6d40d731872338cf18a1304e462580afc537435f867c6bad3724e9598337"
+    },
+    {
+      "name": "22-review-xhs-verification-advanced.png",
+      "bytes": 108038,
+      "sha256_prefix": "96699b707d9c2287",
+      "sha256": "96699b707d9c228775480fce7df311139144bce47922db5410e5437a918daa74"
+    },
+    {
+      "name": "23-review-xhs-peer-compare.png",
+      "bytes": 171980,
+      "sha256_prefix": "7d89ea260c8e289a",
+      "sha256": "7d89ea260c8e289acb7bf04c62bbae88dc65f993ee427e40903b944dd7c7609c"
+    },
+    {
+      "name": "24-review-xhs-peer-compare-30.png",
+      "bytes": 171443,
+      "sha256_prefix": "4675670c856938f6",
+      "sha256": "4675670c856938f68e4baef94f8d392df15d0a51534106b20b3955b283cfee4b"
+    },
+    {
+      "name": "25-review-real-report-generated.png",
+      "bytes": 282933,
+      "sha256_prefix": "6c07f186257720c4",
+      "sha256": "6c07f186257720c47eaa3b28302c843cb00a607a00082409d5f3ccb54c95f765"
+    },
+    {
+      "name": "25b-review-real-report-v2-evidence.png",
+      "bytes": 355475,
+      "sha256_prefix": "c2cba8a816b054fe",
+      "sha256": "c2cba8a816b054fe7b47c43a6881560c9ea95c68c75f517b3a742ff7de8f53a9"
+    },
+    {
+      "name": "26-review-report-insights-remember-buttons.png",
+      "bytes": 169265,
+      "sha256_prefix": "2b1fd0609a71b201",
+      "sha256": "2b1fd0609a71b201617692019de7fa32fa1bc256985088ec8ceb721c5804ef27"
+    },
+    {
+      "name": "27-review-insight-remembered.png",
+      "bytes": 172963,
+      "sha256_prefix": "373c6172870c612f",
+      "sha256": "373c6172870c612f82dd04220f70375b59bbf665d56d0375966daca5f541d6ba"
+    },
+    {
+      "name": "28-work-outline-with-memory-basis.png",
+      "bytes": 262360,
+      "sha256_prefix": "8e4b889670c15571",
+      "sha256": "8e4b889670c15571ca49f46b6440cc31bbed7349690130a4398be3a3fd03c5f9"
+    },
+    {
+      "name": "29-work-ai-basis-memory-detail.png",
+      "bytes": 293944,
+      "sha256_prefix": "8db1304dc06d6bb4",
+      "sha256": "8db1304dc06d6bb4854af1df84c9c1d895296a920a3ea173d8b021bf3d5a586b"
+    },
+    {
+      "name": "30-work-title-candidates-real.png",
+      "bytes": 139927,
+      "sha256_prefix": "4ffdbfa81a81d6b5",
+      "sha256": "4ffdbfa81a81d6b59aea394d5629d8df5a22350efa1bbe57f7ba194d3ca7eb63"
+    },
+    {
+      "name": "31-settings-auto-adopt-disabled.png",
+      "bytes": 111951,
+      "sha256_prefix": "57cbe56ad0c6816d",
+      "sha256": "57cbe56ad0c6816dd53989417ecf5dd54d8c334c04db61cc2621ad0aefc2745f"
+    },
+    {
+      "name": "31b-settings-pending-observations-per-item.png",
+      "bytes": 112761,
+      "sha256_prefix": "1271acf358ab6c82",
+      "sha256": "1271acf358ab6c82d5911572d6edcdc09d940c8de7ead54b78cb314f140f39ca"
+    },
+    {
+      "name": "32-review-topic-suggestions-per-item.png",
+      "bytes": 169404,
+      "sha256_prefix": "91f6054d28306a63",
+      "sha256": "91f6054d28306a63aea3d285970f23853df75eda534de678470d031cc7a476d0"
+    },
+    {
+      "name": "33-anomaly-bad-image-error.png",
+      "bytes": 123123,
+      "sha256_prefix": "b825c2b87d8acfd7",
+      "sha256": "b825c2b87d8acfd77e01bbb2f78964bc286ed2de1b72a637529174d1f1002b2e"
+    },
+    {
+      "name": "34-anomaly-metrics-csv-bad-header.png",
+      "bytes": 276106,
+      "sha256_prefix": "fae5a60858e160b7",
+      "sha256": "fae5a60858e160b79f064a87dc436b6c960c4fd52c3ac7ffb0983a79f5d670da"
+    },
+    {
+      "name": "34-anomaly-metrics-csv-negative.png",
+      "bytes": 422685,
+      "sha256_prefix": "b1526101519ea64f",
+      "sha256": "b1526101519ea64f2e32e27e74c20bc1b13154b8b105f18180b95a003f2f4df6"
+    },
+    {
+      "name": "35a-anomaly-metrics-csv-bad-date-preview.png",
+      "bytes": 422949,
+      "sha256_prefix": "7140a79d4ad05a58",
+      "sha256": "7140a79d4ad05a586954f2d1751feeac66646e14a88dd088a299b9d5d0f90781"
+    },
+    {
+      "name": "35b-anomaly-metrics-csv-bad-date-confirm-rejected.png",
+      "bytes": 414585,
+      "sha256_prefix": "38a0f986b1bafef9",
+      "sha256": "38a0f986b1bafef921918e958122efbfbae1906a1fa1e7bb58379d8054d53607"
+    },
+    {
+      "name": "36-anomaly-metrics-csv-empty.png",
+      "bytes": 276277,
+      "sha256_prefix": "8e175e00ee65e4ef",
+      "sha256": "8e175e00ee65e4efaacb21dff53f2b83d6e7e7d428fb2221cd6c847446aa46e6"
+    },
+    {
+      "name": "37-anomaly-followers-csv-bad-date.png",
+      "bytes": 130278,
+      "sha256_prefix": "86c7c8ac09fdf090",
+      "sha256": "86c7c8ac09fdf090899eb3ac894cd92a636b7a9622354280c32525f53fa7b943"
+    },
+    {
+      "name": "37-anomaly-followers-csv-bad-header.png",
+      "bytes": 128761,
+      "sha256_prefix": "0129f8ac6d7f906d",
+      "sha256": "0129f8ac6d7f906d8598236d5af781adce8ab8bca0a73cdf4cc8d2df90fcfe68"
+    },
+    {
+      "name": "37-anomaly-followers-csv-empty.png",
+      "bytes": 127794,
+      "sha256_prefix": "32bea6236e666a1e",
+      "sha256": "32bea6236e666a1ecd57d2fb39f7e20d643a2a6733dbbdf181e60df073805d63"
+    },
+    {
+      "name": "37-anomaly-followers-csv-negative.png",
+      "bytes": 129599,
+      "sha256_prefix": "6a9d838eef7acc3e",
+      "sha256": "6a9d838eef7acc3ee85825c640587e8fb5f744a7dec3bfad75a5f5132253cc3a"
+    },
+    {
+      "name": "38-review-wechat-board.png",
+      "bytes": 103759,
+      "sha256_prefix": "70695aa4f7d11337",
+      "sha256": "70695aa4f7d113370d71480e3ab340acf7c4576ed37aa929ca46cf214389ec24"
+    }
+  ],
+  "disclosures": [
+    "OPT-U05 shotNormalizer 先删空格再取数，12:33 89 0 3 2 0 被拼成 2026-11-2412:33890320，rawNumbers 仅剩 33890320，5 个数字全部 dropped；本轮用人工修正完成导入，代码未修。",
+    "review_analysis 默认首 token 超时 15s，真实复盘需 77.9s，前两次真实调用 failed；通过 OPS_FIRST_TOKEN_TIMEOUT=120s 重启解决（环境调参，非代码修改）。",
+    "小红书既有快照为发布后 31–59 天，不是 24h/7d；本次真实截图回读为 48h50m，导入后落 day2，不进入 T1/T3/T7/T30 窗口。",
+    "小红书观看、公众号阅读 read_unit=unknown，只存观测不计入正式统计；页面“口径不明”行为正确，但桌面看板表头“第7天”与真实节点不符且无“按第N天”提示。",
+    "看板 d7 对 09-04 取 day48（29），不取 11-19 day76（30）；两行均在库。",
+    "公众号 3759 的 100/10 是 2026-10-21 人工历史行，不是本批写入。",
+    "粉丝记录无可核实真实来源，未补录、未伪造 0，子项 PARTIAL。",
+    "另一工作区 4bba819e… 于 10:01 由 wechat_api 写入 3 行 account_metric_daily（27→30），非本任务写操作；本工作区该表始终 0 行。",
+    "观测 field_paths 为 fixture.note.* / fixture.article.*，是 RulePack 既有命名字段路径，不是 mock 夹具。",
+    "18:55–19:09 本机环境离线；离线期间无任何写入，恢复后复核三表行数与哈希完全未变。",
+    "登录使用临时密码散列（原散列先备份）；2026-11-27 19:23 +08:00 已将原散列写回 dev 库并经逐字符比对一致，临时密码再次登录返回 401；临时密码、原散列备份、Electron userData（含会话 cookie）与辅助脚本均已删除，业务源码零改动。"
+  ],
+  "desensitization": {
+    "screenshots": 46,
+    "checked": "截图均为本次真实 Electron 页面，仅含页面 UI、账号昵称、平台公开数据与库内脱敏 ID；不含密码、cookie、API Key、数据库连接串、真实姓名/手机号/邮箱。",
+    "json_scan": "JSON 全文已检索 Windows 用户目录、仓库绝对路径与临时目录环境变量字面，命中 0；启动脚本文本中的仓库与临时目录已替换为 <repo>/<tmp> 占位。"
+  }
+}

@@ -1482,6 +1482,9 @@ html[data-presentation='ops-creative-desktop'] .desktop-works-table {
 .desktop-review-work-title { color: var(--ops-text); font-weight: 550; text-decoration: none; }
 .desktop-review-work-title:hover { color: var(--ops-accent); }
 .desktop-review-source-cell { position: relative; display: block; }
+.desktop-review-source-cell--node { padding-right: 22px; }
+.desktop-review-node-label { margin-left: 6px; color: var(--ops-muted); font-size: 11px; }
+.desktop-review-board-heading-mixed { white-space: nowrap; }
 .desktop-review-source-cell > button { position: absolute; top: 50%; right: 0; color: var(--ops-muted); opacity: 0; transform: translateY(-50%); }
 .desktop-review-table tbody tr:hover .desktop-review-source-cell > button, .desktop-review-source-cell > button:focus-visible { opacity: 1; }
 .desktop-review-teasers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }

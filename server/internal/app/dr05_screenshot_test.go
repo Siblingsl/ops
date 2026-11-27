@@ -74,6 +74,44 @@ func TestDR05NumberFaithfulness(t *testing.T) {
 			t.Fatalf("%s: got %d valid=%v seen=%v", c.in, v, valid, seen[v])
 		}
 	}
+
+	// RC-19 real raw_text: spaces between time and columns are delimiters, not part of a number.
+	for _, c := range []struct {
+		raw   string
+		wants []int
+	}{
+		{"工位上的松弛感 2026-11-24 12:33 89 0 3 2 0", []int{89, 0, 3, 2}},
+		{"哪个更真实？ 2026-08-12 20:53 230 2 6 1 0", []int{230, 2, 6, 1, 0}},
+	} {
+		got := rawNumbers(c.raw)
+		for _, want := range c.wants {
+			if !got[want] {
+				t.Fatalf("raw_text %q missing literal number %d: %v", c.raw, want, got)
+			}
+		}
+		for _, absent := range []int{999, 88, 890320} {
+			if got[absent] {
+				t.Fatalf("raw_text %q must not invent number %d: %v", c.raw, absent, got)
+			}
+		}
+	}
+
+	// Thousands separators, non-thousands comma columns and spaced units.
+	got := rawNumbers("1,234 1,234,567 1.2 w 3 万 10万+ 1.2\u00a0万 89,0,3,2,0")
+	for _, want := range []int{1234, 1234567, 12000, 30000, 100000, 89, 0, 3, 2} {
+		if !got[want] {
+			t.Fatalf("separator/unit case missing %d: %v", want, got)
+		}
+	}
+	if got[890320] {
+		t.Fatalf("non-thousands comma columns must not glue into 890320: %v", got)
+	}
+
+	// int64 impressions can exceed int32 and must remain exact.
+	got64 := rawNumbers64("展现 9007199254740993 阅读 89")
+	if !got64[9007199254740993] || !got64[89] {
+		t.Fatalf("int64 literal numbers missing: %v", got64)
+	}
 }
 
 func TestToutiaoScreenshotIntervalRequiresCumulativeConfirmationAndMatchingFormat(t *testing.T) {
