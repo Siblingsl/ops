@@ -29,6 +29,7 @@
 | `04-multipage-operation.txt` | 同账号 account_sync 操作计数 |
 | `05-criterion5-capability.md` | 第 5 条：能力快照未刷新 |
 | `05-capabilities-db.txt` | 当前 capabilities JSON 原样 |
+| `06-2026-11-27-prod-stage-update.md` | 2026-11-27 生产阶段更新（presence、Chrome/158 快照刷新、T0、派发修复上线） |
 
 ## 脱敏
 
