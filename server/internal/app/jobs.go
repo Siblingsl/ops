@@ -24,6 +24,7 @@ func (s *Server) RunJobs(ctx context.Context) {
 			s.runJobsOnce(ctx)
 		case <-ct.C:
 			s.runAgentRoutines(ctx)
+			s.schedulePlatformOperations(ctx, s.now())
 			s.collectHot(ctx)
 			s.collectReferences(ctx)
 			s.dailyBackground(ctx)

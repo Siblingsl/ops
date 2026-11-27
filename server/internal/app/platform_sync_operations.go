@@ -45,6 +45,31 @@ func (s *Server) schedulePlatformOperations(ctx context.Context, now time.Time) 
 	if err != nil {
 		return
 	}
+	s.dispatchPlatformOperationRows(ctx, rows, now)
+}
+
+// schedulePlatformOperationsForDevice 在客户端领单时立即尝试派发该设备待执行的 v2 操作，
+// 避免用户点击「同步」后空等后台周期扫描。
+func (s *Server) schedulePlatformOperationsForDevice(ctx context.Context, workspaceID, userID, deviceID uuid.UUID, now time.Time) {
+	if !s.platformCollectionGloballyEnabled(ctx) {
+		return
+	}
+	rows, err := s.db.Query(ctx, `SELECT o.id,o.workspace_id,o.account_id,o.connection_id,o.requested_by,o.device_id,o.platform,c.external_account_key,
+		o.kind,o.status,o.stage,o.requested_mode,o.frozen_scope,o.authorization_revision,
+		o.workspace_authorization_revision,o.platform_consent_version
+		FROM platform_sync_operation o JOIN platform_connection c ON c.id=o.connection_id
+		WHERE o.workspace_id=$1 AND o.requested_by=$2 AND o.device_id=$3
+		AND o.status IN ('queued','waiting_budget','waiting_device')
+		AND (o.next_allowed_at IS NULL OR o.next_allowed_at<=$4)
+		ORDER BY CASE WHEN o.kind='metrics_refresh' THEN 0 ELSE 1 END,o.created_at,o.id LIMIT 10`,
+		workspaceID, userID, deviceID, now)
+	if err != nil {
+		return
+	}
+	s.dispatchPlatformOperationRows(ctx, rows, now)
+}
+
+func (s *Server) dispatchPlatformOperationRows(ctx context.Context, rows pgx.Rows, now time.Time) {
 	operations := []queuedPlatformOperation{}
 	for rows.Next() {
 		var op queuedPlatformOperation

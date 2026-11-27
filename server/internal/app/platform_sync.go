@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -449,6 +450,9 @@ func (s *Server) claimPlatformRun(ctx context.Context, deviceID uuid.UUID, clien
 		return nil, apiErr(403, "platform_collection_disabled", "服务端已关闭平台数据采集")
 	}
 	id := ident(ctx)
+	if slices.Contains(client.ProtocolVersions, 2) {
+		s.schedulePlatformOperationsForDevice(ctx, id.WorkspaceID, id.UserID, deviceID, s.now())
+	}
 	var run platformRun
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
 		var runID, connectionID uuid.UUID
