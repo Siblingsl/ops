@@ -1237,11 +1237,34 @@ async function navigateBusiness(url: string, allowDuringAccountDataClear = false
   if (!isBusinessUrl(url)) throw new Error('业务页面地址不在允许的站点内。');
   if (!businessWindow || businessWindow.isDestroyed()) return;
 
+  let localSettingsPanelUrl = false;
+  try {
+    localSettingsPanelUrl = /^\/settings\/local\/(?:connection|ai|account-device|diagnostics)(?:\/|$)/.test(new URL(url).pathname);
+  } catch {
+    localSettingsPanelUrl = false;
+  }
+  if (!localSettingsPanelUrl && localSettingsViewController?.currentHost === businessWindow) {
+    localSettingsViewController.detach();
+  }
+  const contents = businessWindow.webContents;
+  if (!contents.isDestroyed()) {
+    contents.send('desktop-ui:local-settings-state', { dirty: false, busy: false });
+  }
+  const allowUnload = (event: Electron.Event) => {
+    event.preventDefault();
+  };
+  contents.on('will-prevent-unload', allowUnload);
   try {
     await businessWindow.loadURL(url);
-  } catch {
+  } catch (error) {
+    const err = error as { errno?: unknown; code?: unknown } | null;
+    if (err?.errno === -3 || err?.code === 'ERR_ABORTED') return;
     businessWindow.hide();
     showFailureWindow();
+  } finally {
+    if (!contents.isDestroyed()) {
+      contents.removeListener('will-prevent-unload', allowUnload);
+    }
   }
 }
 

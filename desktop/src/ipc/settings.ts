@@ -232,13 +232,13 @@ export function registerSettingsIpcHandlers(deps: SettingsIpcDeps): void {
     deps.routingRefreshPending.set(true);
     try {
       await desktopClient.applyMode(mode);
+      deps.routingRefreshPending.set(false);
       const businessWindow = deps.businessWindow.get();
       const currentUrl = businessWindow && !businessWindow.isDestroyed()
         ? businessWindow.webContents.getURL()
         : '';
       if (deps.isBusinessUrl(currentUrl)) await deps.navigateBusiness(currentUrl);
       else await deps.loadBusinessPage();
-      deps.routingRefreshPending.set(false);
       return true;
     } catch (error) {
       try {

@@ -79,6 +79,7 @@
 html { scroll-behavior: smooth; background: var(--canvas); }
 body { margin: 0; min-width: 360px; padding: 62px 24px 28px; background: var(--canvas); color: var(--text); }
 .panel { display: grid; grid-template-columns: 170px minmax(0, 1fr); align-items: start; column-gap: 24px; max-width: 1160px; margin: 0 auto; }
+body.offline-page .panel { display: flex; flex-direction: column; gap: 16px; max-width: 760px; }
 .desktop-window-titlebar {
   position: fixed; z-index: 10; inset-block-start: 0; inset-inline-start: env(titlebar-area-x, 0px);
   width: env(titlebar-area-width, 100%); height: env(titlebar-area-height, 42px); display: flex; align-items: center; gap: 20px;

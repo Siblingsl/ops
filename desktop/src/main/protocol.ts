@@ -186,17 +186,37 @@ function isWorkspaceContextChangeRequest(requestUrl: string, method: string): bo
     || pathname === '/api/v1/admin/workspaces/exit';
 }
 
+export function isTrustedBusinessApiRequest(input: {
+  requestUrl: string;
+  apiOrigin: string;
+  businessOrigin: string;
+  frameUrl?: string;
+  initiatorOrigin?: string;
+  sameWebContents: boolean;
+  isMainFrame: boolean;
+}): boolean {
+  return input.sameWebContents
+    && input.isMainFrame
+    && isBusinessApiUrl(input.requestUrl, input.apiOrigin)
+    && Boolean(input.frameUrl && isBusinessOriginUrl(input.frameUrl, input.businessOrigin))
+    && Boolean(input.initiatorOrigin && isBusinessOriginUrl(input.initiatorOrigin, input.businessOrigin));
+}
+
 function isTrustedBusinessMainFrame(
   details: { url: string; webContentsId?: number; frame?: Electron.WebFrameMain | null; initiatorOrigin?: string },
   window: Electron.BrowserWindow
 ): boolean {
   const d = requireDeps();
   const frame = details.frame;
-  return details.webContentsId === window.webContents.id
-    && Boolean(frame && frame === window.webContents.mainFrame)
-    && d.isBusinessUrl(details.url)
-    && d.isBusinessUrl(frame!.url)
-    && details.initiatorOrigin === d.getBusinessOrigin();
+  return isTrustedBusinessApiRequest({
+    requestUrl: details.url,
+    apiOrigin: d.getApiOrigin(),
+    businessOrigin: d.getBusinessOrigin(),
+    frameUrl: frame?.url,
+    initiatorOrigin: details.initiatorOrigin,
+    sameWebContents: details.webContentsId === window.webContents.id,
+    isMainFrame: Boolean(frame && frame === window.webContents.mainFrame)
+  });
 }
 
 export function installDownloadHandling(businessSession: Session): void {
