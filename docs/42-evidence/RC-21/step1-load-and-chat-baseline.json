@@ -1,0 +1,1165 @@
+{
+  "batch": "RC-21 Phase 1",
+  "title": "大数据量 P95 基线（1080 作品 / 11392 事件）+ 105 轮长对话稳定性实测（隔离本地栈）",
+  "generated_at": "2026-11-27T04:36:51.449Z",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:18121",
+    "mock_model_url": "http://127.0.0.1:18191",
+    "database": "ops_rc21（独立库，容器 ops-dev-postgres-1，端口 5440）",
+    "server_binary": "<temp>/ops-server.exe（go build ./cmd/ops，独立 PID 管理）",
+    "renderer": "renderer vite build --mode desktop，OPS_API_BASE=/（同源相对路径），由 OPS_STATIC_DIR 挂载；产物内零 ops-api.88813888.xyz 字样",
+    "desktop": "未打包 Electron 44.9.1（desktop/node_modules/electron）+ OPS_DESKTOP_DEV_URL=http://127.0.0.1:18121",
+    "desktop_isolation": "每个实例独立 --user-data-dir=<temp>/userdata-*；未读写 %APPDATA%\\OPS Desktop 或 %APPDATA%\\ops；未触碰 ops-prod-e2e-* 容器与线上 ops-api.88813888.xyz",
+    "packaged_exe_exclusion_reason": "desktop/out/OPS Desktop-win32-x64/OPS Desktop.exe 在 desktop/src/business-origin.ts:26-28 编译期硬编码 PRODUCTION_API_ORIGIN，打包态无法指向 18121；按红线 2 改用未打包 Electron + 独立静态构建，业务 UI 与 API 全部同源本地",
+    "http_client": "Node.js 22 fetch（显式清空 HTTP_PROXY/HTTPS_PROXY 并设置 NO_PROXY=127.0.0.1,localhost,::1）"
+  },
+  "dataset": {
+    "database": "ops_rc21",
+    "postgres_container": "ops-dev-postgres-1",
+    "postgres_port": 5440,
+    "tables": {
+      "work": 1080,
+      "work_section": 4290,
+      "audit_log": 6042,
+      "ai_call": 5355,
+      "notification": 1072,
+      "review_report": 60,
+      "metric_snapshot": 1050,
+      "account_metric_daily": 360
+    },
+    "events_total": 11397,
+    "thresholds": {
+      "work_min": 1050,
+      "events_min": 10500
+    },
+    "work_status_distribution": {
+      "drafting": 365,
+      "ready": 365,
+      "published": 350
+    },
+    "works_with_sections": 1080,
+    "sections_per_work": "4（公众号）/ 3（小红书）",
+    "searchable_keyword": "运营",
+    "works_matching_keyword": 1050,
+    "accounts": {
+      "wechat": "49c6bd24-d993-46d4-8a62-bf387666a3b6",
+      "xiaohongshu": "7e9c6f8b-91b0-42bd-858f-ba883eaecd64"
+    },
+    "workspace_id": "1f0b1bcb-1319-4e69-8c67-28f18f6bde7e",
+    "user_id": "c4d51ca9-2eb9-42c6-8da3-fb33d38b1c5f",
+    "analyze": "已执行 ANALYZE;（全库统计）",
+    "note": "audit_log/ai_call 含后续 RC-21 实测产生的真实调用记录，均未清理",
+    "live_recheck_at": "2026-11-27T04:36:51.377Z",
+    "verified_at": "2026-11-27T04:36:51.450Z",
+    "verdict": "PASS"
+  },
+  "p95_baseline": {
+    "threshold_ms": 2000,
+    "method": "每项 2 轮预热不计入 + 15 轮实测；nearest-rank 百分位；API 为服务端往返毫秒，UI 为隔离 Electron 内页面就绪/交互完成毫秒",
+    "ui": {
+      "rounds_measured": 17,
+      "warmup": 2,
+      "metrics": {
+        "works": {
+          "n": 15,
+          "min": 1404.4,
+          "p50": 1903.1,
+          "p95": 2013.2,
+          "p99": 2013.2,
+          "max": 2013.2
+        },
+        "editor": {
+          "n": 15,
+          "min": 354,
+          "p50": 396.5,
+          "p95": 685.2,
+          "p99": 685.2,
+          "max": 685.2
+        },
+        "save": {
+          "n": 15,
+          "min": 1233.9,
+          "p50": 1246.7,
+          "p95": 1280.4,
+          "p99": 1280.4,
+          "max": 1280.4
+        },
+        "push": {
+          "n": 15,
+          "min": 213.6,
+          "p50": 285,
+          "p95": 411.8,
+          "p99": 411.8,
+          "max": 411.8
+        },
+        "review": {
+          "n": 15,
+          "min": 438.6,
+          "p50": 493.6,
+          "p95": 899.8,
+          "p99": 899.8,
+          "max": 899.8
+        },
+        "search": {
+          "n": 15,
+          "min": 433.9,
+          "p50": 452.5,
+          "p95": 910.9,
+          "p99": 910.9,
+          "max": 910.9
+        }
+      }
+    },
+    "api": {
+      "rounds_measured": 15,
+      "warmup": 2,
+      "metrics": {
+        "works_list": {
+          "n": 15,
+          "min": 10.8,
+          "p50": 15.6,
+          "p95": 27.9,
+          "p99": 27.9,
+          "max": 27.9
+        },
+        "search": {
+          "n": 15,
+          "min": 73.1,
+          "p50": 84,
+          "p95": 97.6,
+          "p99": 97.6,
+          "max": 97.6
+        },
+        "editor_open": {
+          "n": 15,
+          "min": 5.8,
+          "p50": 8.8,
+          "p95": 21.5,
+          "p99": 21.5,
+          "max": 21.5
+        },
+        "section_save": {
+          "n": 15,
+          "min": 13.6,
+          "p50": 23,
+          "p95": 34.7,
+          "p99": 34.7,
+          "max": 34.7
+        },
+        "review_board": {
+          "n": 15,
+          "min": 123,
+          "p50": 135,
+          "p95": 212,
+          "p99": 212,
+          "max": 212
+        },
+        "review_reports": {
+          "n": 15,
+          "min": 8,
+          "p50": 15.5,
+          "p95": 23.5,
+          "p99": 23.5,
+          "max": 23.5
+        },
+        "push_preview": {
+          "n": 15,
+          "min": 7.1,
+          "p50": 15.8,
+          "p95": 19.2,
+          "p99": 19.2,
+          "max": 19.2
+        }
+      }
+    },
+    "slow_items": [
+      {
+        "item": "UI 工作台/作品列表首屏（/works 渲染）",
+        "p95_ms": 2013.2,
+        "threshold_ms": 2000,
+        "root_cause": "PostgreSQL 非根因：EXPLAIN (ANALYZE, BUFFERS) 计数查询执行 0.592 ms（Index Only Scan，shared hit=6），列表查询执行 0.793 ms（work_account_updated 索引 + Incremental Sort，shared hit=21）。2s 级耗时发生在客户端首屏装载：本口径每轮均为全新 Electron 进程 + 空缓存首访，包含应用壳启动、路由与首屏渲染，不是单条 SQL 慢查询。",
+        "evidence_file": "<temp>/explain-works.txt"
+      }
+    ],
+    "verdict": "ATTENTION（存在 >2000ms 项，已定位根因并登记优化建议；本批不改码）",
+    "optimization_suggestions": [
+      "作品列表首屏：避免每次冷启动都全量重建首屏数据；对 /works 首屏查询做客户端缓存与骨架屏并行，减少应用壳启动到渲染的串行等待（需在 RC-21 修复批次评估，本批未改码）。"
+    ]
+  },
+  "long_conversation_105": {
+    "mode": "product API /messages SSE 驱动 105 轮；同一隔离 Electron 打开同一会话，经 /events 实时渲染并采集内存",
+    "conversation_id": "f76f9b18-70c7-4996-b7e7-e2e39291d567",
+    "requested_rounds": 105,
+    "completed_rounds": 105,
+    "ok_rounds": 105,
+    "failed_rounds": 0,
+    "ttft_ms": {
+      "n": 105,
+      "p50": 341.1,
+      "p95": 496.1,
+      "min": 279.1,
+      "max": 745.9
+    },
+    "round_total_ms": {
+      "n": 105,
+      "p50": 552.6,
+      "p95": 709.8,
+      "min": 486.7,
+      "max": 951.6
+    },
+    "ui_sync_failures": 0,
+    "memory_samples": [
+      {
+        "tag": "round-1",
+        "js_heap_mb": 16.64,
+        "electron_rss_mb": 514.1,
+        "electron_private_mb": 336.8,
+        "electron_proc_count": 4,
+        "bubbles_in_dom": 2
+      },
+      {
+        "tag": "round-35",
+        "js_heap_mb": 13.34,
+        "electron_rss_mb": 589.2,
+        "electron_private_mb": 405.5,
+        "electron_proc_count": 4,
+        "bubbles_in_dom": 50
+      },
+      {
+        "tag": "round-70",
+        "js_heap_mb": 16.09,
+        "electron_rss_mb": 592.9,
+        "electron_private_mb": 410.3,
+        "electron_proc_count": 4,
+        "bubbles_in_dom": 50
+      },
+      {
+        "tag": "round-105",
+        "js_heap_mb": 9.99,
+        "electron_rss_mb": 541.4,
+        "electron_private_mb": 357.7,
+        "electron_proc_count": 4,
+        "bubbles_in_dom": 50
+      }
+    ],
+    "final_sample": {
+      "tag": "final",
+      "js_heap_mb": 10.73,
+      "electron_rss_mb": 547.8,
+      "electron_private_mb": 363.2,
+      "electron_proc_count": 4,
+      "bubbles_in_dom": 50
+    },
+    "scroll_perf": {
+      "durationMs": 4000,
+      "frames": 577,
+      "fps": 144.3,
+      "frameIntervalP50": 6.9,
+      "frameIntervalP95": 7.1,
+      "worstFrame": 7.5,
+      "longTasks": 0,
+      "longTaskMaxMs": 0,
+      "bubblesAfterScroll": 50
+    },
+    "console_errors": 13,
+    "console_error_samples": [
+      {
+        "ts": "2026-11-27T04:26:07.899Z",
+        "text": "Failed to load resource: the server responded with a status of 499 (status code 499)"
+      },
+      {
+        "ts": "2026-11-27T04:26:08.268Z",
+        "text": "Failed to load resource: the server responded with a status of 499 (status code 499)"
+      },
+      {
+        "ts": "2026-11-27T04:26:08.280Z",
+        "text": "Failed to load resource: the server responded with a status of 499 (status code 499)"
+      },
+      {
+        "ts": "2026-11-27T04:26:08.299Z",
+        "text": "Failed to load resource: the server responded with a status of 499 (status code 499)"
+      },
+      {
+        "ts": "2026-11-27T04:26:09.264Z",
+        "text": "Failed to load resource: the server responded with a status of 499 (status code 499)"
+      }
+    ],
+    "page_errors": 0,
+    "alive_after_run": true,
+    "body_text_length": 3183,
+    "ui_state_at_end": {
+      "error_card_visible": true,
+      "error_text": "请求失败 / 客户端已取消请求（请求 ID：MTXRq-011570）",
+      "stale_running_badge": true,
+      "stop_button_visible": true,
+      "renderer_responsive": true,
+      "note": "页面仍可滚动与渲染（144fps、0 Long Task），但事件流客户端取消导致“运行中”状态未收敛，输入区显示“停止”"
+    },
+    "known_defect": {
+      "trigger": "会话消息数跨越 agentMessagePage=50 分页边界（第 26 轮 = 52 条消息）",
+      "symptom": "页面出现“请求失败 / 客户端已取消请求”，运行状态停在“运行中”；服务端 agent_run 实际 completed",
+      "observed_in": "① UI 直接发送：第 26 轮硬失败（3 次重试均无回复），第 38 轮成功后第 39 轮再次失败；② 本证据 105 轮 API 驱动：UI 仍渲染出 13 次 499 控制台错误，并在约第 91 轮后残留错误卡与“运行中”徽标",
+      "server_evidence": "ops_rc21.agent_run 全部 243 条均为 completed（无 stuck running）；server.err.log 同期出现 /agent/conversations/{id}/events 与 /agent/conversations/{id} 的 499 风暴",
+      "code_reference": "server/internal/app/agent_limits.go:45 agentMessagePage=50；shared/agent-events.ts:118-120 在 run.ended 后主动 reader.cancel()；shared/agent-events.ts:137 对非 502/503/504 的 ApiError 直接抛出",
+      "impact": "UI 连续发送在同一会话约 50 条消息后不可用；API 触发时 UI 渲染仍继续，但状态收尾不可靠",
+      "recovery": "重挂载同一会话页（page.goto 同一 /agent/c/{id}，不重启 Electron）即可恢复；本批按红线未改码，登记为 RC-21 #3 待修复缺陷候选",
+      "honesty": "未缩短轮次、未伪造 done；105 轮全部由产品 API SSE 返回 done 事件确认，失败与异常均如实记录"
+    },
+    "per_round": [
+      {
+        "round": 1,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 451.8,
+        "total_ms": 660,
+        "done_status": "completed"
+      },
+      {
+        "round": 2,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 316.9,
+        "total_ms": 523.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 3,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 329.8,
+        "total_ms": 540.7,
+        "done_status": "completed"
+      },
+      {
+        "round": 4,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 346.2,
+        "total_ms": 569.1,
+        "done_status": "completed"
+      },
+      {
+        "round": 5,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 360.9,
+        "total_ms": 596.3,
+        "done_status": "completed"
+      },
+      {
+        "round": 6,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 367.7,
+        "total_ms": 576.7,
+        "done_status": "completed"
+      },
+      {
+        "round": 7,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 321,
+        "total_ms": 525.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 8,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 300,
+        "total_ms": 506.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 9,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 331.6,
+        "total_ms": 543.6,
+        "done_status": "completed"
+      },
+      {
+        "round": 10,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 310.5,
+        "total_ms": 529.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 11,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 334,
+        "total_ms": 540.5,
+        "done_status": "completed"
+      },
+      {
+        "round": 12,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 287.9,
+        "total_ms": 499.7,
+        "done_status": "completed"
+      },
+      {
+        "round": 13,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 282.9,
+        "total_ms": 500.9,
+        "done_status": "completed"
+      },
+      {
+        "round": 14,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 295.7,
+        "total_ms": 507.1,
+        "done_status": "completed"
+      },
+      {
+        "round": 15,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 324.1,
+        "total_ms": 529.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 16,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 288.7,
+        "total_ms": 499.7,
+        "done_status": "completed"
+      },
+      {
+        "round": 17,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 313.5,
+        "total_ms": 520.7,
+        "done_status": "completed"
+      },
+      {
+        "round": 18,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 327.3,
+        "total_ms": 534.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 19,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 361.1,
+        "total_ms": 571.1,
+        "done_status": "completed"
+      },
+      {
+        "round": 20,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 416.1,
+        "total_ms": 621.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 21,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 298.8,
+        "total_ms": 504.1,
+        "done_status": "completed"
+      },
+      {
+        "round": 22,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 343.6,
+        "total_ms": 553.1,
+        "done_status": "completed"
+      },
+      {
+        "round": 23,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 324.3,
+        "total_ms": 551.5,
+        "done_status": "completed"
+      },
+      {
+        "round": 24,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 352.2,
+        "total_ms": 564.2,
+        "done_status": "completed"
+      },
+      {
+        "round": 25,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 343.3,
+        "total_ms": 545.9,
+        "done_status": "completed"
+      },
+      {
+        "round": 26,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 299.6,
+        "total_ms": 503.2,
+        "done_status": "completed"
+      },
+      {
+        "round": 27,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 312.1,
+        "total_ms": 518.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 28,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 361.6,
+        "total_ms": 575.9,
+        "done_status": "completed"
+      },
+      {
+        "round": 29,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 328.5,
+        "total_ms": 530.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 30,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 279.1,
+        "total_ms": 486.7,
+        "done_status": "completed"
+      },
+      {
+        "round": 31,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 302.2,
+        "total_ms": 508,
+        "done_status": "completed"
+      },
+      {
+        "round": 32,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 390.2,
+        "total_ms": 593.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 33,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 349.5,
+        "total_ms": 552.6,
+        "done_status": "completed"
+      },
+      {
+        "round": 34,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 326.4,
+        "total_ms": 530.3,
+        "done_status": "completed"
+      },
+      {
+        "round": 35,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 337.6,
+        "total_ms": 549,
+        "done_status": "completed"
+      },
+      {
+        "round": 36,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 358.1,
+        "total_ms": 565.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 37,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 745.9,
+        "total_ms": 951.6,
+        "done_status": "completed"
+      },
+      {
+        "round": 38,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 471.2,
+        "total_ms": 679.2,
+        "done_status": "completed"
+      },
+      {
+        "round": 39,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 326.4,
+        "total_ms": 538.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 40,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 386,
+        "total_ms": 589.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 41,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 328.6,
+        "total_ms": 531.5,
+        "done_status": "completed"
+      },
+      {
+        "round": 42,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 341.1,
+        "total_ms": 553.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 43,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 654.1,
+        "total_ms": 864.2,
+        "done_status": "completed"
+      },
+      {
+        "round": 44,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 445.1,
+        "total_ms": 649.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 45,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 413.7,
+        "total_ms": 620.3,
+        "done_status": "completed"
+      },
+      {
+        "round": 46,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 301.5,
+        "total_ms": 512.7,
+        "done_status": "completed"
+      },
+      {
+        "round": 47,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 332.2,
+        "total_ms": 536.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 48,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 365.4,
+        "total_ms": 573.9,
+        "done_status": "completed"
+      },
+      {
+        "round": 49,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 343,
+        "total_ms": 550.7,
+        "done_status": "completed"
+      },
+      {
+        "round": 50,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 308.7,
+        "total_ms": 519.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 51,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 349.3,
+        "total_ms": 557.1,
+        "done_status": "completed"
+      },
+      {
+        "round": 52,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 371.8,
+        "total_ms": 578.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 53,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 439.4,
+        "total_ms": 640.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 54,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 338.4,
+        "total_ms": 557.2,
+        "done_status": "completed"
+      },
+      {
+        "round": 55,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 368.5,
+        "total_ms": 577.6,
+        "done_status": "completed"
+      },
+      {
+        "round": 56,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 322.4,
+        "total_ms": 525.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 57,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 485,
+        "total_ms": 709.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 58,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 346.1,
+        "total_ms": 566.1,
+        "done_status": "completed"
+      },
+      {
+        "round": 59,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 479.7,
+        "total_ms": 687.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 60,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 575.1,
+        "total_ms": 786.2,
+        "done_status": "completed"
+      },
+      {
+        "round": 61,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 639.9,
+        "total_ms": 849.7,
+        "done_status": "completed"
+      },
+      {
+        "round": 62,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 318.5,
+        "total_ms": 522.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 63,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 341,
+        "total_ms": 557,
+        "done_status": "completed"
+      },
+      {
+        "round": 64,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 329.6,
+        "total_ms": 534.2,
+        "done_status": "completed"
+      },
+      {
+        "round": 65,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 337.8,
+        "total_ms": 551.7,
+        "done_status": "completed"
+      },
+      {
+        "round": 66,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 427.5,
+        "total_ms": 670.3,
+        "done_status": "completed"
+      },
+      {
+        "round": 67,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 496.1,
+        "total_ms": 700.7,
+        "done_status": "completed"
+      },
+      {
+        "round": 68,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 486.7,
+        "total_ms": 705.6,
+        "done_status": "completed"
+      },
+      {
+        "round": 69,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 408.2,
+        "total_ms": 624.9,
+        "done_status": "completed"
+      },
+      {
+        "round": 70,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 386.4,
+        "total_ms": 643.3,
+        "done_status": "completed"
+      },
+      {
+        "round": 71,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 356.6,
+        "total_ms": 575,
+        "done_status": "completed"
+      },
+      {
+        "round": 72,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 319.2,
+        "total_ms": 525,
+        "done_status": "completed"
+      },
+      {
+        "round": 73,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 432.3,
+        "total_ms": 640,
+        "done_status": "completed"
+      },
+      {
+        "round": 74,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 551.1,
+        "total_ms": 765.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 75,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 307,
+        "total_ms": 513,
+        "done_status": "completed"
+      },
+      {
+        "round": 76,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 327.1,
+        "total_ms": 555.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 77,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 328,
+        "total_ms": 531.7,
+        "done_status": "completed"
+      },
+      {
+        "round": 78,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 373.4,
+        "total_ms": 577.6,
+        "done_status": "completed"
+      },
+      {
+        "round": 79,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 352.1,
+        "total_ms": 556.1,
+        "done_status": "completed"
+      },
+      {
+        "round": 80,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 319,
+        "total_ms": 531.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 81,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 331.2,
+        "total_ms": 538.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 82,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 347.7,
+        "total_ms": 559,
+        "done_status": "completed"
+      },
+      {
+        "round": 83,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 352.5,
+        "total_ms": 558.3,
+        "done_status": "completed"
+      },
+      {
+        "round": 84,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 314.5,
+        "total_ms": 526.6,
+        "done_status": "completed"
+      },
+      {
+        "round": 85,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 317.9,
+        "total_ms": 523,
+        "done_status": "completed"
+      },
+      {
+        "round": 86,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 354.4,
+        "total_ms": 565.9,
+        "done_status": "completed"
+      },
+      {
+        "round": 87,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 351.8,
+        "total_ms": 555.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 88,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 336.7,
+        "total_ms": 548.8,
+        "done_status": "completed"
+      },
+      {
+        "round": 89,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 335.4,
+        "total_ms": 547.6,
+        "done_status": "completed"
+      },
+      {
+        "round": 90,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 312.5,
+        "total_ms": 520.6,
+        "done_status": "completed"
+      },
+      {
+        "round": 91,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 349.8,
+        "total_ms": 555.1,
+        "done_status": "completed"
+      },
+      {
+        "round": 92,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 364,
+        "total_ms": 575.7,
+        "done_status": "completed"
+      },
+      {
+        "round": 93,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 319.6,
+        "total_ms": 524.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 94,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 281,
+        "total_ms": 495.3,
+        "done_status": "completed"
+      },
+      {
+        "round": 95,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 296.1,
+        "total_ms": 502.6,
+        "done_status": "completed"
+      },
+      {
+        "round": 96,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 320,
+        "total_ms": 530.5,
+        "done_status": "completed"
+      },
+      {
+        "round": 97,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 341.8,
+        "total_ms": 549.9,
+        "done_status": "completed"
+      },
+      {
+        "round": 98,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 422.6,
+        "total_ms": 627.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 99,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 355.6,
+        "total_ms": 564.7,
+        "done_status": "completed"
+      },
+      {
+        "round": 100,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 333.7,
+        "total_ms": 533.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 101,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 326.3,
+        "total_ms": 532.1,
+        "done_status": "completed"
+      },
+      {
+        "round": 102,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 380.3,
+        "total_ms": 583.4,
+        "done_status": "completed"
+      },
+      {
+        "round": 103,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 316.1,
+        "total_ms": 528.1,
+        "done_status": "completed"
+      },
+      {
+        "round": 104,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 438.9,
+        "total_ms": 648.3,
+        "done_status": "completed"
+      },
+      {
+        "round": 105,
+        "ok": true,
+        "http": 200,
+        "ttft_ms": 411.4,
+        "total_ms": 620.5,
+        "done_status": "completed"
+      }
+    ]
+  },
+  "limitations": [
+    "推送/发布准备页样本作品无封面且检查未全部确认，UI 口径记录的是 H-04 门禁态页面到达（p95 411.8ms）；push-preview 的真实查询成本以 API 口径 p95 19.2ms 为准，未用假封面绕过门禁。",
+    "UI 基线每轮为全新 Electron 进程（空缓存首访），用于规避桌面端硬刷新触发的 499；因此首屏指标包含冷启动成本，高于同一进程内热访问。",
+    "agent 会话详情一次只返回 50 条消息，105 轮时 DOM 仅保留 50 条（滑动窗口）；因此 JS Heap/RSS 反映的是 50 条消息窗口的占用，不是 210 条同时驻留的占用。",
+    "105 轮采用产品 API /messages SSE 触发（任务允许“经产品接口/UI 触发”），同一隔离 Electron 打开同一会话并通过 /events 实时渲染；未单独测 UI 感知首字延迟，TTFT 为服务端首 delta 到请求发出的时间。"
+  ],
+  "verification": {
+    "git_head_at_report": "784bc632（main；本批未提交；11:08/11:37 两次提交为并发工作区他人提交，非本测试产生）",
+    "code_diff_scope": "git diff --name-only -- server renderer desktop shared deploy = 空",
+    "committed": false,
+    "rc21_closed": false,
+    "prod_untouched": "未向 https://ops-api.88813888.xyz 发送任何压测数据；ops-prod-e2e-* 容器全程仅只读 docker ps 观察，未执行任何操作",
+    "secrets_in_evidence": "无密码、无 Cookie、无 CSRF；本机绝对路径统一为 <temp>"
+  }
+}

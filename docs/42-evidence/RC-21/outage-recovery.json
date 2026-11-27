@@ -1,0 +1,62 @@
+{
+  "drill": "RC-21 #4 65s server outage + auto recovery",
+  "startedAt": "2026-11-27T10:02:27.551Z",
+  "scheduledOutageMinute": 120,
+  "actualOutageElapsedMin": 327.51,
+  "holdSeconds": 65,
+  "electronPidBefore": 33092,
+  "electronStartTimeBefore": "2026-11-27 12:34:57",
+  "electronTreeBefore": {
+    "count": 4,
+    "rssMb": 184.1,
+    "privateMb": 273.8,
+    "handles": 2462,
+    "cpuSec": 88.2,
+    "pids": [
+      33092,
+      17728,
+      29060,
+      31524
+    ]
+  },
+  "serverPidBefore": 27436,
+  "healthzBefore": 200,
+  "electronRestarted": false,
+  "sampling_gap_note": "120 分钟原定演练因原守护 23116 于 60.04 分钟被强杀而顺延至接管后立即补做；空窗期无补造采样",
+  "killIssued": true,
+  "downHealthStatus": 0,
+  "stopConfirmedDown": true,
+  "serverProcessAliveAfterStop": false,
+  "outageSampleTs": "2026-11-27T10:02:31.087Z",
+  "outageSampleElapsedMin": 327.57,
+  "electronAliveDuringOutage": true,
+  "electronPidUnchangedDuringOutage": true,
+  "electronResponsiveDuringOutage": true,
+  "stopDurationSec": 65,
+  "electronAliveAtRestart": true,
+  "restartOk": true,
+  "healthzStatusAfterRecovery": 200,
+  "newServerPid": 34152,
+  "healthzRecoveryMs": 517,
+  "pageLastStatuses": {
+    "/api/v1/auth/me": 200,
+    "/api/v1/works?limit=1": 404
+  },
+  "pageAuthWorksAfterRecovery": {
+    "/api/v1/auth/me": 200,
+    "/api/v1/accounts/49c6bd24-d993-46d4-8a62-bf387666a3b6/works?limit=1": 200
+  },
+  "pageRecoveryMs": null,
+  "electronPidAfter": 33092,
+  "electronStartTimeAfter": "2026-11-27 12:34:57",
+  "finishedAt": "2026-11-27T10:06:37.828Z",
+  "probe_route_deviation": {
+    "task_spec_path": "/api/v1/works?limit=1",
+    "task_spec_result": 404,
+    "actual_path": "/api/v1/accounts/{accountId}/works?limit=1",
+    "actual_result": 200,
+    "explanation": "产品 GET 作品列表路由为 /api/v1/accounts/{accountId}/works（server/internal/app/server.go:333），不存在 /api/v1/works 列表路由；首轮探针因此 404 误判"
+  },
+  "pageRecoveryVerifiedAt": "2026-11-27T10:08:00.438Z",
+  "pageRecoveryNote": "auth/me 在首个轮询即 200；works 首轮因路由不存在返回 404，改用真实路由复核为 200；全程未重启 Electron"
+}

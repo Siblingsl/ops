@@ -1,0 +1,41 @@
+                                                              QUERY PLAN                                                               
+---------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=41.28..41.29 rows=1 width=8) (actual time=0.488..0.489 rows=1 loops=1)
+   Buffers: shared hit=6 dirtied=1
+   ->  Index Only Scan using work_account on work w  (cost=0.28..38.65 rows=1050 width=0) (actual time=0.091..0.434 rows=1050 loops=1)
+         Index Cond: (account_id = '49c6bd24-d993-46d4-8a62-bf387666a3b6'::uuid)
+         Heap Fetches: 19
+         Buffers: shared hit=6 dirtied=1
+ Planning:
+   Buffers: shared hit=252
+ Planning Time: 2.702 ms
+ Execution Time: 0.592 ms
+(10 rows)
+
+                                                                         QUERY PLAN                                                                          
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=2.59..211.50 rows=51 width=307) (actual time=0.288..0.431 rows=51 loops=1)
+   Buffers: shared hit=21
+   ->  Result  (cost=2.59..4303.63 rows=1050 width=307) (actual time=0.286..0.403 rows=51 loops=1)
+         Buffers: shared hit=21
+         ->  Incremental Sort  (cost=2.59..2172.13 rows=1050 width=304) (actual time=0.258..0.308 rows=51 loops=1)
+               Sort Key: w.updated_at DESC, w.id DESC
+               Presorted Key: w.updated_at
+               Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 33kB  Peak Memory: 33kB
+               Buffers: shared hit=21
+               ->  Nested Loop Left Join  (cost=0.56..2124.88 rows=1050 width=304) (actual time=0.062..0.154 rows=52 loops=1)
+                     Buffers: shared hit=12
+                     ->  Index Scan using work_account_updated on work w  (cost=0.28..758.24 rows=1050 width=221) (actual time=0.036..0.102 rows=52 loops=1)
+                           Index Cond: (account_id = '49c6bd24-d993-46d4-8a62-bf387666a3b6'::uuid)
+                           Buffers: shared hit=12
+                     ->  Index Scan using work_pkey on work sw  (cost=0.28..1.29 rows=1 width=67) (actual time=0.000..0.000 rows=0 loops=52)
+                           Index Cond: (id = w.source_work_id)
+         SubPlan 1
+           ->  Aggregate  (cost=2.00..2.01 rows=1 width=8) (actual time=0.001..0.001 rows=1 loops=51)
+                 ->  Function Scan on jsonb_array_elements e  (cost=0.00..1.00 rows=100 width=32) (actual time=0.001..0.001 rows=0 loops=51)
+ Planning:
+   Buffers: shared hit=93
+ Planning Time: 1.286 ms
+ Execution Time: 0.793 ms
+(23 rows)
+
