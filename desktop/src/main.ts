@@ -59,6 +59,7 @@ import {
   isBusinessOriginUrl,
   resolveApiOrigin,
   resolveBusinessOrigin,
+  resolvePackagedLocalApiOrigin,
   resolveServiceNamespace
 } from './business-origin';
 import { DesktopClient } from './desktop-client';
@@ -296,7 +297,12 @@ function startClientHealthBroadcast(): void {
 }
 
 function startApplication(): void {
-  app.setAppUserModelId('com.squirrel.OpsDesktop.OPSDesktop');
+  // Windows 安装态 Toast 的应用显示名取 app.getName()；仅设 AUMID 时仍可能
+  // 回退为 Electron，需同时固定应用名。
+  app.setName('OPS Desktop');
+  // 必须与 Squirrel 生成的开始菜单快捷方式 AUMID 完全一致，否则 Windows 会按
+  // Electron 默认身份投递通知（安装态 Toast 显示为 “Electron”）。
+  app.setAppUserModelId('com.squirrel.OPSDesktop.OPSDesktop');
   nativeTheme.themeSource = 'light';
 
   const hasLock = app.requestSingleInstanceLock();
@@ -378,7 +384,10 @@ function startApplication(): void {
       desktopReducedMotion = await restoreDesktopMotion();
       nativeTheme.themeSource = desktopTheme;
       businessOrigin = resolveBusinessOrigin(app.isPackaged, process.env.OPS_DESKTOP_DEV_URL);
-      apiOrigin = resolveApiOrigin(app.isPackaged, businessOrigin);
+      const localApiOrigin = app.isPackaged && process.env.OPS_DESKTOP_ALLOW_LOCAL_API === '1'
+        ? resolvePackagedLocalApiOrigin(process.env.OPS_DESKTOP_DEV_URL)
+        : undefined;
+      apiOrigin = localApiOrigin ?? resolveApiOrigin(app.isPackaged, businessOrigin);
       serviceNamespace = resolveServiceNamespace(app.isPackaged, businessOrigin);
       businessPartition = app.isPackaged
         ? 'persist:ops-business-production'

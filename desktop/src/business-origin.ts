@@ -4,10 +4,7 @@ export const PRODUCTION_BUSINESS_UI_ORIGIN = 'ops-desktop://business';
 export const PRODUCTION_SERVICE_NAMESPACE = 'https://ops.88813888.xyz';
 export const DEFAULT_DEVELOPMENT_ORIGIN = 'http://localhost:5174';
 
-export function resolveBusinessOrigin(isPackaged: boolean, developmentUrl?: string): string {
-  if (isPackaged) return PRODUCTION_BUSINESS_UI_ORIGIN;
-  if (!developmentUrl) return DEFAULT_DEVELOPMENT_ORIGIN;
-
+function parseLoopbackOrigin(developmentUrl: string): URL {
   let parsed: URL;
   try {
     parsed = new URL(developmentUrl);
@@ -19,8 +16,23 @@ export function resolveBusinessOrigin(isPackaged: boolean, developmentUrl?: stri
   if (!isLoopback || !['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
     throw new Error('开发 URL 只允许 localhost、127.0.0.1 或 ::1 上的 HTTP(S) 服务。');
   }
+  return parsed;
+}
 
-  return parsed.origin;
+export function resolveBusinessOrigin(isPackaged: boolean, developmentUrl?: string): string {
+  if (isPackaged) return PRODUCTION_BUSINESS_UI_ORIGIN;
+  if (!developmentUrl) return DEFAULT_DEVELOPMENT_ORIGIN;
+  return parseLoopbackOrigin(developmentUrl).origin;
+}
+
+/**
+ * 已打包客户端默认连接生产 API。只有在显式设置 OPS_DESKTOP_ALLOW_LOCAL_API=1
+ * 且 OPS_DESKTOP_DEV_URL 为回环地址时，才允许把 API 指向本地隔离栈；
+ * 业务 UI 仍然使用 ops-desktop://business，避免整包误连生产或误连本机。
+ */
+export function resolvePackagedLocalApiOrigin(developmentUrl?: string): string | undefined {
+  if (!developmentUrl) return undefined;
+  return parseLoopbackOrigin(developmentUrl).origin;
 }
 
 export function resolveApiOrigin(isPackaged: boolean, uiOrigin: string): string {

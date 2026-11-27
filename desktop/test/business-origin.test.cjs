@@ -8,6 +8,7 @@ const {
   isBusinessOriginUrl,
   resolveApiOrigin,
   resolveBusinessOrigin,
+  resolvePackagedLocalApiOrigin,
   resolveServiceNamespace
 } = require('../.build/business-origin.js');
 
@@ -29,6 +30,14 @@ test('unpackaged client keeps an explicitly configured loopback origin', () => {
   assert.equal(resolveBusinessOrigin(false, 'http://localhost:5179/path'), 'http://localhost:5179');
   assert.equal(resolveApiOrigin(false, 'http://localhost:5179'), 'http://localhost:5179');
   assert.equal(resolveServiceNamespace(false, 'http://localhost:5179'), 'http://localhost:5179');
+});
+
+test('packaged client only allows explicit loopback API override', () => {
+  assert.equal(resolvePackagedLocalApiOrigin(undefined), undefined);
+  assert.equal(resolvePackagedLocalApiOrigin('http://127.0.0.1:18380'), 'http://127.0.0.1:18380');
+  assert.equal(resolvePackagedLocalApiOrigin('http://localhost:18380/path'), 'http://localhost:18380');
+  assert.throws(() => resolvePackagedLocalApiOrigin('https://ops-api.88813888.xyz'), /只允许 localhost/);
+  assert.throws(() => resolvePackagedLocalApiOrigin('not a URL'), /有效的本地开发 URL/);
 });
 
 test('unpackaged client rejects invalid or non-loopback development URLs', () => {
