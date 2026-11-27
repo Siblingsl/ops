@@ -1,0 +1,281 @@
+{
+  "metadata": {
+    "rc": "RC-12",
+    "date": "2026-11-27",
+    "status": "passed",
+    "environment": {
+      "api_base_url": "https://ops-api.88813888.xyz",
+      "ops_dev": 0,
+      "ops_crawl_mode": "allow",
+      "server_commit": "784bc632",
+      "server_image_digest_prefix": "2c488974eb26",
+      "desktop_commits": [
+        "320a50b0",
+        "784bc632",
+        "50a93719",
+        "240971e3",
+        "c0c55bf0"
+      ],
+      "ai_execution_channel": "desktop_wss_tunnel -> magpie -> opencode-zen-free/deepseek-v4.1-flash-free"
+    },
+    "notes": [
+      "All credentials, API keys, hostnames, and public IPv4 addresses are omitted.",
+      "hot_item query was capped at LIMIT 10 ORDER BY last_seen_at DESC, which is filled by the latest sspai RSS run (05:35:30Z); Tavily persistence and public URL validation are evidenced by crawl_run (items=10 x 3), ai_call (hot_search ok x 3), and crawl_health UI (2 runs, 20 items)."
+    ]
+  },
+  "crawl_source": [
+    {
+      "key": "rss:1653c701-ee62-4275-a4b9-5672dc86c0d9",
+      "kind": "rss",
+      "name": "爱范儿",
+      "enabled": true,
+      "robots_allow": true,
+      "last_ok_at": "2026-11-27 05:35:30.335455+00",
+      "fail_count": 0,
+      "error": ""
+    },
+    {
+      "key": "rss:4485e021-b657-4491-9d1e-7c4290dc4c14",
+      "kind": "rss",
+      "name": "少数派",
+      "enabled": true,
+      "robots_allow": true,
+      "last_ok_at": "2026-11-27 05:35:30.612745+00",
+      "fail_count": 0,
+      "error": ""
+    },
+    {
+      "key": "rss:db31f071-a6c7-4576-88be-c19ccabffbfe",
+      "kind": "rss",
+      "name": "36氪",
+      "enabled": true,
+      "robots_allow": true,
+      "last_ok_at": null,
+      "fail_count": 2,
+      "error": "无效 RSS / Atom"
+    },
+    {
+      "key": "search:a6d982d4-1568-4a74-a05c-5c6e4550ca42",
+      "kind": "search",
+      "name": "联网搜索（Tavily）",
+      "enabled": true,
+      "robots_allow": true,
+      "last_ok_at": "2026-11-27 05:29:29.949929+00",
+      "fail_count": 0,
+      "error": ""
+    }
+  ],
+  "crawl_run": [
+    {
+      "source_key": "rss:4485e021-b657-4491-9d1e-7c4290dc4c14",
+      "started_at": "2026-11-27 05:35:30.434393+00",
+      "requests": 1,
+      "http_status": 200,
+      "items": 10,
+      "error": ""
+    },
+    {
+      "source_key": "rss:1653c701-ee62-4275-a4b9-5672dc86c0d9",
+      "started_at": "2026-11-27 05:35:29.960395+00",
+      "requests": 1,
+      "http_status": 200,
+      "items": 20,
+      "error": ""
+    },
+    {
+      "source_key": "rss:db31f071-a6c7-4576-88be-c19ccabffbfe",
+      "started_at": "2026-11-27 05:31:29.94947+00",
+      "requests": 1,
+      "http_status": 200,
+      "items": 0,
+      "error": "无效 RSS / Atom"
+    },
+    {
+      "source_key": "search:a6d982d4-1568-4a74-a05c-5c6e4550ca42",
+      "started_at": "2026-11-27 05:29:29.949929+00",
+      "requests": 1,
+      "http_status": 200,
+      "items": 10,
+      "error": ""
+    },
+    {
+      "source_key": "rss:4485e021-b657-4491-9d1e-7c4290dc4c14",
+      "started_at": "2026-11-27 04:34:30.467637+00",
+      "requests": 2,
+      "http_status": 200,
+      "items": 10,
+      "error": ""
+    },
+    {
+      "source_key": "rss:1653c701-ee62-4275-a4b9-5672dc86c0d9",
+      "started_at": "2026-11-27 04:34:29.9371+00",
+      "requests": 2,
+      "http_status": 200,
+      "items": 20,
+      "error": ""
+    },
+    {
+      "source_key": "rss:db31f071-a6c7-4576-88be-c19ccabffbfe",
+      "started_at": "2026-11-27 04:31:29.937374+00",
+      "requests": 2,
+      "http_status": 200,
+      "items": 0,
+      "error": "无效 RSS / Atom"
+    },
+    {
+      "source_key": "search:a6d982d4-1568-4a74-a05c-5c6e4550ca42",
+      "started_at": "2026-11-27 04:28:29.961377+00",
+      "requests": 1,
+      "http_status": 200,
+      "items": 10,
+      "error": ""
+    },
+    {
+      "source_key": "search:a6d982d4-1568-4a74-a05c-5c6e4550ca42",
+      "started_at": "2026-11-27 03:21:03.267916+00",
+      "requests": 1,
+      "http_status": 200,
+      "items": 10,
+      "error": ""
+    }
+  ],
+  "hot_item_latest_10": [
+    {
+      "source_key": "rss:4485e021-b657-4491-9d1e-7c4290dc4c14",
+      "title": "社区速递 167｜迪卡侬折叠车、静电白板贴与跨系统设备协同",
+      "url": "https://sspai.com/post/119492",
+      "rank": 10,
+      "first_seen_at": "2026-11-27 04:34:31.299432+00",
+      "last_seen_at": "2026-11-27 05:35:30.701364+00"
+    },
+    {
+      "source_key": "rss:4485e021-b657-4491-9d1e-7c4290dc4c14",
+      "title": "怀旧手记｜Palm Pre：内藏「划时代」系统的手机",
+      "url": "https://sspai.com/post/118791",
+      "rank": 9,
+      "first_seen_at": "2026-11-27 04:34:31.295559+00",
+      "last_seen_at": "2026-11-27 05:35:30.692893+00"
+    },
+    {
+      "source_key": "rss:4485e021-b657-4491-9d1e-7c4290dc4c14",
+      "title": "App+1｜Yab：开源、AI 友好的双内核浏览器，给舍不得 Arc 的你",
+      "url": "https://sspai.com/post/119310",
+      "rank": 8,
+      "first_seen_at": "2026-11-27 04:34:31.291292+00",
+      "last_seen_at": "2026-11-27 05:35:30.680984+00"
+    },
+    {
+      "source_key": "rss:4485e021-b657-4491-9d1e-7c4290dc4c14",
+      "title": "翻开 2027， 值得入手的新年日历推荐",
+      "url": "https://sspai.com/post/119264",
+      "rank": 7,
+      "first_seen_at": "2026-11-27 04:34:31.287077+00",
+      "last_seen_at": "2026-11-27 05:35:30.670653+00"
+    },
+    {
+      "source_key": "rss:4485e021-b657-4491-9d1e-7c4290dc4c14",
+      "title": "派早报：蔚来举办 2026 创新科技日、Tidal 将拒绝 AI 音乐等",
+      "url": "https://sspai.com/post/119560",
+      "rank": 6,
+      "first_seen_at": "2026-11-27 04:34:31.283068+00",
+      "last_seen_at": "2026-11-27 05:35:30.657824+00"
+    },
+    {
+      "source_key": "rss:4485e021-b657-4491-9d1e-7c4290dc4c14",
+      "title": "我用AI做了一张两千年的中国历史地图",
+      "url": "https://sspai.com/post/117510",
+      "rank": 5,
+      "first_seen_at": "2026-11-27 04:34:31.278189+00",
+      "last_seen_at": "2026-11-27 05:35:30.650663+00"
+    },
+    {
+      "source_key": "rss:4485e021-b657-4491-9d1e-7c4290dc4c14",
+      "title": "论文作图不求人，用 ChatGPT 和 Keynote 免费搞定机理图",
+      "url": "https://sspai.com/post/119563",
+      "rank": 4,
+      "first_seen_at": "2026-11-27 04:34:31.273925+00",
+      "last_seen_at": "2026-11-27 05:35:30.645094+00"
+    },
+    {
+      "source_key": "rss:4485e021-b657-4491-9d1e-7c4290dc4c14",
+      "title": "App+1｜Agora：开源、易用、好用，给 Android 用户的 LLM 聊天工具",
+      "url": "https://sspai.com/post/116773",
+      "rank": 3,
+      "first_seen_at": "2026-11-27 04:34:31.269123+00",
+      "last_seen_at": "2026-11-27 05:35:30.63851+00"
+    },
+    {
+      "source_key": "rss:4485e021-b657-4491-9d1e-7c4290dc4c14",
+      "title": "派早报：1Password 确认内部系统遭入侵等",
+      "url": "https://sspai.com/post/119632",
+      "rank": 2,
+      "first_seen_at": "2026-11-27 04:34:31.264958+00",
+      "last_seen_at": "2026-11-27 05:35:30.631421+00"
+    },
+    {
+      "source_key": "rss:4485e021-b657-4491-9d1e-7c4290dc4c14",
+      "title": "「黑五」值得买：不容错过的 App 和服务优惠",
+      "url": "https://sspai.com/post/119601",
+      "rank": 1,
+      "first_seen_at": "2026-11-27 05:35:30.623628+00",
+      "last_seen_at": "2026-11-27 05:35:30.623628+00"
+    }
+  ],
+  "ai_call": [
+    {
+      "task_type": "hot_relevance",
+      "provider": "此客户端 · magpie",
+      "model": "opencode-zen-free/deepseek-v4.1-flash-free",
+      "prompt_tokens": 14714,
+      "completion_tokens": 4094,
+      "latency_ms": 44134,
+      "status": "ok",
+      "error": "",
+      "created_at": "2026-11-27 06:14:16.549651+00"
+    },
+    {
+      "task_type": "hot_search",
+      "provider": "Tavily",
+      "model": "tavily",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "latency_ms": 1281,
+      "status": "ok",
+      "error": "",
+      "created_at": "2026-11-27 05:29:31.237727+00"
+    },
+    {
+      "task_type": "hot_search",
+      "provider": "Tavily",
+      "model": "tavily",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "latency_ms": 3601,
+      "status": "ok",
+      "error": "",
+      "created_at": "2026-11-27 04:28:33.570913+00"
+    },
+    {
+      "task_type": "hot_search",
+      "provider": "Tavily",
+      "model": "tavily",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "latency_ms": 2458,
+      "status": "ok",
+      "error": "",
+      "created_at": "2026-11-27 03:21:05.733569+00"
+    }
+  ],
+  "hot_topic_and_work": [
+    {
+      "topic_id": "d4429e33-bd28-43e6-8cf5-7ebf1807cb53",
+      "topic_title": "ChatGPT即将到来的大更新，为何让老用户集体破防",
+      "source": "hot",
+      "status": "adopted",
+      "has_hot_item": true,
+      "work_id": "5693890b-cdbc-47df-893e-da6fece233ad",
+      "work_title": "ChatGPT即将到来的大更新，为何让老用户集体破防"
+    }
+  ]
+}
