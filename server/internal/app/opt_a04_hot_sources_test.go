@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"ops/internal/ai"
@@ -372,4 +375,108 @@ func TestOPTA04AccountHotExposesSelectedSourceIssues(t *testing.T) {
 	if out.Issues[0].PausedUntil == nil || !strings.Contains(out.Issues[0].Reason, "额度") {
 		t.Fatalf("issue detail %+v", out.Issues[0])
 	}
+}
+
+func TestOPTA04AdminCrawlSourceUnescapesEncodedKey(t *testing.T) {
+	enableTestCrawl(t)
+	g, ws := optA04Guest(t)
+	g.mustJSON(t, "POST", "/api/v1/hot-sources/search", map[string]any{"engine": "tavily", "query": "运营案例", "api_key": "tvly-encoded-key"}, nil)
+	g.mustJSON(t, "PUT", "/api/v1/hot-sources", map[string]any{
+		"sources": []string{},
+		"rss":     []map[string]string{{"name": "测试RSS源", "url": "https://example.com/rss.xml"}},
+	}, nil)
+	var view struct {
+		Sources []CrawlSource `json:"sources"`
+	}
+	g.mustJSON(t, "GET", "/api/v1/hot-sources", nil, &view)
+	searchKey := "search:" + ws.String()
+	rssKey := ""
+	for _, src := range view.Sources {
+		if src.WorkspaceID != nil && *src.WorkspaceID == ws && src.Kind == "rss" {
+			rssKey = src.Key
+		}
+	}
+	if !strings.HasPrefix(rssKey, "rss:") {
+		t.Fatalf("missing rss:<uuid> source: %+v", view.Sources)
+	}
+	g.restore(env)
+	loginCrawlAdmin(t)
+
+	encodeKey := func(k string) string {
+		// 模拟浏览器 JS encodeURIComponent：Go url.PathEscape 默认保留冒号，而前端编码为 %3A。
+		return strings.ReplaceAll(url.PathEscape(k), ":", "%3A")
+	}
+	encodedSearch := "/api/v1/admin/crawl/sources/" + encodeKey(searchKey)
+	if !strings.Contains(encodedSearch, "%3A") {
+		t.Fatalf("expected encoded colon in %q", encodedSearch)
+	}
+	env.mustJSON(t, "PUT", encodedSearch, map[string]any{"enabled": true, "interval_min": 30, "max_items": 20}, nil)
+
+	old := env.srv.aiHTTP
+	t.Cleanup(func() { env.srv.aiHTTP = old })
+	env.srv.aiHTTP = &http.Client{Transport: optA04Transport(func(r *http.Request) (*http.Response, error) {
+		body := `{"results":[{"title":"编码路径试采热点","url":"https://example.com/encoded-ok","content":"试采成功摘要"}]}`
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})}
+	var testOut struct {
+		Items  []crawl.Item `json:"items"`
+		Source CrawlSource  `json:"source"`
+	}
+	env.mustJSON(t, "POST", encodedSearch+"/test", nil, &testOut)
+	if len(testOut.Items) != 1 || testOut.Items[0].Title != "编码路径试采热点" || testOut.Items[0].URL != "https://example.com/encoded-ok" {
+		t.Fatalf("test crawl items = %+v", testOut.Items)
+	}
+	if _, leaked := testOut.Source.Config["api_key_enc"]; leaked || testOut.Source.Config["has_api_key"] != "true" {
+		t.Fatalf("sanitized source = %+v", testOut.Source.Config)
+	}
+
+	encodedRSS := "/api/v1/admin/crawl/sources/" + encodeKey(rssKey)
+	if !strings.Contains(encodedRSS, "%3A") {
+		t.Fatalf("expected encoded colon in %q", encodedRSS)
+	}
+	env.mustJSON(t, "PUT", encodedRSS, map[string]any{"enabled": true, "interval_min": 45, "max_items": 15}, nil)
+
+	// 非法百分号转义返回 422 validation_failed，不返回 500。
+	badReq := httptest.NewRequest("PUT", "/api/v1/admin/crawl/sources/bad", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("key", "search%ZZbad")
+	badReq = badReq.WithContext(context.WithValue(badReq.Context(), chi.RouteCtxKey, rctx))
+	if _, err := crawlSourceKeyParam(badReq); err == nil || !strings.Contains(err.Error(), "validation_failed") {
+		t.Fatalf("expected validation_failed for bad escape, got %v", err)
+	}
+}
+
+func TestOPTA04AccountHotDisabledReason(t *testing.T) {
+	enableTestCrawl(t)
+	_, path := v4Account(t, "OPT A04 禁用原因")
+	type hotView struct {
+		Enabled        bool   `json:"enabled"`
+		DisabledReason string `json:"disabled_reason"`
+	}
+	assertHot := func(wantEnabled bool, wantReason string) {
+		t.Helper()
+		var out hotView
+		env.mustJSON(t, "GET", path+"/hot?prepare=false", nil, &out)
+		if out.Enabled != wantEnabled || out.DisabledReason != wantReason {
+			t.Fatalf("hot = %+v, want enabled=%v reason=%q", out, wantEnabled, wantReason)
+		}
+	}
+	if _, err := env.srv.db.Exec(context.Background(), `UPDATE system_setting SET value='"off"' WHERE key='crawl.level'`); err != nil {
+		t.Fatal(err)
+	}
+	assertHot(false, "crawl_off")
+	if _, err := env.srv.db.Exec(context.Background(), `UPDATE system_setting SET value='"conservative"' WHERE key='crawl.level'`); err != nil {
+		t.Fatal(err)
+	}
+	assertHot(false, "no_strategy")
+	options, _ := positioningOptions(t, path)
+	f := options[0].StrategyFields
+	off := false
+	f.HotEnabled = &off
+	env.mustJSON(t, "POST", path+"/strategy", f, nil)
+	assertHot(false, "account_hot_off")
+	on := true
+	f.HotEnabled = &on
+	env.mustJSON(t, "POST", path+"/strategy", f, nil)
+	assertHot(true, "")
 }

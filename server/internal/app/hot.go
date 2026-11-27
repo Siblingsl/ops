@@ -431,7 +431,17 @@ func (s *Server) getAccountHot(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	enabled := s.loadCrawl(ctx).Limits.Enabled && st != nil && st.HotEnabled != nil && *st.HotEnabled
+	crawlEnabled := s.loadCrawl(ctx).Limits.Enabled
+	disabledReason := ""
+	switch {
+	case !crawlEnabled:
+		disabledReason = "crawl_off"
+	case st == nil:
+		disabledReason = "no_strategy"
+	case st.HotEnabled == nil || !*st.HotEnabled:
+		disabledReason = "account_hot_off"
+	}
+	enabled := disabledReason == ""
 	var job *uuid.UUID
 	preparing := false
 	if date == s.today().Format("2006-01-02") && r.URL.Query().Get("prepare") != "false" {
@@ -468,7 +478,7 @@ func (s *Server) getAccountHot(w http.ResponseWriter, r *http.Request) error {
 	}
 	var updated *time.Time
 	_ = s.db.QueryRow(ctx, `SELECT refreshed_at FROM account_hot_refresh WHERE account_id=$1`, a.ID).Scan(&updated)
-	return ok(w, map[string]any{"date": date, "enabled": enabled, "items": items, "paused_sources": paused, "source_issues": issues, "updated_at": updated, "preparing": preparing, "job_id": job})
+	return ok(w, map[string]any{"date": date, "enabled": enabled, "disabled_reason": disabledReason, "items": items, "paused_sources": paused, "source_issues": issues, "updated_at": updated, "preparing": preparing, "job_id": job})
 }
 func hotSourceSelected(list []string, s string) bool {
 	for _, x := range list {

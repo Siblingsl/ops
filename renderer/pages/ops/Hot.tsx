@@ -28,6 +28,31 @@ function issuesOf(data?: AccountHot): HotSourceIssue[] {
   }))
 }
 
+/** 按禁用原因区分「全站未开 / 账号无方案 / 方案关热点」，避免把账号缺方案误报成热点来源问题。 */
+function disabledHotPrompt(accountId: string, reason?: AccountHot['disabled_reason']) {
+  const byReason = {
+    no_strategy: {
+      desc: '全站采集已开启，但当前账号尚未启用运营方案。请先在「运营方案」生成并启用方案，或手动粘贴资讯。',
+      to: `/a/${accountId}/ops?tab=strategy`,
+      label: '去启用运营方案',
+      variant: 'primary' as const,
+    },
+    account_hot_off: {
+      desc: '全站采集已开启，但当前账号的运营方案未勾选「账号启用热点」。请前往「运营方案」调整开启，或手动粘贴资讯。',
+      to: `/a/${accountId}/ops?tab=strategy`,
+      label: '去调整运营方案',
+      variant: 'primary' as const,
+    },
+    crawl_off: {
+      desc: '可配置工作区来源，或手动粘贴资讯。',
+      to: '/settings/hot-sources',
+      label: '去配置热点来源',
+      variant: 'secondary' as const,
+    },
+  }
+  return reason && reason in byReason ? byReason[reason as keyof typeof byReason] : byReason.crawl_off
+}
+
 export default function HotPanel({ account, compact=false }: { account: Account; compact?: boolean }) {
   const canWrite = useCanWrite()
   const inv = useInvalidate()
@@ -67,9 +92,10 @@ export default function HotPanel({ account, compact=false }: { account: Account;
       }
     } finally { setBusy(false) }
   }
+  const disabledPrompt = disabledHotPrompt(account.id, query.data?.disabled_reason)
   const paste = canWrite ? <Link to={`/a/${account.id}/topics?hot=1`}><Button>去选题池粘贴资讯</Button></Link> : undefined
   return <Card><CardHeader title="今日热点" desc="按账号方案筛选公开热点；逐条选择，事件细节请查看原文核实。" action={canWrite && query.data?.enabled ? <Button loading={busy} disabled={!!query.data.preparing} onClick={() => run(`/accounts/${account.id}/hot/refresh`)}>匹配今日热点</Button> : undefined} />
-    {query.isError ? <Notice tone="red">{errorMessage(query.error)}<Button size="sm" onClick={() => query.refetch()}>重试</Button></Notice> : query.isPending ? <div className="p-5"><Spinner /></div> : !query.data.enabled ? <Empty icon={<Activity className="size-5" />} title="热点采集未开启" desc="可配置工作区来源，或手动粘贴资讯。" action={<div className="flex flex-wrap gap-2"><Link to="/settings/hot-sources"><Button size="sm">去配置热点来源</Button></Link>{paste}</div>} /> : <div className="space-y-4 p-5">
+    {query.isError ? <Notice tone="red">{errorMessage(query.error)}<Button size="sm" onClick={() => query.refetch()}>重试</Button></Notice> : query.isPending ? <div className="p-5"><Spinner /></div> : !query.data.enabled ? <Empty icon={<Activity className="size-5" />} title="热点采集未开启" desc={disabledPrompt.desc} action={<div className="flex flex-wrap gap-2"><Link to={disabledPrompt.to}><Button size="sm" variant={disabledPrompt.variant}>{disabledPrompt.label}</Button></Link>{paste}</div>} /> : <div className="space-y-4 p-5">
       {!compact&&<div className="flex gap-2"><Button size="sm" onClick={()=>setTrends(false)}>今日</Button><Button size="sm" onClick={()=>setTrends(true)}>近 7 天趋势与赛道雷达</Button></div>}{trends?<Trends accountId={account.id} platform={account.platform} contentFormat={account.content_format} />:<>
  <p className="text-xs text-mist-500">最近匹配：{query.data.updated_at ? new Date(query.data.updated_at).toLocaleString('zh-CN') : '尚未匹配'}</p>
       {issues.length > 0 && <Notice tone="gamboge">

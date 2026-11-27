@@ -141,3 +141,15 @@ test('OPT-A04 红线：不新增 HTTP 路由与 Agent 目录工具', () => {
   const aiSearch = fs.readFileSync(path.join(repoRoot, 'server', 'internal', 'ai', 'search.go'), 'utf8')
   assert.equal(/url\.Values\{/.test(aiSearch), false, '查询参数必须使用既有 URL 编码而非手拼')
 })
+
+test('OPT-A04 今日热点禁用原因：shared 类型与 Hot 精准引导', () => {
+  const types = fs.readFileSync(path.join(repoRoot, 'shared', 'types.ts'), 'utf8').replace(/\r\n/g, '\n')
+  assert.match(types, /disabled_reason\?: '' \| 'crawl_off' \| 'no_strategy' \| 'account_hot_off'/)
+  const hot = read('pages/ops/Hot.tsx')
+  assert.match(hot, /title="热点采集未开启"/)
+  assert.match(hot, /no_strategy/)
+  assert.match(hot, /account_hot_off/)
+  assert.match(hot, /\/a\/\$\{accountId\}\/ops\?tab=strategy/)
+  assert.match(hot, /去启用运营方案/)
+  assert.match(hot, /去调整运营方案/)
+})

@@ -107,12 +107,23 @@ func (s *Server) adminPutCrawl(w http.ResponseWriter, r *http.Request) error {
 	s.audit(ctx, "crawl_settings", "system_setting", "crawl", "ok", map[string]any{"level": c.Level})
 	return ok(w, s.loadCrawl(ctx))
 }
+// crawlSourceKeyParam 对路径参数中的来源 key 做百分号解码（工作区来源形如 search:<uuid> / rss:<uuid>）。
+func crawlSourceKeyParam(r *http.Request) (string, error) {
+	key, err := url.PathUnescape(chi.URLParam(r, "key"))
+	if err != nil {
+		return "", validation("来源标识格式不正确")
+	}
+	return key, nil
+}
 func (s *Server) adminPutCrawlSource(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	if err := s.requireSystemAdmin(ctx); err != nil {
 		return err
 	}
-	key := chi.URLParam(r, "key")
+	key, err := crawlSourceKeyParam(r)
+	if err != nil {
+		return err
+	}
 	source, err := scanCrawlSource(s.db.QueryRow(ctx, `SELECT `+crawlSourceCols+` FROM crawl_source WHERE key=$1`, key))
 	if err != nil {
 		return err
@@ -146,7 +157,11 @@ func (s *Server) adminTestCrawlSource(w http.ResponseWriter, r *http.Request) er
 	if err := s.requireSystemAdmin(ctx); err != nil {
 		return err
 	}
-	source, err := scanCrawlSource(s.db.QueryRow(ctx, `SELECT `+crawlSourceCols+` FROM crawl_source WHERE key=$1`, chi.URLParam(r, "key")))
+	key, err := crawlSourceKeyParam(r)
+	if err != nil {
+		return err
+	}
+	source, err := scanCrawlSource(s.db.QueryRow(ctx, `SELECT `+crawlSourceCols+` FROM crawl_source WHERE key=$1`, key))
 	if err != nil {
 		return err
 	}

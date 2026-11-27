@@ -439,7 +439,8 @@ export interface HotMatch {
   risk: string[]; status: 'new' | 'converted' | 'dismissed'; topic_id: string | null
 }
 export interface AccountHot {
-  date: string; enabled: boolean; items: HotMatch[]; paused_sources: string[]; updated_at: string | null
+  date: string; enabled: boolean; disabled_reason?: '' | 'crawl_off' | 'no_strategy' | 'account_hot_off'
+  items: HotMatch[]; paused_sources: string[]; updated_at: string | null
   source_issues?: HotSourceIssue[]
   job_id?: string | null; preparing?: boolean
 }
