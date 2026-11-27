@@ -8,7 +8,21 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const fs = require('node:fs');
+const Module = require('node:module');
 const path = require('node:path');
+
+function loadChannelModule() {
+  const originalLoad = Module._load;
+  Module._load = function (request, parent, isMain) {
+    if (request === 'electron') return { safeStorage: {}, utilityProcess: {} };
+    return originalLoad.call(this, request, parent, isMain);
+  };
+  try {
+    return require('../.build/client/channel.js');
+  } finally {
+    Module._load = originalLoad;
+  }
+}
 
 test('DT-08A: client/channel.ts 存在且承载通道方法（connect/openChannel/handleControlFrame）', () => {
   const channelSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'client', 'channel.ts'), 'utf8');
@@ -35,4 +49,52 @@ test('DT-08A: 通道常量与协议消息形状搬移后保持不变（PROTOCOL_
   // 关键协议断言逐字保留（防拆分时丢防线）。
   assert.ok(channelSource.includes("throw new Error('服务端桌面 AI 请求参数无效。')"), 'openRequest 参数校验错误消息保留');
   assert.ok(channelSource.includes("throw new Error('服务端响应流控额度无效。')"), '响应流控校验错误消息保留');
+});
+
+test('DT-08A 回归: channel.js 协议校验放行 SSE/JSON/二进制/图片响应并对齐错误码与重试头规则', () => {
+  const {
+    allowedContentType,
+    isJsonContentType,
+    allowedErrorCode,
+    validRetryAfter,
+    normalizeUuid,
+    bytesToUuid,
+  } = loadChannelModule();
+
+  for (const okType of [
+    'text/event-stream',
+    'text/event-stream; charset=utf-8',
+    'application/json',
+    'application/json; charset=utf-8',
+    'application/octet-stream',
+    'image/png',
+  ]) {
+    assert.equal(allowedContentType(okType), okType, `应放行 Content-Type: ${okType}`);
+  }
+  for (const badType of ['text/html', 'text/plain', 'application/xml', '', null, undefined, 'application/json; ' + 'x'.repeat(200)]) {
+    assert.equal(allowedContentType(badType), null, `应拒绝 Content-Type: ${String(badType)}`);
+  }
+
+  assert.equal(isJsonContentType('application/json'), true);
+  assert.equal(isJsonContentType('application/json; charset=utf-8'), true);
+  assert.equal(isJsonContentType('text/event-stream'), false);
+  assert.equal(isJsonContentType('text/plain/json'), false);
+
+  for (const code of ['offline', 'unauthorized', 'timeout', 'redirect', 'protocol']) {
+    assert.equal(allowedErrorCode(code), code);
+  }
+  assert.equal(allowedErrorCode('model_unavailable'), 'offline');
+  assert.equal(allowedErrorCode('unknown'), 'offline');
+
+  assert.equal(validRetryAfter('30'), true);
+  assert.equal(validRetryAfter('99999'), true);
+  assert.equal(validRetryAfter(''), false);
+  assert.equal(validRetryAfter('100000'), false);
+  assert.equal(validRetryAfter('Wed, 21 Oct 2015 07:28:00 GMT'), false);
+
+  assert.equal(normalizeUuid('00000003-1111-4111-8111-111111111111'.toUpperCase()), '00000003-1111-4111-8111-111111111111');
+  assert.equal(normalizeUuid('00000003-1111-0111-8111-111111111111'), '');
+  assert.equal(normalizeUuid('not-a-uuid'), '');
+  assert.equal(bytesToUuid(Buffer.alloc(15)), '');
+  assert.equal(bytesToUuid(Buffer.alloc(16, 0x11)), '11111111-1111-1111-1111-111111111111');
 });

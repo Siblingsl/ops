@@ -115,6 +115,7 @@ export interface ChannelWireMessage {
 export type ChannelState = 'disconnected' | 'connecting' | 'ready' | 'error';
 
 export function bytesToUuid(bytes: Buffer): string {
+  if (bytes.length !== 16) return '';
   const hex = bytes.toString('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
@@ -132,28 +133,37 @@ export function isDesktopOperation(value: unknown): value is ChannelPendingReque
 }
 
 export function normalizeUuid(value: unknown): string {
-  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value) ? value : '';
+  if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+    return '';
+  }
+  return value.toLowerCase();
 }
 
 export function allowedErrorCode(value: unknown): string {
-  return value === 'protocol' || value === 'offline' || value === 'model_unavailable' ? value : 'offline';
+  return ['offline', 'unauthorized', 'timeout', 'redirect', 'protocol'].includes(String(value))
+    ? String(value)
+    : 'offline';
 }
 
 export function allowedContentType(value: unknown): string | null {
-  if (typeof value !== 'string' || value.length > 255) return null;
-  return isJsonContentType(value) ? value : null;
+  if (typeof value !== 'string' || value.length > 200) return null;
+  const mediaType = value.split(';', 1)[0].trim().toLowerCase();
+  if (mediaType === 'application/json' || mediaType === 'text/event-stream'
+    || mediaType === 'application/octet-stream' || mediaType.startsWith('image/')) return value;
+  return null;
 }
 
 export function isJsonContentType(value: string | undefined): boolean {
-  return typeof value === 'string' && /^(?:application|text\/(?:plain|x-ndjson))\/json\b/i.test(value.trim());
+  return typeof value === 'string' && value.split(';', 1)[0].trim().toLowerCase() === 'application/json';
 }
 
 export function validRetryAfter(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= 60;
+  return typeof value === 'string' && /^\d{1,5}$/.test(value);
 }
 
 export function safeError(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message.split('\n')[0].slice(0, 200)}` : String(error).slice(0, 200);
+  if (error instanceof Error) return error.message.slice(0, 300);
+  return '操作失败，请检查网络和本地设置。';
 }
 
 /** 通道域抽象基类：字段声明（供 façade 与 TS 编译器共用）+ 全部通道方法。
@@ -963,7 +973,8 @@ export abstract class ChannelMixin {
 }
 
 function isLoopbackName(hostname: string): boolean {
-  return hostname === 'localhost' || hostname === '::1' || /^127(?:\.\d{1,3}){3}$/.test(hostname);
+  return hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '::1'
+    || /^127(?:\.\d{1,3}){3}$/.test(hostname);
 }
 
 void safeStorage;
