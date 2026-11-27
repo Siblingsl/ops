@@ -113,7 +113,7 @@ test('OPT-U04：settingsGroupOf 对 28 项逐一命中且无漏项，冻结项�
     '/settings/prompts=高级与诊断',
     '/settings/admin=高级与诊断',
     '/settings/plugins=高级与诊断',
-    '/settings/desktop-ai=高级与诊断',
+    '/settings/desktop-ai=AI 模型',
     '/settings/mail=团队与工作区',
     '/settings/crawl=高级与诊断',
     '/settings/local/connection=本机客户端',
@@ -135,6 +135,10 @@ test('OPT-U04：settingsGroupOf 对 28 项逐一命中且无漏项，冻结项�
   for (const group of Array.from(registry.SETTINGS_GROUP_ORDER).slice(0, 5)) {
     assert.ok(entries.some((entry) => registry.settingsGroupOf(entry) === group), `${group} 不得为空组`)
   }
+  // D-227：/settings/desktop-ai 解冻并紧跟在 /settings/models 之后，同属「AI 模型」分组。
+  const aiModelPaths = entries.filter((entry) => registry.settingsGroupOf(entry) === 'AI 模型').map((entry) => entry.path)
+  assert.ok(aiModelPaths.indexOf('/settings/models') >= 0)
+  assert.equal(aiModelPaths.indexOf('/settings/desktop-ai'), aiModelPaths.indexOf('/settings/models') + 1, '桌面 AI 策略必须紧跟在服务器模型之后')
 })
 
 test('OPT-U04：DesktopSettingsHost 按固定顺序渲染 5+1 分组，高级区默认折叠', () => {

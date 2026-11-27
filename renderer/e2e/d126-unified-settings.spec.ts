@@ -93,11 +93,16 @@ test('D-136 Electron 设置窗按 OPT-U04 5+1 分组折叠导航并展开搜索�
   await expect(nav.getByRole('button', { name: '团队与工作区', exact: true })).toHaveAttribute('aria-expanded', 'true')
   await expect(nav.getByRole('button', { name: '邀请邮件', exact: true })).toBeVisible()
 
+  // D-227：桌面 AI 策略解冻并归入「AI 模型」，展开后可见。
+  await nav.getByRole('button', { name: 'AI 模型', exact: true }).click()
+  await expect(nav.getByRole('button', { name: 'AI 模型', exact: true })).toHaveAttribute('aria-expanded', 'true')
+  await expect(nav.getByRole('button', { name: '桌面 AI 策略', exact: true })).toBeVisible()
+
   await advanced.getByRole('button', { name: '高级与诊断', exact: true }).click()
   await expect(advanced.getByRole('button', { name: '高级与诊断', exact: true })).toHaveAttribute('aria-expanded', 'true')
   await expect(advanced.getByRole('button', { name: '完整用量报表', exact: true })).toBeVisible()
-  // D-224 仍需保持软冻结的两项不属于可见导航，即使高级区已展开也不出现。
-  await expect(nav.getByRole('button', { name: '桌面 AI 策略', exact: true })).toHaveCount(0)
+  // D-224 仍需保持软冻结的条目不属于可见导航，即使高级区已展开也不出现。
+  await expect(nav.getByRole('button', { name: '插件与工具', exact: true })).toHaveCount(0)
 
   await settings.getByRole('textbox', { name: '搜索设置项' }).fill('RSS')
   await expect(nav.getByRole('button', { name: '热点来源', exact: true })).toBeVisible()
@@ -110,7 +115,9 @@ test('D-136 Electron 设置窗按 OPT-U04 5+1 分组折叠导航并展开搜索�
   await settings.getByRole('textbox', { name: '搜索设置项' }).fill('邀请邮件')
   await expect(nav.getByRole('button', { name: '邀请邮件', exact: true })).toBeVisible()
   await settings.getByRole('textbox', { name: '搜索设置项' }).fill('桌面 AI 策略')
-  await expect(nav.getByRole('button', { name: '桌面 AI 策略', exact: true })).toHaveCount(0)
+  await expect(nav.getByRole('button', { name: '桌面 AI 策略', exact: true })).toBeVisible()
+  await settings.getByRole('textbox', { name: '搜索设置项' }).fill('插件与工具')
+  await expect(nav.getByRole('button', { name: '插件与工具', exact: true })).toHaveCount(0)
   await expect(settings.getByText('没有匹配的设置项')).toBeVisible()
 })
 

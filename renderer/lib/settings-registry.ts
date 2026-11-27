@@ -38,12 +38,13 @@ export const settingsEntries: SettingsEntry[] = [
   { path: '/settings/accounts', label: '平台账号与凭证', group: '工作区设置', scope: '当前账号', icon: Users, keywords: '公众号 微信公众号 小红书 今日头条 登录 凭证 回填 账号类型' },
   { path: '/settings/members', label: '成员与邀请', group: '工作区设置', scope: '工作区', icon: Users, keywords: '协作 邀请码 工作区名称' },
   { path: '/settings/models', label: '模型配置', desktopLabel: '服务器模型', group: '工作区设置', scope: '工作区', icon: Cpu, keywords: '供应商 API 路由 采样' },
+  // D-227：解冻桌面 AI 策略（保留 webHidden），归入「AI 模型」并紧跟「服务器模型」，打通服务器模型与本机客户端 AI 执行位置切换。
+  { path: '/settings/desktop-ai', label: '桌面 AI 策略', group: '工作区设置', scope: '工作区', icon: Bot, keywords: '本机 AI 客户端 端点 owner 所有者', webHidden: true },
   { path: '/settings/agent', label: '智能体设置', group: '工作区设置', scope: '工作区', icon: Bot, keywords: 'AI 权限 观察者' },
   // FN-06 / 38 文档：设置内只读能力清单（不新增一级导航）。
   { path: '/settings/capabilities', label: '智能体能力', group: '工作区设置', scope: '工作区', icon: Bot, keywords: '能力 工具 业务域 可用 权限' },
   // D-224 / OPT-W02：桌面端已放开技能库管理入口；桌面生成与聊天仍使用服务端同一技能规则。
   { path: '/settings/skills', label: '写作技能', group: '工作区设置', scope: '工作区', icon: ScrollText, keywords: '技能 写作方法 指令包 导入 导出 AI 起草' },
-  { path: '/settings/desktop-ai', label: '桌面 AI 策略', group: '工作区设置', scope: '工作区', icon: Bot, keywords: '本机 AI 客户端 端点 owner 所有者', webHidden: true, frozenHidden: true },
   { path: '/settings/budget', label: 'AI 用量与成本', group: '工作区设置', scope: '工作区', icon: Gauge, keywords: '每日 token 上限 调用 费用', webHidden: true },
   { path: '/settings/usage', label: 'AI 用量与成本', desktopLabel: '完整用量报表', group: '数据与工具', scope: '工作区', icon: Gauge, keywords: 'token 每日 上限 费用', tool: true },
   { path: '/settings/quality', label: 'AI 质量看板', group: '数据与工具', scope: '工作区', icon: Activity, keywords: '独立工具', tool: true },
@@ -101,6 +102,7 @@ const SETTINGS_GROUP_BY_PATH: Record<string, SettingsGroupName> = {
   '/settings/accounts': '账号与平台',
   '/settings/security': '账号与平台',
   '/settings/models': 'AI 模型',
+  '/settings/desktop-ai': 'AI 模型',
   '/settings/agent': 'AI 模型',
   '/settings/capabilities': 'AI 模型',
   '/settings/budget': 'AI 模型',

@@ -1,18 +1,71 @@
 import { useQuery } from '@tanstack/react-query'
-import { Activity, CheckCircle2, CircleAlert, Cpu, MinusCircle, Pencil, Plug, Plus, Trash2, XCircle, Zap } from 'lucide-react'
+import { Activity, CheckCircle2, CircleAlert, Cpu, Laptop, MinusCircle, Pencil, Plug, Plus, Server, Trash2, XCircle, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { confirm, Dialog } from '@/components/dialog'
-import { isElectronDesktop } from '@/lib/desktop-presentation.js'
+import { isElectronDesktop, type DesktopClientDiagnostics } from '@/lib/desktop-presentation.js'
 import { Badge, Button, Card, CardHeader, Empty, Field, IconButton, Input, Notice, PageHeader, PageLoading, Select, Switch } from '@/components/ui'
 import { ApiError, del, errorMessage, get, patch, post, put } from '@/lib/api'
+import { apiBase } from '@/lib/api-base'
 import { currencySymbol, fmtTime } from '@/lib/format'
 import { isEnterWithoutComposition } from '@/lib/keyboard'
+import { shouldWarnRemoteLoopback } from '@/lib/model-execution-guard'
+import { getDesktopClientDiagnostics, hasDesktopBridgeMethod } from '@/lib/platform-bridge'
 import { useInvalidate, useMe } from '@/lib/session'
 import type { AILimit, ModelCapability, ModelRoute, Provider } from '@/lib/types'
 import { useEmbeddedSettings, useSettingsDraft } from '@/lib/desktop-settings'
 import { pagePollIntervalMs } from '@/lib/page-poll'
 import { usePageVisible } from '@/lib/visibility'
+
+interface DesktopPolicyState {
+  global_enabled: boolean
+  policy: {
+    workspace_id: string
+    enabled: boolean
+    allow_member_endpoints: boolean
+    authorization_revision: number
+  }
+}
+
+function ExecutionLocationSwitch({ onSwitchToLocal }: { onSwitchToLocal: () => void }) {
+  return (
+    <div data-testid="model-dialog-execution-switch" className="grid grid-cols-2 gap-2">
+      <div aria-pressed="true" className="min-w-0 rounded-lg border border-ink-400 bg-ink-50 px-3 py-2 text-left">
+        <div className="flex items-center gap-1.5 text-[13px] font-medium text-ink-800">
+          <Server className="size-3.5 shrink-0" />
+          <span>后端服务器执行</span>
+        </div>
+        <p className="mt-0.5 text-[11.5px] leading-snug text-ink-700">由后端服务器发起请求，团队共享，需公网地址</p>
+      </div>
+      <button type="button" aria-pressed="false" onClick={onSwitchToLocal}
+        className="min-w-0 cursor-pointer rounded-lg border border-mist-200 bg-white px-3 py-2 text-left transition hover:border-ink-300 hover:bg-mist-50">
+        <div className="flex items-center gap-1.5 text-[13px] font-medium text-mist-800">
+          <Laptop className="size-3.5 shrink-0" />
+          <span>本机客户端执行</span>
+        </div>
+        <p className="mt-0.5 text-[11.5px] leading-snug text-mist-500">走此电脑网络（127.0.0.1 / Ollama），去本机 AI 配置 →</p>
+      </button>
+    </div>
+  )
+}
+
+function LoopbackBaseUrlNotice({ baseUrl, desktop, onSwitchToLocal }: { baseUrl: string; desktop: boolean; onSwitchToLocal?: () => void }) {
+  const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  if (!shouldWarnRemoteLoopback(baseUrl, apiBase(), origin)) return null
+  return (
+    <Notice tone="gamboge" icon={<CircleAlert className="size-4" />} data-testid="model-loopback-warning" className="mt-2">
+      <div className="space-y-2">
+        <p>当前连接的是远程后端服务器，此处填写的 <code className="font-mono">127.0.0.1 / localhost</code> 会由远程服务器访问它自身，导致 <code className="font-mono">connection refused</code>。如需调用此电脑上的本地模型网关（如 <code className="font-mono">127.0.0.1:3425</code>、Ollama、LM Studio），请改到「本机 AI 配置」填写。</p>
+        {desktop && onSwitchToLocal && (
+          <div>
+            <Button type="button" size="sm" variant="secondary" onClick={onSwitchToLocal}>改去本机 AI 配置</Button>
+          </div>
+        )}
+      </div>
+    </Notice>
+  )
+}
 
 // DEV-U101（12 文档）：供应商能力自检结果。
 interface SelfTestProbe { key: string; label: string; ok: boolean; skipped: boolean; latency_ms: number; detail: string }
@@ -90,7 +143,7 @@ function usableSummary(cap: ModelCapability | undefined, providerOK: boolean | n
   }
 }
 
-function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClose: () => void }) {
+function ProviderDialog({ editing, desktop, onGoLocalAI, onClose }: { editing: Provider | null; desktop: boolean; onGoLocalAI: () => void; onClose: () => void }) {
   const [name, setName] = useState(editing?.name ?? '')
   const [base, setBase] = useState(editing?.base_url ?? '')
   const [key, setKey] = useState('')
@@ -112,7 +165,12 @@ function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClos
   const [cw, setCw] = useState(editing?.context_window_tokens?.toString() ?? '')
   const [busy, setBusy] = useState(false)
   const [discovering, setDiscovering] = useState(false)
-  useSettingsDraft(name !== (editing?.name ?? '') || base !== (editing?.base_url ?? '') || !!key || JSON.stringify(models) !== JSON.stringify(editing?.models ?? []) || pp !== (editing?.input_price_micros_per_1k != null ? (editing.input_price_micros_per_1k / 1000000).toString() : editing?.price_per_1k_prompt?.toString() ?? '') || pc !== (editing?.output_price_micros_per_1k != null ? (editing.output_price_micros_per_1k / 1000000).toString() : editing?.price_per_1k_completion?.toString() ?? '') || currency !== (editing?.price_currency ?? 'CNY'), busy || discovering)
+  const clearDraft = useSettingsDraft(name !== (editing?.name ?? '') || base !== (editing?.base_url ?? '') || !!key || JSON.stringify(models) !== JSON.stringify(editing?.models ?? []) || pp !== (editing?.input_price_micros_per_1k != null ? (editing.input_price_micros_per_1k / 1000000).toString() : editing?.price_per_1k_prompt?.toString() ?? '') || pc !== (editing?.output_price_micros_per_1k != null ? (editing.output_price_micros_per_1k / 1000000).toString() : editing?.price_per_1k_completion?.toString() ?? '') || currency !== (editing?.price_currency ?? 'CNY'), busy || discovering)
+  const switchToLocal = () => {
+    clearDraft()
+    onClose()
+    onGoLocalAI()
+  }
   const inv = useInvalidate()
   // A8：内部按 micros/千 token 落库；页面仍以“元/千 token”输入。
   const priceMicros = (v: string) => {
@@ -189,8 +247,12 @@ function ProviderDialog({ editing, onClose }: { editing: Provider | null; onClos
       footer={<><Button variant="ghost" disabled={busy || discovering} onClick={onClose}>取消</Button><Button variant="primary" loading={busy} onClick={save}
         disabled={!name.trim() || !base.trim() || models.length === 0 || (!editing && !key.trim())}>{editing ? '保存' : '保存并测试'}</Button></>}>
       <div className="space-y-4">
+        {desktop && !editing && <ExecutionLocationSwitch onSwitchToLocal={switchToLocal} />}
         <Field label="名称"><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：DeepSeek" /></Field>
-        <Field label="接口地址" hint="以 /v1 结尾的 OpenAI 兼容地址"><Input value={base} onChange={(e) => setBase(e.target.value)} placeholder="https://api.example.com/v1" className="font-mono text-[13px]" /></Field>
+        <div>
+          <Field label="接口地址" hint="以 /v1 结尾的 OpenAI 兼容地址（由后端服务器发起请求）"><Input value={base} onChange={(e) => setBase(e.target.value)} placeholder="https://api.example.com/v1" className="font-mono text-[13px]" /></Field>
+          <LoopbackBaseUrlNotice baseUrl={base} desktop={desktop} onSwitchToLocal={switchToLocal} />
+        </div>
         <Field label="API 密钥" hint={editing ? `已保存：${editing.key_mask}。留空则不修改。` : '加密保存，页面只显示脱敏值'}>
           <Input type="password" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="new-password" className="font-mono text-[13px]" />
         </Field>
@@ -269,7 +331,7 @@ const templates: { id: string; name: string; base: string; models: Partial<Recor
   { id: 'custom', name: '其他 OpenAI 兼容接口', base: '', models: {}, note: '接口地址以 /v1 结尾。请确认服务条款写明 API 数据不用于训练。' },
 ]
 
-function QuickSetupDialog({ onClose }: { onClose: () => void }) {
+function QuickSetupDialog({ desktop, onGoLocalAI, onClose }: { desktop: boolean; onGoLocalAI: () => void; onClose: () => void }) {
   const [tpl, setTpl] = useState(templates[0])
   const [name, setName] = useState(templates[0].name)
   const [base, setBase] = useState(templates[0].base)
@@ -278,7 +340,12 @@ function QuickSetupDialog({ onClose }: { onClose: () => void }) {
   const [discovered, setDiscovered] = useState<string[]>([])
   const [discovering, setDiscovering] = useState(false)
   const [busy, setBusy] = useState(false)
-  useSettingsDraft(!!key || name !== templates[0].name || base !== templates[0].base || JSON.stringify(roles) !== JSON.stringify({ default: '', tier_economy: '', tier_quality: '', metric_screenshot: '', ...templates[0].models }), busy || discovering)
+  const clearDraft = useSettingsDraft(!!key || name !== templates[0].name || base !== templates[0].base || JSON.stringify(roles) !== JSON.stringify({ default: '', tier_economy: '', tier_quality: '', metric_screenshot: '', ...templates[0].models }), busy || discovering)
+  const switchToLocal = () => {
+    clearDraft()
+    onClose()
+    onGoLocalAI()
+  }
   const inv = useInvalidate()
   const choose = (id: string) => {
     const t = templates.find((x) => x.id === id) ?? templates[0]
@@ -325,6 +392,7 @@ function QuickSetupDialog({ onClose }: { onClose: () => void }) {
       footer={<><Button variant="ghost" disabled={busy || discovering} onClick={onClose}>取消</Button>
         <Button variant="primary" loading={busy} onClick={save} disabled={!name.trim() || !base.trim() || !key.trim() || !roles.default.trim()}>保存并测试</Button></>}>
       <div className="space-y-4">
+        {desktop && <ExecutionLocationSwitch onSwitchToLocal={switchToLocal} />}
         <div className="grid grid-cols-3 gap-2">
           {templates.map((t) => (
             <button key={t.id} type="button" onClick={() => choose(t.id)}
@@ -336,7 +404,10 @@ function QuickSetupDialog({ onClose }: { onClose: () => void }) {
           <Field label="名称"><Input value={name} onChange={(e) => setName(e.target.value)} /></Field>
           <Field label="API 密钥"><Input type="password" autoFocus value={key} onChange={(e) => setKey(e.target.value)} autoComplete="new-password" className="font-mono text-[13px]" /></Field>
         </div>
-        <Field label="接口地址"><Input value={base} onChange={(e) => setBase(e.target.value)} placeholder="https://api.example.com/v1" className="font-mono text-[13px]" /></Field>
+        <div>
+          <Field label="接口地址" hint="OpenAI 兼容地址通常以 /v1 结尾（由后端服务器发起请求）"><Input value={base} onChange={(e) => setBase(e.target.value)} placeholder="https://api.example.com/v1" className="font-mono text-[13px]" /></Field>
+          <LoopbackBaseUrlNotice baseUrl={base} desktop={desktop} onSwitchToLocal={switchToLocal} />
+        </div>
         <div className="flex items-center justify-between gap-2">
           <span className="text-[12px] text-mist-500">{discovered.length > 0 ? `已获取 ${discovered.length} 个模型，下面按用途选` : '填好密钥后可以拉取模型列表，也可以直接手填模型名'}</span>
           <Button type="button" size="sm" variant="ghost" loading={discovering} disabled={!base.trim() || !key.trim()} onClick={(e) => { e.preventDefault(); void discover() }}>获取可用模型</Button>
@@ -668,6 +739,7 @@ function WeeklyDraftCard() {
 
 export default function Models() {
   const { data: me } = useMe()
+  const navigate = useNavigate()
   const isOwner = me?.role === 'owner'
   const desktop = isElectronDesktop(navigator.userAgent)
   const embedded = useEmbeddedSettings()
@@ -679,6 +751,13 @@ export default function Models() {
     refetchInterval: (q) => pagePollIntervalMs(pageVisible, 5000, q.state.fetchFailureCount),
     refetchIntervalInBackground: false,
   })
+  const desktopPolicyQuery = useQuery({
+    queryKey: ['desktop-policy', me?.workspace.id ?? ''],
+    queryFn: () => get<DesktopPolicyState>('/desktop/policy'),
+    enabled: desktop && !!me?.workspace.id && !me.admin_override,
+    retry: false,
+  })
+  const [clientDiagnostics, setClientDiagnostics] = useState<DesktopClientDiagnostics | null>(null)
   const [dialog, setDialog] = useState<{ editing: Provider | null } | null>(null)
   const [quick, setQuick] = useState(false)
   const [testing, setTesting] = useState<string | null>(null)
@@ -686,8 +765,21 @@ export default function Models() {
   const [selfTest, setSelfTest] = useState<{ providerName: string; result: SelfTestResult } | null>(null)
   const inv = useInvalidate()
   useSettingsDraft(false, testing !== null || selfTesting !== null)
+  useEffect(() => {
+    if (!desktop || !hasDesktopBridgeMethod('getClientDiagnostics')) return
+    let cancelled = false
+    void getDesktopClientDiagnostics().then((res) => {
+      if (!cancelled && res.ok) setClientDiagnostics(res.diagnostics)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [desktop])
   if (isLoading) return <PageLoading />
   const list = data ?? []
+  const goLocalAI = () => navigate('/settings/local/ai')
+  const goDesktopPolicy = () => navigate('/settings/desktop-ai')
+  const goAdmin = () => navigate('/settings/admin')
+  const desktopPolicy = desktopPolicyQuery.data
+  const desktopReady = !!desktopPolicy?.global_enabled && !!desktopPolicy.policy.enabled
   const test = async (p: Provider) => {
     setTesting(p.id)
     try {
@@ -738,6 +830,54 @@ export default function Models() {
           </>}
         </>} />
       {!isOwner && <Notice tone="ink">{me?.role === 'viewer' ? '你是观察者，只能查看模型配置；密钥与路由由所有者或编辑者维护。' : '你是编辑者，可查看模型配置，但不能修改密钥或路由。'}</Notice>}
+      {desktop && (
+        <div data-testid="model-execution-location-bar" className="grid gap-3 sm:grid-cols-2">
+          <div className="min-w-0 rounded-xl border border-ink-300 bg-ink-50/40 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Server className="size-4 shrink-0 text-ink-700" />
+              <span className="text-[14px] font-semibold text-mist-900">后端服务器执行</span>
+              <Badge tone="ink">当前页</Badge>
+            </div>
+            <p className="mt-1.5 text-[12.5px] leading-relaxed text-mist-600">
+              由后端服务器统一发起请求，团队成员共享模型与路由，接口地址必须可被服务器直接访问（公网地址）。
+            </p>
+          </div>
+          <div className="min-w-0 rounded-xl border border-mist-200 bg-white p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Laptop className="size-4 shrink-0 text-mist-700" />
+              <span className="text-[14px] font-semibold text-mist-900">本机客户端执行</span>
+              {clientDiagnostics?.mode === 'desktop' ? (
+                <Badge tone="green">此电脑运行中</Badge>
+              ) : desktopReady ? (
+                <Badge tone="ink">工作区已允许</Badge>
+              ) : desktopPolicy ? (
+                <Badge tone="gamboge">需先开启策略</Badge>
+              ) : null}
+            </div>
+            <p className="mt-1.5 text-[12.5px] leading-relaxed text-mist-600">
+              模型请求走此电脑网络（支持 <code className="font-mono">127.0.0.1</code>、Ollama、LM Studio 等本地/局域网接口），密钥仅存本机。
+            </p>
+            {me?.admin_override ? (
+              <p className="mt-1.5 text-[12px] text-mist-500">系统管理员代访工作区时不能使用桌面 AI。</p>
+            ) : desktopPolicy && !desktopPolicy.global_enabled ? (
+              <p className="mt-1.5 text-[12px] text-gamboge-700">服务端尚未全局开启「桌面本机 AI」，需先由超管在系统管理启用。</p>
+            ) : desktopPolicy && !desktopPolicy.policy.enabled ? (
+              <p className="mt-1.5 text-[12px] text-gamboge-700">当前工作区尚未开启桌面 AI 策略，开启后即可按任务走本机客户端执行。</p>
+            ) : null}
+            {!me?.admin_override && (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Button size="sm" variant="secondary" onClick={goLocalAI}>前往本机 AI 配置</Button>
+                <Button size="sm" variant="ghost" onClick={goDesktopPolicy}>
+                  {desktopPolicy && desktopPolicy.global_enabled && !desktopPolicy.policy.enabled ? '去开启桌面 AI 策略' : '桌面 AI 策略'}
+                </Button>
+                {desktopPolicy && !desktopPolicy.global_enabled && me?.is_system_admin && (
+                  <Button size="sm" variant="ghost" onClick={goAdmin}>前往系统管理</Button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {list.length === 0 ? (
         <Card><Empty icon={<Cpu className="size-5" />} title="还没有配置模型" desc="没有模型时 AI 按钮不可用，写作、检查和推送不受影响。快速配置只需选供应商、填一次密钥，按用途填模型名。"
           action={isOwner ? <Button variant="primary" icon={<Zap className="size-4" />} onClick={() => setQuick(true)}>快速配置</Button> : undefined} /></Card>
@@ -810,8 +950,8 @@ export default function Models() {
       {isOwner && <SamplingCard />}
       {isOwner && !embedded && <LimitCard />}
       {isOwner && <WeeklyDraftCard />}
-      {isOwner && dialog && <ProviderDialog editing={dialog.editing} onClose={() => setDialog(null)} />}
-      {isOwner && quick && <QuickSetupDialog onClose={() => setQuick(false)} />}
+      {isOwner && dialog && <ProviderDialog editing={dialog.editing} desktop={desktop} onGoLocalAI={goLocalAI} onClose={() => setDialog(null)} />}
+      {isOwner && quick && <QuickSetupDialog desktop={desktop} onGoLocalAI={goLocalAI} onClose={() => setQuick(false)} />}
       {selfTest && (
         <SelfTestDialog result={selfTest.result} onClose={() => setSelfTest(null)} />
       )}
