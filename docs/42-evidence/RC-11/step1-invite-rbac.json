@@ -1,0 +1,327 @@
+{
+  "batch": "RC-11 Phase A",
+  "title": "被邀请人真实邀请码桌面端加入、editor/viewer 角色隔离、无效邮箱与 settings 零明文核验（含密码重置测试账号准备）",
+  "generated_at": "2026-11-26T14:26:38.972Z",
+  "environment": {
+    "api_base_url": "https://ops-api.88813888.xyz",
+    "desktop_executable": "desktop/out/OPS Desktop-win32-x64/OPS Desktop.exe",
+    "desktop_build_mtime": "2026-11-26 21:37:27 +08:00",
+    "desktop_version": "0.1.0",
+    "desktop_packaged": true,
+    "desktop_isolation": "每次启动均使用独立 --user-data-dir（系统临时目录），结束即删除；未读写真实用户应用数据目录",
+    "http_client": "Node.js 22 fetch（显式清空代理环境变量后直连）"
+  },
+  "step1_invitee_join_skyeder": {
+    "purpose": "RC-11 #2a：真实邮件邀请码在打包桌面端加入 skyeder 工作区 + editor 权限验证 + 干净退出",
+    "invite_code": "<redacted-invite-code>",
+    "invite_source": "真实 QQ 邮箱收到的编辑者邀请（运行时仅在内存使用；用户验证后立即撤销）",
+    "account": "rc11_inv_2611262210",
+    "register_http": 200,
+    "auth_me": {
+      "http": 200,
+      "role": "editor",
+      "workspace_name": "skyeder 的工作区",
+      "workspace_role": "editor",
+      "workspaces_before_leave": [
+        {
+          "name": "skyeder 的工作区",
+          "role": "editor"
+        },
+        {
+          "name": "rc11_inv_2611262210 的工作区",
+          "role": "owner"
+        }
+      ]
+    },
+    "mail_settings_page": {
+      "route": "/settings/mail",
+      "notice_visible": true,
+      "notice_text": "邀请邮件配置仅工作区所有者可查看与修改。",
+      "input_count": 1,
+      "input_classification": "唯一 input 为设置面板搜索框（placeholder=搜索设置项），非 SMTP 字段",
+      "smtp_input_fields": 0,
+      "screenshot": {
+        "file": "01-invitee-desktop-editor-mail-readonly.png",
+        "bytes": 50449,
+        "sha256": "f43dc7ec9ed53277998c71806df2d9f8c8afbd12abe5864444043da83432f509",
+        "dimensions": "1803x1020"
+      },
+      "verdict": "PASS"
+    },
+    "rbac": {
+      "get_settings": {
+        "http": 200,
+        "expected_by_phase_a_prompt": 403,
+        "error_code": null,
+        "verdict": "FAIL（任务书期望 403，实测 200）",
+        "note": "响应正文未写入证据，避免带出 skyeder 可能存在的真实 SMTP 元数据；200 与 docs/08（editor GET /settings 200、PUT 403）及 docs/16（settings__get 观察者只读、smtp 脱敏）既有口径一致"
+      },
+      "post_invites": {
+        "http": 403,
+        "error_code": "forbidden",
+        "message": "需要工作区所有者权限",
+        "verdict": "PASS"
+      }
+    },
+    "cleanup": {
+      "leave_http": 200,
+      "workspaces_after": [
+        {
+          "name": "rc11_inv_2611262210 的工作区",
+          "role": "owner"
+        }
+      ],
+      "skyeder_membership_removed": true,
+      "auth_me_after": {
+        "http": 200,
+        "workspace_name": "rc11_inv_2611262210 的工作区",
+        "role": "owner"
+      },
+      "isolated_user_data_removed": true,
+      "verdict": "PASS"
+    }
+  },
+  "step2_editor_viewer_matrix": {
+    "purpose": "RC-11 #2b：独立测试工作区 editor/viewer 双角色加入与权限隔离",
+    "test_workspace": "rc11_own_2611262220 的工作区",
+    "accounts": {
+      "owner": "rc11_own_2611262220",
+      "editor": "rc11_ed_2611262220",
+      "viewer": "rc11_vwr_2611262220"
+    },
+    "setup": {
+      "owner_register_http": 200,
+      "account_create_http": 200,
+      "draft_create_http": 200,
+      "editor_invite_create_http": 200,
+      "viewer_invite_create_http": 200,
+      "invite_codes": "<redacted-invite-code>"
+    },
+    "desktop_viewer": {
+      "register_http": 200,
+      "auth_me_http": 200,
+      "role": "viewer",
+      "workspace_name": "rc11_own_2611262220 的工作区",
+      "workspace_role": "viewer",
+      "members_page": {
+        "route": "/settings/members",
+        "generate_invite_button_count": 0,
+        "leave_workspace_button_count": 1,
+        "member_list_visible": true,
+        "viewer_notice_text": "你是观察者：可浏览，不能修改内容；只有所有者可管理成员与模型/凭证。",
+        "member_management_scope": "成员区仅展示成员列表与「离开工作区」，无邀请码生成/角色调整/移出成员入口",
+        "additional_self_service_cards": [
+          "加入其他工作区",
+          "再创建一个工作区"
+        ],
+        "additional_cards_note": "两张卡为账号级自助操作（加入/新建其他工作区），不属于本工作区成员管理权限，不修改当前工作区成员"
+      },
+      "screenshot": {
+        "file": "02-viewer-desktop-members-readonly.png",
+        "bytes": 87155,
+        "sha256": "a966a041eeb0e2a66871d5007471da632ac588aeec7cb5acf83dd44d27a3a4b7",
+        "dimensions": "1803x1020"
+      },
+      "verdict": "PASS"
+    },
+    "matrix": {
+      "editor_read_works": {
+        "http": 200,
+        "verdict": "PASS"
+      },
+      "editor_create_work": {
+        "http": 200,
+        "verdict": "PASS"
+      },
+      "editor_update_work": {
+        "http": 200,
+        "verdict": "PASS"
+      },
+      "editor_push_preview": {
+        "http": 200,
+        "verdict": "PASS"
+      },
+      "editor_get_settings": {
+        "http": 200,
+        "expected_by_phase_a_prompt": 403,
+        "error_code": null,
+        "verdict": "FAIL（任务书期望 403，实测 200）",
+        "baseline": "docs/08 第六十轮记录 editor GET /settings 200、PUT /settings 403"
+      },
+      "editor_create_invite": {
+        "http": 403,
+        "error_code": "forbidden",
+        "message": "需要工作区所有者权限",
+        "verdict": "PASS"
+      },
+      "viewer_read_works": {
+        "http": 200,
+        "verdict": "PASS"
+      },
+      "viewer_create_work": {
+        "http": 403,
+        "error_code": "forbidden",
+        "message": "观察者仅可浏览，不能修改内容",
+        "verdict": "PASS"
+      },
+      "viewer_push_preview": {
+        "http": 403,
+        "error_code": "forbidden",
+        "message": "观察者仅可浏览，不能修改内容",
+        "verdict": "PASS"
+      },
+      "viewer_get_settings": {
+        "http": 200,
+        "expected_by_phase_a_prompt": 403,
+        "error_code": null,
+        "verdict": "FAIL（任务书期望 403，实测 200）",
+        "baseline": "docs/16 settings__get：GET /settings，R，观察者，smtp 整体脱敏"
+      },
+      "viewer_create_invite": {
+        "http": 403,
+        "error_code": "forbidden",
+        "message": "观察者仅可浏览，不能修改内容",
+        "verdict": "PASS"
+      },
+      "viewer_get_invites_supplementary": {
+        "http": 403,
+        "error_code": "forbidden",
+        "message": "需要工作区所有者权限",
+        "verdict": "PASS"
+      }
+    }
+  },
+  "step3_smtp_zero_plaintext_and_invalid_email": {
+    "purpose": "RC-11 #4 补全：无效邮箱 422 校验 + GET /api/v1/settings 零明文密码",
+    "account": "rc11_own_2611262222",
+    "account_note": "步骤 2 的测试 owner 密码仅在进程内存保留，跨脚本未持久化；步骤 3 使用新注册的独立测试 owner（仍为独立测试工作区，未触碰 skyeder）",
+    "workspace": "rc11_own_2611262222 的工作区",
+    "put_settings": {
+      "http": 200,
+      "smtp_host": "smtp.example.invalid",
+      "smtp_port": 465,
+      "smtp_username": "<redacted-placeholder-email>",
+      "smtp_from": "<redacted-placeholder-email>",
+      "probe_secret": "<redacted-non-routable-probe>",
+      "verdict": "PASS"
+    },
+    "get_settings": {
+      "http": 200,
+      "smtp_has_password": true,
+      "smtp_password_field": "absent",
+      "smtp_keys": [
+        "host",
+        "port",
+        "username",
+        "from",
+        "has_password"
+      ],
+      "raw_contains_probe_secret": false,
+      "raw_has_nonempty_password": false,
+      "raw_has_password_enc": false,
+      "verdict": "PASS"
+    },
+    "invalid_email": {
+      "http": 422,
+      "error_code": "validation_failed",
+      "message": "请填写有效邮箱",
+      "message_contains_expected": true,
+      "smtp_send_attempted": false,
+      "verdict": "PASS"
+    },
+    "invite_cleanup": {
+      "revoke_http": 200
+    },
+    "desktop_or_skyeder_touched": false
+  },
+  "step4_password_reset_prep": {
+    "purpose": "RC-11 #3 前置：建立待重置密码测试账号与有效旧会话",
+    "username": "rc11_pwd_2611262222",
+    "user_id": "<user-id>",
+    "register_http": 200,
+    "login_http": 200,
+    "login_session_distinct_from_register": true,
+    "auth_me_http": 200,
+    "role": "owner",
+    "workspace_name": "rc11_pwd_2611262222 的工作区",
+    "state_file": "<temp>\\ops-rc11-reset-state.json（仓库外）",
+    "state_file_bytes": 475,
+    "state_file_fields": [
+      "baseUrl",
+      "username",
+      "userId",
+      "oldPassword",
+      "oldCookie",
+      "createdAt",
+      "tempUsers"
+    ],
+    "temp_users": [
+      "rc11_inv_2611262210",
+      "rc11_own_2611262220",
+      "rc11_ed_2611262220",
+      "rc11_vwr_2611262220",
+      "rc11_own_2611262222",
+      "rc11_pwd_2611262222"
+    ],
+    "verdict": "PASS"
+  },
+  "findings": [
+    {
+      "id": "RC11-PA-C1",
+      "category": "验收口径冲突（不是已确认的产品缺陷）",
+      "severity": "中",
+      "area": "RBAC / settings 读权限",
+      "summary": "Phase A 任务书要求 GET /api/v1/settings 对 editor 与 viewer 返回 403，实测均为 200；该 200 与仓库既有角色模型一致：docs/16 将 settings__get 定义为观察者可读（smtp 整体脱敏），docs/08 第六十轮记录 editor GET /settings 200、PUT /settings 403",
+      "observed": {
+        "editor": 200,
+        "viewer": 200,
+        "owner": 200
+      },
+      "expected_by_phase_a_prompt": 403,
+      "impact": "若以任务书为准，API 需收紧为 owner-only；若以既有设计为准，应修正 RC-11 Phase A 验收脚本的期望。实测 smtp.password 为空，未观察到明文密码泄露",
+      "evidence": "step1.rbac.get_settings、step2.matrix.editor_get_settings、step2.matrix.viewer_get_settings",
+      "decision_needed": "确认 GET /settings 的验收口径；本批只测不改码"
+    }
+  ],
+  "baseline_references": {
+    "docs_08": "docs/08-开发与测试计划.md：2026-11-06 DEV-QA26 第六十轮记录 editor GET /settings 200、带 CSRF 的 PUT /settings 403",
+    "docs_16": "docs/16-系统智能体设计.md：settings__get | GET /settings | R | 观察者 | smtp 整体脱敏"
+  },
+  "pass_summary": {
+    "step1": {
+      "total": 10,
+      "pass": 9,
+      "fail": 1
+    },
+    "step2": {
+      "total": 23,
+      "pass": 21,
+      "fail": 2
+    },
+    "step3": {
+      "total": 10,
+      "pass": 10,
+      "fail": 0
+    },
+    "step4": {
+      "total": 6,
+      "pass": 6,
+      "fail": 0
+    },
+    "overall": {
+      "total": 49,
+      "pass": 46,
+      "fail": 3,
+      "distinct_open_criteria_conflicts": 1,
+      "verdict": "Phase A 46/49 断言通过；3 项未通过均为同一验收口径冲突——GET /settings 对 editor/viewer 返回 200，而任务书要求 403。该行为与 docs/08、docs/16 既有只读角色模型一致，需确认是否收紧 API 或修正验收期望；其余邀请加入、editor/viewer 读写隔离、零明文密码与密码重置前置均 PASS"
+    }
+  },
+  "redaction": {
+    "invite_code": "<redacted-invite-code>",
+    "emails": "<redacted-email>",
+    "passwords": "<redacted-password>",
+    "cookies": "<redacted-cookie>",
+    "public_ip": "<redacted-ip>",
+    "local_paths": "<temp>"
+  }
+}
