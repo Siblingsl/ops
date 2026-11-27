@@ -96,7 +96,7 @@ test('D-136 Electron 设置窗按 OPT-U04 5+1 分组折叠导航并展开搜索�
   await advanced.getByRole('button', { name: '高级与诊断', exact: true }).click()
   await expect(advanced.getByRole('button', { name: '高级与诊断', exact: true })).toHaveAttribute('aria-expanded', 'true')
   await expect(advanced.getByRole('button', { name: '完整用量报表', exact: true })).toBeVisible()
-  // D-224 仍需保持软冻结的三项不属于可见导航，即使高级区已展开也不出现。
+  // D-224 仍需保持软冻结的两项不属于可见导航，即使高级区已展开也不出现。
   await expect(nav.getByRole('button', { name: '桌面 AI 策略', exact: true })).toHaveCount(0)
 
   await settings.getByRole('textbox', { name: '搜索设置项' }).fill('RSS')
@@ -349,7 +349,8 @@ test('D-126 编辑者与观察者保持工作区只读设置权限，管理员�
   await page.goto('/settings/preferences')
   await section(page, '高级与诊断').click()
   await expect(section(page, '系统管理')).toBeVisible()
-  await expect(section(page, '热点采集与日志')).toHaveCount(0)
+  // D-226：/settings/crawl 解冻后对系统管理员可见，对普通成员仍隐藏。
+  await expect(section(page, '热点采集与日志')).toBeVisible()
 })
 
 test('D-126 各类配置实际保存、顶部账号子窗保存保护与原下载', async ({ page }) => {

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { Navigate } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge, Button, Card, CardHeader, Empty, Field, Input, Notice, PageHeader, roleReadOnlyHint, Select, Spinner, Textarea } from '@/components/ui'
 import { BackToSettings } from '@/components/back-to-settings'
@@ -226,7 +226,7 @@ export function HotSources() {
   const searchSource = query.data?.sources.find((s) => s.kind === 'search')
   return <div className="max-w-3xl animate-fade-in space-y-5"><PageHeader title="工作区热点来源" desc="只使用全站已启用的来源和本工作区的 RSS。" />
     {query.isError ? <Notice tone="red">{errorMessage(query.error)}</Notice> : query.isPending ? <Spinner /> : <Card><div className="space-y-4 p-5">
-      {!query.data.enabled && <Notice>热点采集未开启；来源配置会保存，当前不发出采集请求。</Notice>}
+      {!query.data.enabled && <Notice>热点采集未开启；来源配置会保存，当前不发出采集请求。{me?.is_system_admin && <> 请前往「<Link to="/settings/crawl" className="font-medium underline underline-offset-2">热点采集与日志</Link>」开启全站采集。</>}</Notice>}
       {query.data.sources.map((s) => {
         const activePause = isActivePause(s.paused_until)
         return <div key={s.key} className="space-y-1">

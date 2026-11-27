@@ -57,7 +57,8 @@ export const settingsEntries: SettingsEntry[] = [
   { path: '/settings/logs', label: '操作日志', group: '数据与工具', scope: '工作区', icon: ScrollText, keywords: '独立工具', tool: true },
   { path: '/settings/trash', label: '回收站', group: '数据与工具', scope: '工作区', icon: Trash2, keywords: '独立工具', tool: true },
   { path: '/settings/admin', label: '系统管理', group: '数据与工具', scope: '系统', icon: Shield, keywords: '独立工具', tool: true, adminOnly: true },
-  { path: '/settings/crawl', label: '热点采集与日志', group: '数据与工具', scope: '系统', icon: Activity, keywords: '独立工具', tool: true, adminOnly: true, frozenHidden: true },
+  // D-226：解冻热点采集与日志入口（保留 tool + adminOnly，归入「高级与诊断」），供超管在线上启停采集强度、试采与排查日志。
+  { path: '/settings/crawl', label: '热点采集与日志', group: '数据与工具', scope: '系统', icon: Activity, keywords: '独立工具', tool: true, adminOnly: true },
   { path: '/settings/local/connection', label: '客户端连接', group: '本机与系统', scope: '此电脑', icon: Activity, keywords: '本机 服务 模式 WSS', localPanel: 'connection', webHidden: true },
   { path: '/settings/local/ai', label: '本机 AI 配置', group: '本机与系统', scope: '此电脑', icon: Cpu, keywords: '模型 密钥 代理 自检 任务映射', localPanel: 'ai', webHidden: true },
   { path: '/settings/local/account-device', label: '账号与设备', group: '本机与系统', scope: '此电脑', icon: Users, keywords: '登录 重新认证 设备 平台 browser', localPanel: 'account-device', webHidden: true },
@@ -118,6 +119,7 @@ const SETTINGS_GROUP_BY_PATH: Record<string, SettingsGroupName> = {
   '/settings/quality': ADVANCED_SETTINGS_GROUP,
   '/settings/prompts': ADVANCED_SETTINGS_GROUP,
   '/settings/admin': ADVANCED_SETTINGS_GROUP,
+  '/settings/crawl': ADVANCED_SETTINGS_GROUP,
 }
 
 export function settingsGroupOf(entry: SettingsEntry): SettingsGroupName {
