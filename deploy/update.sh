@@ -66,6 +66,7 @@ restore_on_exit() {
 }
 trap restore_on_exit EXIT
 trap 'exit 129' HUP
+trap 'exit 130' INT
 trap 'exit 143' TERM
 
 echo "构建前停止 app/parser，降低 go build 内存压力…"
